@@ -292,6 +292,14 @@ struct ComposeDeploy {
     /// winning when set (Compose's documented precedence).
     #[serde(default)]
     restart_policy: Option<ComposeRestartPolicy>,
+    /// Compose `deploy.resources.{limits,reservations}` — the
+    /// closest analog to K8s `resources.{limits,requests}`. We
+    /// translate `limits` → `resources.limits`, `reservations`
+    /// → `resources.requests`. Compose units (`cpus: '0.5'`,
+    /// `memory: '256M'`) are passed through verbatim — both
+    /// platforms accept the same string forms.
+    #[serde(default)]
+    resources: Option<ComposeResources>,
     /// Compose `healthcheck` block — translated to a K8s
     /// `livenessProbe`. The shape mirrors the Compose spec:
     ///
@@ -309,6 +317,32 @@ struct ComposeDeploy {
     /// `periodSeconds`, retries → `failureThreshold`, etc.).
     #[serde(default)]
     healthcheck: Option<ComposeHealthcheck>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ComposeResources {
+    /// Hard limits (Compose's `deploy.resources.limits`). Maps
+    /// to K8s `resources.limits`.
+    #[serde(default)]
+    limits: Option<ComposeResourceBucket>,
+    /// Soft reservations (Compose's `deploy.resources.reservations`).
+    /// Maps to K8s `resources.requests`.
+    #[serde(default)]
+    reservations: Option<ComposeResourceBucket>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ComposeResourceBucket {
+    /// CPU as a fractional core count (`'0.5'`, `'1.0'`).
+    /// Stringified so YAML preserves the leading zero / decimal.
+    #[serde(default)]
+    cpus: Option<serde_yml::Value>,
+    /// Memory string (`'256M'`, `'1G'`, `'512Mi'`). Compose and
+    /// K8s share the same suffix grammar; we copy verbatim.
+    #[serde(default)]
+    memory: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -499,6 +533,12 @@ fn render_deployment(
         s.push_str(&probe);
     }
 
+    if let Some(resources) = render_resources(
+        svc.deploy.as_ref().and_then(|d| d.resources.as_ref()),
+    ) {
+        s.push_str(&resources);
+    }
+
     let parsed = parse_volumes(&svc.volumes);
     let mut lifted_stubs: Vec<ConfigMapStub> = Vec::new();
     let mut lifted_mounts: Vec<(String, String, bool)> = Vec::new(); // (cm_name, mount_path, read_only)
@@ -642,6 +682,63 @@ fn bind_mount_configmap_name(service: &str, source: &str) -> String {
         "pierx-cm".to_string()
     } else {
         out
+    }
+}
+
+/// Translate `deploy.resources` into a K8s `resources:` block on
+/// the container. Returns `None` when neither limits nor
+/// reservations have any populated field — emitting an empty
+/// `resources: {}` block is valid YAML but adds clutter.
+///
+/// Compose `deploy.resources.limits.{cpus,memory}` →
+/// `resources.limits.{cpu,memory}`. `reservations` →
+/// `resources.requests`. Field names re-spelled (`cpus` → `cpu`)
+/// because Compose and K8s differ on the singular form.
+fn render_resources(resources: Option<&ComposeResources>) -> Option<String> {
+    let r = resources?;
+    let limits_cpu = r.limits.as_ref().and_then(|b| compose_cpu_string(b));
+    let limits_mem = r.limits.as_ref().and_then(|b| b.memory.clone());
+    let req_cpu = r.reservations.as_ref().and_then(|b| compose_cpu_string(b));
+    let req_mem = r.reservations.as_ref().and_then(|b| b.memory.clone());
+
+    if limits_cpu.is_none() && limits_mem.is_none() && req_cpu.is_none() && req_mem.is_none() {
+        return None;
+    }
+
+    let mut s = String::new();
+    s.push_str("          resources:\n");
+    let has_limits = limits_cpu.is_some() || limits_mem.is_some();
+    let has_requests = req_cpu.is_some() || req_mem.is_some();
+    if has_limits {
+        s.push_str("            limits:\n");
+        if let Some(c) = &limits_cpu {
+            s.push_str(&format!("              cpu: {}\n", yaml_quote(c)));
+        }
+        if let Some(m) = &limits_mem {
+            s.push_str(&format!("              memory: {}\n", yaml_quote(m)));
+        }
+    }
+    if has_requests {
+        s.push_str("            requests:\n");
+        if let Some(c) = &req_cpu {
+            s.push_str(&format!("              cpu: {}\n", yaml_quote(c)));
+        }
+        if let Some(m) = &req_mem {
+            s.push_str(&format!("              memory: {}\n", yaml_quote(m)));
+        }
+    }
+    Some(s)
+}
+
+/// Pull `cpus:` out of a Compose resource bucket as a string.
+/// Compose users sometimes write `cpus: 0.5` (number) and
+/// sometimes `cpus: '0.5'` (string); both forms are sane and
+/// K8s accepts the string form, so we coerce.
+fn compose_cpu_string(bucket: &ComposeResourceBucket) -> Option<String> {
+    match bucket.cpus.as_ref()? {
+        serde_yml::Value::String(s) => Some(s.clone()),
+        serde_yml::Value::Number(n) => Some(n.to_string()),
+        _ => None,
     }
 }
 
@@ -1661,6 +1758,15 @@ pub fn convert_with_summary_and_options(
                 warnings.push(trimmed.trim_start_matches("# NOTE:").trim().to_string());
             }
         }
+        // ConfigMap / Secret etcd size sanity. The Kubernetes object
+        // size cap is 1 MiB *post-encoding* (etcd's request size
+        // limit). Our placeholders are tiny, but a user who pastes
+        // their actual config blob into the YAML before applying can
+        // blow past it. Warn early at 80% so they can split before
+        // discovering the failure at `kubectl apply` time.
+        if matches!(kind, Some("ConfigMap") | Some("Secret")) {
+            check_etcd_size_limit(doc, kind.unwrap_or("?"), &mut warnings);
+        }
     }
     Ok(ComposeK8sExport {
         compose_yaml: compose_yaml.to_string(),
@@ -1674,6 +1780,66 @@ pub fn convert_with_summary_and_options(
         networkpolicy_count,
         warnings,
     })
+}
+
+/// Default soft and hard etcd object-size limits, in bytes. The hard
+/// limit (1 MiB) is etcd's per-key request cap that Kubernetes
+/// inherits for ConfigMap / Secret bodies. The soft limit (80% of
+/// hard) gives users a chance to split their data before they hit
+/// the cliff at `kubectl apply` time.
+const ETCD_HARD_LIMIT_BYTES: usize = 1024 * 1024;
+const ETCD_SOFT_LIMIT_BYTES: usize = 800 * 1024;
+
+/// Read the `metadata.name:` field from a rendered manifest doc.
+/// Best-effort only — used purely for human-friendly warning text,
+/// so missing / malformed names degrade to "?". The renderer
+/// always emits `name:` after `metadata:`, so for our own output
+/// this lookup is reliable.
+fn extract_metadata_name(doc: &str) -> String {
+    let mut in_metadata = false;
+    for line in doc.lines() {
+        let trimmed = line.trim_start();
+        if trimmed == "metadata:" {
+            in_metadata = true;
+            continue;
+        }
+        if in_metadata {
+            if let Some(rest) = trimmed.strip_prefix("name:") {
+                return rest.trim().trim_matches('"').to_string();
+            }
+            // Out of the metadata block once we see a non-indented
+            // top-level key; bail.
+            if !line.starts_with(' ') && !line.is_empty() {
+                break;
+            }
+        }
+    }
+    "?".to_string()
+}
+
+/// Push a warning when `doc`'s UTF-8 byte size approaches or exceeds
+/// the etcd 1 MiB cap. We measure the rendered YAML — base64 padding
+/// for Secrets is already accounted for since the body is what gets
+/// stored in etcd verbatim.
+fn check_etcd_size_limit(doc: &str, kind: &str, warnings: &mut Vec<String>) {
+    let bytes = doc.len();
+    if bytes < ETCD_SOFT_LIMIT_BYTES {
+        return;
+    }
+    let name = extract_metadata_name(doc);
+    let kib = bytes / 1024;
+    if bytes >= ETCD_HARD_LIMIT_BYTES {
+        warnings.push(format!(
+            "{kind}/{name} is {kib} KiB — exceeds the 1 MiB etcd object-size limit. \
+             kubectl apply will fail; split this resource into smaller pieces \
+             (e.g. one ConfigMap per directory) or move large blobs into a PVC."
+        ));
+    } else {
+        warnings.push(format!(
+            "{kind}/{name} is {kib} KiB — approaching the 1 MiB etcd object-size limit. \
+             Consider splitting before `kubectl apply` starts rejecting the resource."
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -2158,6 +2324,80 @@ services:
     }
 
     #[test]
+    fn deploy_resources_limits_translate_to_k8s_limits() {
+        let yaml = r#"services:
+  api:
+    image: alpine:3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+"#;
+        let out = convert(yaml, None).expect("convert");
+        assert!(out.contains("resources:"));
+        assert!(out.contains("limits:"));
+        // yaml_quote wraps numeric-looking values like `0.5` but
+        // leaves bare K8s-style memory tokens (`256M`, `512Mi`)
+        // alone — accept either form so the test isn't tied to
+        // the quoting heuristic.
+        assert!(out.contains("cpu: \"0.5\""));
+        assert!(out.contains("memory: 256M") || out.contains("memory: \"256M\""));
+        assert!(out.contains("requests:"));
+        assert!(out.contains("cpu: \"0.25\""));
+        assert!(out.contains("memory: 128M") || out.contains("memory: \"128M\""));
+    }
+
+    #[test]
+    fn deploy_resources_only_limits_omits_requests() {
+        let yaml = r#"services:
+  api:
+    image: alpine:3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+"#;
+        let out = convert(yaml, None).expect("convert");
+        assert!(out.contains("resources:"));
+        assert!(out.contains("limits:"));
+        assert!(!out.contains("requests:"));
+    }
+
+    #[test]
+    fn deploy_resources_empty_omits_block() {
+        let yaml = r#"services:
+  api:
+    image: alpine:3
+    deploy:
+      resources:
+        limits: {}
+        reservations: {}
+"#;
+        let out = convert(yaml, None).expect("convert");
+        assert!(!out.contains("resources:"));
+    }
+
+    #[test]
+    fn deploy_resources_numeric_cpus_coerce_to_string() {
+        // `cpus: 0.5` (YAML number) — K8s wants a string in
+        // resource quantities, so the renderer should coerce.
+        let yaml = r#"services:
+  api:
+    image: alpine:3
+    deploy:
+      resources:
+        limits:
+          cpus: 0.5
+"#;
+        let out = convert(yaml, None).expect("convert");
+        assert!(out.contains("cpu: \"0.5\""));
+    }
+
+    #[test]
     fn deploy_restart_policy_overrides_service_level_restart() {
         // `restart: always` → omit (K8s default Always); but
         // `deploy.restart_policy.condition: on-failure` should
@@ -2400,5 +2640,75 @@ services:
         let n = bind_mount_configmap_name("svc", "./www/");
         assert!(!n.starts_with('-'));
         assert!(!n.ends_with('-'));
+    }
+
+    #[test]
+    fn etcd_size_check_silent_on_small_configmap() {
+        // Build a minimal ConfigMap doc — the size check should not
+        // fire at all because we're well under the 800 KiB threshold.
+        let doc = "apiVersion: v1\n\
+                   kind: ConfigMap\n\
+                   metadata:\n  name: small-cm\n\
+                   data:\n  hello: world\n";
+        let mut warnings: Vec<String> = Vec::new();
+        check_etcd_size_limit(doc, "ConfigMap", &mut warnings);
+        assert!(warnings.is_empty(), "small ConfigMap should not warn");
+    }
+
+    #[test]
+    fn etcd_size_check_warns_at_soft_limit() {
+        // Pad a ConfigMap body with 850 KiB of filler to land between
+        // the soft (800 KiB) and hard (1 MiB) thresholds.
+        let filler = "x".repeat(850 * 1024);
+        let doc = format!(
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: chunky\ndata:\n  blob: |\n    {filler}\n"
+        );
+        let mut warnings: Vec<String> = Vec::new();
+        check_etcd_size_limit(&doc, "ConfigMap", &mut warnings);
+        assert_eq!(warnings.len(), 1, "soft-limit ConfigMap should warn once");
+        assert!(
+            warnings[0].contains("approaching"),
+            "soft warning should mention approaching the limit, got: {}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("chunky"),
+            "warning should mention the object name, got: {}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn etcd_size_check_warns_at_hard_limit() {
+        // 1.1 MiB filler pushes past the etcd cap entirely.
+        let filler = "y".repeat(1100 * 1024);
+        let doc = format!(
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: huge\ndata:\n  blob: |\n    {filler}\n"
+        );
+        let mut warnings: Vec<String> = Vec::new();
+        check_etcd_size_limit(&doc, "ConfigMap", &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("exceeds"),
+            "hard warning should mention exceeding the limit, got: {}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("kubectl apply will fail"),
+            "hard warning should call out the apply failure, got: {}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn extract_metadata_name_handles_quoted_name() {
+        let doc = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: \"my-cm\"\ndata: {}\n";
+        assert_eq!(extract_metadata_name(doc), "my-cm");
+    }
+
+    #[test]
+    fn extract_metadata_name_returns_question_when_missing() {
+        let doc = "apiVersion: v1\nkind: ConfigMap\ndata: {}\n";
+        assert_eq!(extract_metadata_name(doc), "?");
     }
 }

@@ -33,6 +33,7 @@ import { localizeError } from "../i18n/localizeMessage";
 import StatusDot from "../components/StatusDot";
 import VirtualList from "../components/VirtualList";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import { useConnectionStore } from "../stores/useConnectionStore";
 import ChmodDialog from "../components/ChmodDialog";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DismissibleNote from "../components/DismissibleNote";
@@ -287,6 +288,7 @@ function SftpPanelBody({ tab }: Props) {
   const [deleteTarget, setDeleteTarget] = useState<
     { entry: SftpEntryView; anchor?: { x: number; y: number } } | null
   >(null);
+  const [remoteCopyTarget, setRemoteCopyTarget] = useState<SftpEntryView | null>(null);
 
   // SSH context can come from the tab being a real SSH tab, from a
   // local terminal where the user typed `ssh user@host`, or from a
@@ -879,6 +881,11 @@ function SftpPanelBody({ tab }: Props) {
       items.push({
         label: t("Download…"),
         action: () => void downloadEntryPick(entry),
+        disabled: actionBusy,
+      });
+      items.push({
+        label: t("Copy to other host…"),
+        action: () => setRemoteCopyTarget(entry),
         disabled: actionBusy,
       });
     }
@@ -1634,6 +1641,42 @@ function SftpPanelBody({ tab }: Props) {
           </div>
         )}
 
+        {remoteCopyTarget && (
+          <SftpRemoteCopyDialog
+            entry={remoteCopyTarget}
+            sourceParams={sshArgs}
+            onClose={() => setRemoteCopyTarget(null)}
+            onStart={async (dst) => {
+              const baseName = remoteCopyTarget.name;
+              const id = pushTransfer({
+                direction: "up",
+                name: baseName,
+                remotePath: dst.remotePath,
+                localPath: `${remoteCopyTarget.path} → ${dst.host}`,
+              });
+              setRemoteCopyTarget(null);
+              try {
+                await cmd.sftpRemoteToRemoteCopy({
+                  src: { ...sshArgs, remotePath: remoteCopyTarget.path },
+                  dst,
+                  transferId: id,
+                });
+                finishTransfer(id, "done");
+                setNotice(
+                  t("Copied {name} to {host}.", {
+                    name: baseName,
+                    host: dst.host,
+                  }),
+                );
+              } catch (e) {
+                const msg = formatError(e);
+                finishTransfer(id, "failed", msg);
+                setError(msg);
+              }
+            }}
+          />
+        )}
+
         {transfers.length > 0 && (
           <div className="ftp-queue">
             <div className="ftp-queue-head">
@@ -1722,5 +1765,144 @@ function SftpPanelBody({ tab }: Props) {
         )}
       </div>
     </>
+  );
+}
+
+/** Dialog for copying a remote file to another saved SSH host. The
+ *  user picks a target connection from the saved list and the
+ *  destination path; submit kicks off a `sftpRemoteToRemoteCopy`
+ *  call. Auth resolution leans on the saved-connection index path
+ *  so we don't ask the user for a password they've already saved. */
+function SftpRemoteCopyDialog({
+  entry,
+  sourceParams,
+  onClose,
+  onStart,
+}: {
+  entry: SftpEntryView;
+  sourceParams: cmd.SshParams;
+  onClose: () => void;
+  onStart: (
+    dst: cmd.SshParams & { remotePath: string; host: string },
+  ) => void | Promise<void>;
+}) {
+  const { t } = useI18n();
+  const { connections } = useConnectionStore();
+  // Default destination path is the same path on the target host —
+  // matches "scp src target:src" muscle memory. User can edit before
+  // confirming.
+  const [destIndex, setDestIndex] = useState<number | "">(
+    connections[0]?.index ?? "",
+  );
+  const [destPath, setDestPath] = useState(entry.path);
+  const [pwBuffer, setPwBuffer] = useState("");
+
+  const dest = connections.find((c) => c.index === destIndex);
+  // Source-loop guard: copying to itself doesn't currently fail at
+  // the backend (it'd just clobber the source through a temp), but
+  // it's almost always a mistake — block in the UI.
+  const isSameAsSource =
+    dest != null &&
+    dest.host === sourceParams.host &&
+    dest.port === sourceParams.port &&
+    dest.user === sourceParams.user;
+  const canSubmit = !!dest && destPath.trim().length > 0 && !isSameAsSource;
+
+  return (
+    <div className="dlg-overlay" onClick={onClose}>
+      <div className="dlg" onClick={(e) => e.stopPropagation()}>
+        <div className="dlg-head">
+          <span className="dlg-title">{t("Copy to other host")}</span>
+          <div style={{ flex: 1 }} />
+          <button type="button" className="lg-ic" onClick={onClose}>
+            <X size={12} />
+          </button>
+        </div>
+        <div className="dlg-body dlg-body--form">
+          <div className="dlg-row">
+            <label className="dlg-row-label">{t("SOURCE")}</label>
+            <span className="mono muted" title={entry.path}>
+              {entry.path}
+            </span>
+          </div>
+          <div className="dlg-row">
+            <label className="dlg-row-label">{t("Target host")}</label>
+            <select
+              className="dlg-input"
+              value={destIndex}
+              onChange={(e) =>
+                setDestIndex(
+                  e.currentTarget.value === ""
+                    ? ""
+                    : Number(e.currentTarget.value),
+                )
+              }
+            >
+              <option value="">{t("(pick a saved connection)")}</option>
+              {connections.map((c) => (
+                <option key={c.index} value={c.index}>
+                  {c.name || `${c.user}@${c.host}:${c.port}`}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="dlg-row">
+            <label className="dlg-row-label">{t("Target path")}</label>
+            <input
+              className="dlg-input"
+              value={destPath}
+              onChange={(e) => setDestPath(e.currentTarget.value)}
+              placeholder="/path/on/target/host"
+              spellCheck={false}
+            />
+          </div>
+          {dest && dest.authKind === "password" && (
+            <div className="dlg-row">
+              <label className="dlg-row-label">{t("Password")}</label>
+              <input
+                type="password"
+                className="dlg-input"
+                value={pwBuffer}
+                onChange={(e) => setPwBuffer(e.currentTarget.value)}
+                placeholder={t(
+                  "Leave empty to use the saved keychain entry.",
+                )}
+                autoComplete="off"
+              />
+            </div>
+          )}
+          {isSameAsSource && (
+            <div className="status-note status-note--error mono">
+              {t("Target is the same as the source.")}
+            </div>
+          )}
+        </div>
+        <div className="dlg-foot">
+          <button type="button" className="btn is-ghost is-compact" onClick={onClose}>
+            {t("Cancel")}
+          </button>
+          <button
+            type="button"
+            className="btn is-primary is-compact"
+            disabled={!canSubmit}
+            onClick={() => {
+              if (!dest) return;
+              void onStart({
+                host: dest.host,
+                port: dest.port,
+                user: dest.user,
+                authMode: dest.authKind,
+                password: pwBuffer,
+                keyPath: dest.keyPath,
+                savedConnectionIndex: dest.index,
+                remotePath: destPath.trim(),
+              });
+            }}
+          >
+            {t("Copy")}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

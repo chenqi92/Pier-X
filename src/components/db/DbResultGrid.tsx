@@ -57,6 +57,10 @@ type Props = {
    *  lock uses. Surfaces the gate next to the data instead of burying
    *  it in the editor footer. */
   onToggleWritable?: () => void;
+  /** Scoping key for persisted column widths. Pass something stable
+   *  per (engine, database, table) — e.g. `mysql:foo.users`. When
+   *  omitted, widths default to auto and aren't persisted. */
+  storageKey?: string;
 };
 
 const PAGE_SIZES: Array<50 | 100 | 200 | 500> = [50, 100, 200, 500];
@@ -88,6 +92,7 @@ export default function DbResultGrid({
   onCommit,
   committing = false,
   onToggleWritable,
+  storageKey,
 }: Props) {
   const { t } = useI18n();
   const [sortCol, setSortCol] = useState<string | null>(null);
@@ -101,8 +106,188 @@ export default function DbResultGrid({
   // preview.rows) so sort/filter/pager don't desync.
   const [editing, setEditing] = useState<{ row: number; col: string } | null>(null);
   const [dirtyMap, setDirtyMap] = useState<Map<string, DirtyCell>>(new Map());
-  const [pendingInsert, setPendingInsert] = useState<Record<string, string> | null>(null);
+  const [pendingInserts, setPendingInserts] = useState<Record<string, string>[]>([]);
   const [pendingDeletes, setPendingDeletes] = useState<Set<number>>(new Set());
+  // Per-column width overrides, keyed by column name. Loaded from
+  // localStorage when `storageKey` is provided; falls back to "auto"
+  // (browser-decided) when no override is set. Stored as integer
+  // pixels — sub-pixel precision isn't worth the JSON noise.
+  const widthsKey = storageKey ? `pier-x:rg-widths:${storageKey}` : null;
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    if (!widthsKey) return {};
+    try {
+      const raw = localStorage.getItem(widthsKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        const out: Record<string, number> = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === "number" && v > 0 && v < 2000) out[k] = v;
+        }
+        return out;
+      }
+    } catch {
+      // localStorage parse fail — drop and start with empty overrides.
+    }
+    return {};
+  });
+  // Reload widths when the storage key changes (e.g. user switched
+  // tables). Saves the previous table's edits to its own bucket via
+  // the persistence effect below.
+  useEffect(() => {
+    if (!widthsKey) {
+      setColWidths({});
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(widthsKey);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === "object") {
+        const out: Record<string, number> = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === "number" && v > 0 && v < 2000) out[k] = v;
+        }
+        setColWidths(out);
+      } else {
+        setColWidths({});
+      }
+    } catch {
+      setColWidths({});
+    }
+  }, [widthsKey]);
+  // Persist on each change. Cheap — 0..N entries, single localStorage
+  // write per drag commit.
+  useEffect(() => {
+    if (!widthsKey) return;
+    try {
+      if (Object.keys(colWidths).length === 0) {
+        localStorage.removeItem(widthsKey);
+      } else {
+        localStorage.setItem(widthsKey, JSON.stringify(colWidths));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [widthsKey, colWidths]);
+
+  // Per-table column-order override. Stored as the desired column
+  // sequence — names that vanish when the table changes are dropped,
+  // names that newly appear get appended after the saved ones. `null`
+  // / empty array means "use the natural order from preview".
+  const orderKey = storageKey ? `pier-x:rg-order:${storageKey}` : null;
+  const [colOrder, setColOrder] = useState<string[] | null>(() => {
+    if (!orderKey) return null;
+    try {
+      const raw = localStorage.getItem(orderKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string")) {
+        return parsed as string[];
+      }
+    } catch {
+      /* fall through */
+    }
+    return null;
+  });
+  useEffect(() => {
+    if (!orderKey) {
+      setColOrder(null);
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(orderKey);
+      if (!raw) {
+        setColOrder(null);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string")) {
+        setColOrder(parsed as string[]);
+      } else {
+        setColOrder(null);
+      }
+    } catch {
+      setColOrder(null);
+    }
+  }, [orderKey]);
+  useEffect(() => {
+    if (!orderKey) return;
+    try {
+      if (!colOrder || colOrder.length === 0) {
+        localStorage.removeItem(orderKey);
+      } else {
+        localStorage.setItem(orderKey, JSON.stringify(colOrder));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [orderKey, colOrder]);
+
+  // Active drag-target column for the reorder UI. Highlights the th
+  // a drop would land on without committing yet — matches the IDE
+  // file-tree drag behaviour the user already trusts.
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+
+  /** Apply `colOrder` to a preview by reshuffling columns + every
+   *  row's cells. Memoized: a 1000-row preview reshuffles in one tick
+   *  per (preview, order) pair. Returns the input unchanged when no
+   *  reorder is active. */
+  const viewPreview = useMemo(() => {
+    if (!preview) return preview;
+    if (!colOrder || colOrder.length === 0) return preview;
+    const have = new Set(preview.columns);
+    const ordered: string[] = [];
+    for (const c of colOrder) {
+      if (have.has(c) && !ordered.includes(c)) ordered.push(c);
+    }
+    for (const c of preview.columns) {
+      if (!ordered.includes(c)) ordered.push(c);
+    }
+    if (ordered.every((c, i) => c === preview.columns[i])) return preview;
+    const idxOf = ordered.map((c) => preview.columns.indexOf(c));
+    const rows = preview.rows.map((r) => idxOf.map((i) => r[i]));
+    return { ...preview, columns: ordered, rows };
+  }, [preview, colOrder]);
+
+  /** Persist the user's drop. We commit the FULL displayed order
+   *  (not just the changed pair) so the bucket reflects the final
+   *  layout — easier to reason about than a sparse delta. */
+  function commitColOrder(next: string[]) {
+    setColOrder(next);
+  }
+
+  /** Reset to the natural column order from the source query. Wired
+   *  to a one-shot button shown only when an override is active. */
+  function resetColOrder() {
+    setColOrder(null);
+  }
+
+  /** Begin a column-width drag from the th's right-edge grip.
+   *  We capture pointer events so the drag continues even when the
+   *  cursor leaves the grip; releases the capture on mouseup. */
+  function startColResize(col: string, e: React.PointerEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const th = (e.currentTarget as HTMLElement).closest("th");
+    const startW = th ? th.getBoundingClientRect().width : 120;
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+    const onMove = (ev: PointerEvent) => {
+      const delta = ev.clientX - startX;
+      const next = Math.max(40, Math.min(1500, Math.round(startW + delta)));
+      setColWidths((prev) => ({ ...prev, [col]: next }));
+    };
+    const onUp = (ev: PointerEvent) => {
+      target.releasePointerCapture(ev.pointerId);
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      target.removeEventListener("pointercancel", onUp);
+    };
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+    target.addEventListener("pointercancel", onUp);
+  }
 
   // Reset paging + edit state when the preview swaps under us — otherwise
   // switching tables can leave us showing "page 12 of 3" or stale dirty
@@ -113,20 +298,20 @@ export default function DbResultGrid({
     setFilters({});
     setEditing(null);
     setDirtyMap(new Map());
-    setPendingInsert(null);
+    setPendingInserts([]);
     setPendingDeletes(new Set());
   }, [preview]);
 
   const numericSet = useMemo(() => new Set(numericColumns ?? []), [numericColumns]);
   const pkSet = useMemo(() => new Set(pkColumns ?? []), [pkColumns]);
 
-  const cols = preview?.columns ?? columnsMeta?.map((c) => c.name) ?? [];
+  const cols = viewPreview?.columns ?? columnsMeta?.map((c) => c.name) ?? [];
   const editEnabled = writable && !!columnsMeta && pkSet.size > 0 && !!onCommit;
   const insertEnabled = writable && !!columnsMeta && !!onCommit;
 
   const filteredSorted = useMemo(() => {
-    if (!preview) return [] as { row: string[]; absIdx: number }[];
-    let pairs = preview.rows.map((row, absIdx) => ({ row, absIdx }));
+    if (!viewPreview) return [] as { row: string[]; absIdx: number }[];
+    let pairs = viewPreview.rows.map((row, absIdx) => ({ row, absIdx }));
     // Filter
     const activeFilters = Object.entries(filters).filter(([, q]) => q.trim() !== "");
     if (activeFilters.length > 0) {
@@ -161,7 +346,7 @@ export default function DbResultGrid({
       }
     }
     return pairs;
-  }, [preview, filters, sortCol, sortDir, cols, numericSet]);
+  }, [viewPreview, filters, sortCol, sortDir, cols, numericSet]);
 
   const pageCount = Math.max(1, Math.ceil(filteredSorted.length / pageSize));
   const safePage = Math.min(page, pageCount - 1);
@@ -170,7 +355,7 @@ export default function DbResultGrid({
     [filteredSorted, safePage, pageSize],
   );
 
-  const dirtyCount = dirtyMap.size + (pendingInsert ? 1 : 0) + pendingDeletes.size;
+  const dirtyCount = dirtyMap.size + pendingInserts.length + pendingDeletes.size;
 
   const toggleSort = (col: string) => {
     if (sortCol === col) {
@@ -229,21 +414,52 @@ export default function DbResultGrid({
   };
 
   const startInsert = () => {
-    if (!insertEnabled || pendingInsert) return;
+    if (!insertEnabled) return;
     const init: Record<string, string> = {};
     for (const c of cols) init[c] = "";
-    setPendingInsert(init);
+    setPendingInserts((prev) => [...prev, init]);
+  };
+
+  /**
+   * Splits a clipboard payload into rows, parses each as TSV (or
+   * comma-separated when no tabs are present), and stages them as
+   * pending insert rows. Empty trailing lines are dropped. When the
+   * payload has more columns than the current table, extras are
+   * ignored; when fewer, the missing columns stay empty (NULL on
+   * commit). Returns the number of rows staged so the caller can
+   * surface a toast.
+   */
+  const stageRowsFromTsv = (raw: string): number => {
+    if (!insertEnabled) return 0;
+    const lines = raw
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .split("\n")
+      .filter((l) => l.length > 0);
+    if (lines.length === 0) return 0;
+    const sep = lines[0].includes("\t") ? "\t" : ",";
+    const staged: Record<string, string>[] = [];
+    for (const line of lines) {
+      const fields = line.split(sep);
+      const row: Record<string, string> = {};
+      for (let i = 0; i < cols.length; i++) {
+        row[cols[i]] = (fields[i] ?? "").trim();
+      }
+      staged.push(row);
+    }
+    setPendingInserts((prev) => [...prev, ...staged]);
+    return staged.length;
   };
 
   const discardAll = () => {
     setDirtyMap(new Map());
-    setPendingInsert(null);
+    setPendingInserts([]);
     setPendingDeletes(new Set());
     setEditing(null);
   };
 
   const collectMutations = useCallback((): DbMutation[] => {
-    if (!preview) return [];
+    if (!viewPreview) return [];
     const muts: DbMutation[] = [];
     // Collect cell edits per row
     const byRow = new Map<number, DirtyCell[]>();
@@ -253,7 +469,7 @@ export default function DbResultGrid({
       byRow.set(cell.row, list);
     }
     for (const [rowIdx, cells] of byRow.entries()) {
-      const original = preview.rows[rowIdx];
+      const original = viewPreview?.rows[rowIdx];
       if (!original) continue;
       const pk: Record<string, string> = {};
       for (const c of cols) {
@@ -265,11 +481,11 @@ export default function DbResultGrid({
       }
       muts.push({ kind: "update", pk, changes });
     }
-    // Pending inserts
-    if (pendingInsert) {
+    // Pending inserts — emit one mutation per staged row.
+    for (const draft of pendingInserts) {
       const values: Record<string, string | null> = {};
       for (const c of cols) {
-        const v = pendingInsert[c];
+        const v = draft[c];
         // Skip empty + PK columns (let the DB auto-generate). For non-PK
         // empty columns, send NULL so the DB applies its default.
         if (pkSet.has(c) && (v === undefined || v === "")) continue;
@@ -279,7 +495,7 @@ export default function DbResultGrid({
     }
     // Pending deletes
     for (const rowIdx of pendingDeletes) {
-      const original = preview.rows[rowIdx];
+      const original = viewPreview?.rows[rowIdx];
       if (!original) continue;
       const pk: Record<string, string> = {};
       for (const c of cols) {
@@ -288,7 +504,7 @@ export default function DbResultGrid({
       muts.push({ kind: "delete", pk });
     }
     return muts;
-  }, [preview, dirtyMap, pendingInsert, pendingDeletes, cols, pkSet]);
+  }, [preview, dirtyMap, pendingInserts, pendingDeletes, cols, pkSet]);
 
   const onCommitClick = async () => {
     if (!onCommit || dirtyCount === 0) return;
@@ -359,15 +575,55 @@ export default function DbResultGrid({
           {t("Filter")}
           {activeFilterCount > 0 && <span className="rg-filter-count">{activeFilterCount}</span>}
         </button>
+        {colOrder && colOrder.length > 0 && (
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            onClick={resetColOrder}
+            title={t(
+              "Restore the original column order from the source query.",
+            )}
+          >
+            {t("Reset order")}
+          </button>
+        )}
         {insertEnabled && (
           <button
             type="button"
             className="btn is-ghost is-compact"
             onClick={startInsert}
-            disabled={!!pendingInsert}
             title={t("Insert row")}
           >
             <Plus size={10} /> {t("Insert row")}
+          </button>
+        )}
+        {insertEnabled && (
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            onClick={async () => {
+              try {
+                const txt = await navigator.clipboard.readText();
+                const n = stageRowsFromTsv(txt);
+                if (n === 0 && !txt.trim()) return;
+              } catch {
+                // Clipboard read denied — fall back to a prompt so
+                // the feature is still useful in environments where
+                // the permission isn't granted.
+                const txt = window.prompt(
+                  t(
+                    "Paste TSV (one row per line, columns separated by Tab):",
+                  ),
+                  "",
+                );
+                if (txt) stageRowsFromTsv(txt);
+              }
+            }}
+            title={t(
+              "Paste a TSV block from the clipboard — each line becomes a pending INSERT.",
+            )}
+          >
+            <Plus size={10} /> {t("Paste TSV")}
           </button>
         )}
         {onToggleWritable && !!columnsMeta && (
@@ -393,6 +649,20 @@ export default function DbResultGrid({
 
       <div className="rg-scroll">
         <table className="rg-table">
+          <colgroup>
+            <col className="rg-col-n" />
+            {cols.map((col) => (
+              <col
+                key={col}
+                style={
+                  colWidths[col]
+                    ? { width: `${colWidths[col]}px` }
+                    : undefined
+                }
+              />
+            ))}
+            {(editEnabled || insertEnabled) && <col className="rg-col-acts" />}
+          </colgroup>
           <thead>
             <tr>
               <th className="rg-th-n">#</th>
@@ -401,12 +671,64 @@ export default function DbResultGrid({
                 const isNum = numericSet.has(col);
                 const align = isNum ? "right" : "left";
                 const sorted = sortCol === col;
+                const isDropTarget = dragOverCol === col;
                 return (
                   <th
                     key={col}
-                    className={"rg-th" + (sorted ? " rg-th-sorted" : "")}
+                    className={
+                      "rg-th" +
+                      (sorted ? " rg-th-sorted" : "") +
+                      (isDropTarget ? " rg-th-drop" : "")
+                    }
                     style={{ textAlign: align }}
                     onClick={() => toggleSort(col)}
+                    draggable={!!storageKey}
+                    onDragStart={(e) => {
+                      // Block resize-grip drags from spuriously firing
+                      // a column-reorder. The grip lives inside the th
+                      // and would otherwise propagate.
+                      const target = e.target as HTMLElement;
+                      if (target.classList?.contains("rg-th-grip")) {
+                        e.preventDefault();
+                        return;
+                      }
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", col);
+                    }}
+                    onDragOver={(e) => {
+                      // dataTransfer types check: only react to our own
+                      // payload. Without this an outside-the-grid drag
+                      // (a file from the OS) would also light up.
+                      if (
+                        e.dataTransfer.types.includes("text/plain") &&
+                        storageKey
+                      ) {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        if (dragOverCol !== col) setDragOverCol(col);
+                      }
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverCol === col) setDragOverCol(null);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragOverCol(null);
+                      const src = e.dataTransfer.getData("text/plain");
+                      if (!src || src === col) return;
+                      // Build the new order by removing src then
+                      // re-inserting it before the drop target. Works
+                      // for moves left-to-right (src earlier than dst)
+                      // and right-to-left (src later than dst).
+                      const withoutSrc = cols.filter((c) => c !== src);
+                      const dstAt = withoutSrc.indexOf(col);
+                      const next = [
+                        ...withoutSrc.slice(0, dstAt),
+                        src,
+                        ...withoutSrc.slice(dstAt),
+                      ];
+                      commitColOrder(next);
+                    }}
                   >
                     <div className="rg-th-body">
                       {isPk && (
@@ -421,6 +743,21 @@ export default function DbResultGrid({
                         </span>
                       )}
                     </div>
+                    <span
+                      className="rg-th-grip"
+                      onPointerDown={(e) => startColResize(col, e)}
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        // Double-click resets this column to auto width.
+                        setColWidths((prev) => {
+                          const next = { ...prev };
+                          delete next[col];
+                          return next;
+                        });
+                      }}
+                      title={t("Drag to resize · double-click to reset")}
+                    />
                   </th>
                 );
               })}
@@ -464,20 +801,27 @@ export default function DbResultGrid({
             )}
           </thead>
           <tbody>
-            {pendingInsert && (
+            {pendingInserts.map((draft, i) => (
               <PendingInsertRow
+                key={`pending-insert-${i}`}
                 cols={cols}
-                values={pendingInsert}
+                values={draft}
                 pkSet={pkSet}
                 numericSet={numericSet}
                 onChange={(col, v) =>
-                  setPendingInsert((prev) => (prev ? { ...prev, [col]: v } : prev))
+                  setPendingInserts((prev) => {
+                    const out = prev.slice();
+                    out[i] = { ...out[i], [col]: v };
+                    return out;
+                  })
                 }
-                onCancel={() => setPendingInsert(null)}
+                onCancel={() =>
+                  setPendingInserts((prev) => prev.filter((_, idx) => idx !== i))
+                }
                 t={t}
               />
-            )}
-            {slice.length === 0 && !pendingInsert ? (
+            ))}
+            {slice.length === 0 && pendingInserts.length === 0 ? (
               <tr>
                 <td
                   className="rg-empty"
@@ -509,6 +853,7 @@ export default function DbResultGrid({
                       const col = cols[ci];
                       const isPk = pkSet.has(col);
                       const isNum = numericSet.has(col);
+                      const meta = columnsMeta?.find((m) => m.name === col);
                       const isEditing = editing?.row === absIdx && editing?.col === col;
                       const dirtyVal = dirtyValueFor(absIdx, col);
                       const isDirty = dirtyVal !== null;
@@ -559,6 +904,7 @@ export default function DbResultGrid({
                             <CellEditor
                               initial={display ?? ""}
                               numeric={isNum}
+                              enumValues={meta?.enumValues}
                               onCommit={(v) => commitCellEdit(absIdx, col, cell ?? "", v)}
                               onCancel={cancelEdit}
                             />
@@ -683,41 +1029,64 @@ export default function DbResultGrid({
   );
 }
 
-/** Inline cell editor — commits on blur or Enter, cancels on Escape. */
+/** Inline cell editor — commits on blur or Enter, cancels on Escape.
+ *  When `enumValues` is set, the input is wired to a `<datalist>` so
+ *  the user gets a typeahead dropdown of valid enum members. The
+ *  input is still free-form (so users can paste an unusual value if
+ *  the catalog is stale), but the suggestions cover the happy path. */
 function CellEditor({
   initial,
   numeric,
+  enumValues,
   onCommit,
   onCancel,
 }: {
   initial: string;
   numeric: boolean;
+  enumValues?: string[];
   onCommit: (v: string) => void;
   onCancel: () => void;
 }) {
   const ref = useRef<HTMLInputElement | null>(null);
   const [val, setVal] = useState(initial);
+  // Stable id so multiple grids on the page don't collide — the
+  // datalist itself is rendered as a sibling node and referenced by
+  // the input's `list=` attribute.
+  const datalistId = useMemo(
+    () => `rg-enum-${Math.random().toString(36).slice(2, 8)}`,
+    [],
+  );
   useEffect(() => {
     ref.current?.focus();
     ref.current?.select();
   }, []);
   return (
-    <input
-      ref={ref}
-      className={"rg-td-input" + (numeric ? " rg-td-input-num" : "")}
-      value={val}
-      onChange={(e) => setVal(e.currentTarget.value)}
-      onBlur={() => onCommit(val)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          (e.currentTarget as HTMLInputElement).blur();
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          onCancel();
-        }
-      }}
-    />
+    <>
+      <input
+        ref={ref}
+        className={"rg-td-input" + (numeric ? " rg-td-input-num" : "")}
+        value={val}
+        list={enumValues && enumValues.length > 0 ? datalistId : undefined}
+        onChange={(e) => setVal(e.currentTarget.value)}
+        onBlur={() => onCommit(val)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            (e.currentTarget as HTMLInputElement).blur();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+      />
+      {enumValues && enumValues.length > 0 && (
+        <datalist id={datalistId}>
+          {enumValues.map((v) => (
+            <option key={v} value={v} />
+          ))}
+        </datalist>
+      )}
+    </>
   );
 }
 

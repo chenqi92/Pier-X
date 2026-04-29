@@ -13,6 +13,8 @@ import DbCreateDbDialog from "../components/db/DbCreateDbDialog";
 import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
 import DbConfigView, { type DbConfigRow } from "../components/db/DbConfigView";
 import DbResultGrid from "../components/db/DbResultGrid";
+import DbRowDetail from "../components/db/DbRowDetail";
+import { buildFkEdges } from "../components/db/fkNav";
 import { type DbSchemaActions, type DbSchemaDatabase } from "../components/db/DbSchemaTree";
 import DbStructureView from "../components/db/DbStructureView";
 import {
@@ -20,6 +22,12 @@ import {
   splitSqlStatements,
 } from "../components/db/dbImportExport";
 import DbSqlEditor from "../components/db/DbSqlEditor";
+import ExplainPlanView from "../components/db/ExplainPlanView";
+import {
+  extractJsonPlanCell,
+  parseMysqlPlan,
+  type PlanNode,
+} from "../lib/explainPlan";
 import type { DbSplashRowData } from "../components/db/DbSplashRow";
 import { inferEnv } from "../components/db/dbTheme";
 import {
@@ -127,6 +135,15 @@ function MySqlPanelBody({ tab }: Props) {
   const [readOnly, setReadOnly] = useState(true);
   const [writeConfirm, setWriteConfirm] = useState("");
   const [queryResult, setQueryResult] = useState<QueryExecutionResult | null>(null);
+  const [plan, setPlan] = useState<PlanNode | null>(null);
+  const [planMeta, setPlanMeta] = useState<string>("");
+  const [openedRow, setOpenedRow] = useState<string[] | null>(null);
+  // Last 5 plans the panel rendered, newest-first. Used to diff a
+  // fresh run against the previous one for actual-rows / actual-time
+  // delta annotations on each node.
+  const [planHistory, setPlanHistory] = useState<PlanNode[]>([]);
+  const [comparePrev, setComparePrev] = useState(false);
+  const PLAN_HISTORY_CAP = 5;
   const [queryBusy, setQueryBusy] = useState(false);
   const [queryError, setQueryError] = useState("");
   const [notice, setNotice] = useState("");
@@ -307,6 +324,53 @@ function MySqlPanelBody({ tab }: Props) {
       setNotice(t("EXPLAIN · {elapsed} ms", { elapsed: r.elapsedMs }));
     } catch (e) {
       setQueryResult(null);
+      setQueryError(formatError(e));
+    } finally {
+      setQueryBusy(false);
+    }
+  }
+
+  /** Run `EXPLAIN FORMAT=JSON <sql>` and parse the response into a
+   *  hierarchical plan tree. MySQL's `EXPLAIN ANALYZE` (8.0.18+)
+   *  returns plain TREE text rather than JSON, so we use FORMAT=JSON
+   *  for the structured form — it's available all the way back to
+   *  5.6 and gives us cost / table / access-type / used-key. */
+  async function runPlan() {
+    const trimmed = sql.trim();
+    if (!trimmed) return;
+    const stripped = trimmed.replace(/^explain(\s+analyze)?\s+/i, "");
+    const planSql = `EXPLAIN FORMAT=JSON ${stripped}`;
+    setQueryBusy(true);
+    setQueryError("");
+    setNotice("");
+    try {
+      const target = await flow.ensureConnectionTarget();
+      const r = await cmd.mysqlExecute({
+        host: target.host,
+        port: target.port,
+        user: tab.mysqlUser.trim(),
+        password: tab.mysqlPassword,
+        database: tab.mysqlDatabase.trim() || null,
+        sql: planSql,
+      });
+      const cell = extractJsonPlanCell(r.rows as unknown[][]);
+      if (!cell) {
+        setQueryError(t("EXPLAIN returned no plan JSON."));
+        return;
+      }
+      const parsed = parseMysqlPlan(cell);
+      if (!parsed) {
+        setQueryError(t("Could not parse the plan JSON."));
+        return;
+      }
+      setPlanHistory((prev) => {
+        const next = [parsed, ...prev];
+        return next.slice(0, PLAN_HISTORY_CAP);
+      });
+      setPlan(parsed);
+      setPlanMeta(t("EXPLAIN FORMAT=JSON · {elapsed} ms", { elapsed: r.elapsedMs }));
+      setNotice(t("EXPLAIN · {elapsed} ms", { elapsed: r.elapsedMs }));
+    } catch (e) {
       setQueryError(formatError(e));
     } finally {
       setQueryBusy(false);
@@ -1014,8 +1078,36 @@ function MySqlPanelBody({ tab }: Props) {
         onRemoveFavorite={sqlTabs.removeFavorite}
         onPickFavorite={sqlTabs.loadFavorite}
         onExplain={() => void runExplain()}
+        onPlan={() => void runPlan()}
         onFormat={formatActiveSql}
       />
+      {plan && (
+        <>
+          {planHistory.length >= 2 && (
+            <div className="explain-plan-history mono">
+              <span className="explain-plan-history__label">
+                {t("History: {n} run(s)", { n: planHistory.length })}
+              </span>
+              <button
+                type="button"
+                className={`btn is-compact ${
+                  comparePrev ? "is-primary" : "is-ghost"
+                }`}
+                onClick={() => setComparePrev((v) => !v)}
+                title={t("Annotate each node with delta vs previous run")}
+              >
+                {comparePrev ? t("Hide diff") : t("Diff vs previous run")}
+              </button>
+            </div>
+          )}
+          <ExplainPlanView
+            plan={plan}
+            prevPlan={comparePrev ? planHistory[1] ?? null : null}
+            meta={planMeta}
+            onClose={() => setPlan(null)}
+          />
+        </>
+      )}
       <DbResultGrid
         preview={state.preview}
         pkColumns={pkColumns}
@@ -1032,7 +1124,36 @@ function MySqlPanelBody({ tab }: Props) {
           setReadOnly((prev) => !prev);
           setWriteConfirm("");
         }}
+        onOpenRow={(row) => setOpenedRow(row)}
+        storageKey={
+          state.databaseName && state.tableName
+            ? `mysql:${state.databaseName}.${state.tableName}`
+            : undefined
+        }
       />
+      {openedRow && state.preview && (
+        <DbRowDetail
+          title={state.tableName || t("Row")}
+          columns={state.preview.columns.map((name) => ({
+            name,
+            pk: pkColumns.includes(name),
+          }))}
+          row={openedRow}
+          onClose={() => setOpenedRow(null)}
+          foreignKeys={buildFkEdges(
+            state.preview.columns,
+            openedRow,
+            state.foreignKeys,
+            "mysql",
+            (sql) => {
+              setSql(sql);
+              setOpenedRow(null);
+              void runQuery();
+            },
+            t,
+          )}
+        />
+      )}
       {queryError && (
         <div className="db-panel-banner">
           <DismissibleNote variant="status" tone="error" onDismiss={() => setQueryError("")}>

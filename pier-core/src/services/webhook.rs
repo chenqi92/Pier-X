@@ -84,6 +84,30 @@ pub struct WebhookEntry {
     /// honored when `max_retries > 0`.
     #[serde(default)]
     pub retry_backoff_secs: u8,
+    /// Optional extra HTTP headers attached to the request. The
+    /// `Content-Type` header is always set to `application/json`
+    /// by the fire path; entries with that name are ignored to
+    /// keep the contract simple. Useful for Bearer tokens, signing
+    /// secrets, or per-tenant routing headers (`X-Tenant-Id`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<WebhookHeader>,
+    /// Optional shared secret. When set, the fire path computes
+    /// HMAC-SHA256 over the request body and adds it as
+    /// `X-Pier-Signature: sha256=<hex>` so receivers that verify
+    /// payload integrity (GitHub-style) can reject unsigned or
+    /// tampered requests. Empty string disables signing.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hmac_secret: String,
+}
+
+/// One additional HTTP header for a webhook request. Both fields
+/// are passed through verbatim — the user is on the hook for
+/// proper Bearer/Basic prefixing in `value`. Empty `name` entries
+/// are ignored at fire-time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WebhookHeader {
+    pub name: String,
+    pub value: String,
 }
 
 /// Default base for exponential backoff when `retry_backoff_secs`
@@ -369,7 +393,13 @@ fn fire_with_retries_blocking(
         attempts: 0,
     };
     for attempt in 1..=max_attempts {
-        last = fire_with_body_blocking(&entry.url, body, per_attempt_timeout);
+        last = fire_with_body_blocking(
+            &entry.url,
+            body,
+            per_attempt_timeout,
+            &entry.headers,
+            &entry.hmac_secret,
+        );
         total_latency_ms = total_latency_ms.saturating_add(last.latency_ms);
         last.attempts = attempt;
         last.latency_ms = total_latency_ms;
@@ -572,8 +602,10 @@ pub fn replay_blocking(
     url: &str,
     body: &str,
     timeout: Duration,
+    headers: &[WebhookHeader],
+    hmac_secret: &str,
 ) -> WebhookFireReport {
-    let mut r = fire_with_body_blocking(url, body, timeout);
+    let mut r = fire_with_body_blocking(url, body, timeout, headers, hmac_secret);
     r.attempts = 1;
     r
 }
@@ -587,7 +619,7 @@ pub fn fire_one_blocking(
     timeout: Duration,
 ) -> WebhookFireReport {
     let body = render_body(payload, "");
-    fire_with_body_blocking(url, &body, timeout)
+    fire_with_body_blocking(url, &body, timeout, &[], "")
 }
 
 /// Fire one payload at one URL using the supplied entry's
@@ -599,9 +631,11 @@ pub fn fire_one_with_template_blocking(
     payload: &WebhookPayload,
     template: &str,
     timeout: Duration,
+    headers: &[WebhookHeader],
+    hmac_secret: &str,
 ) -> WebhookFireReport {
     let body = render_body(payload, template);
-    fire_with_body_blocking(url, &body, timeout)
+    fire_with_body_blocking(url, &body, timeout, headers, hmac_secret)
 }
 
 /// Render the request body for a webhook fire. When `template` is
@@ -662,6 +696,8 @@ fn fire_with_body_blocking(
     url: &str,
     body: &str,
     timeout: Duration,
+    headers: &[WebhookHeader],
+    hmac_secret: &str,
 ) -> WebhookFireReport {
     let started = std::time::Instant::now();
     if !is_acceptable_url(url) {
@@ -677,10 +713,34 @@ fn fire_with_body_blocking(
         .timeout(timeout)
         .user_agent(concat!("Pier-X/", env!("CARGO_PKG_VERSION")))
         .build();
-    let result = agent
-        .post(url)
-        .set("Content-Type", "application/json")
-        .send_string(body);
+    let mut request = agent.post(url).set("Content-Type", "application/json");
+    if !hmac_secret.is_empty() {
+        request = request.set(
+            "X-Pier-Signature",
+            &format!("sha256={}", compute_hmac_sha256(hmac_secret, body)),
+        );
+    }
+    for h in headers {
+        let trimmed = h.name.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("content-type") {
+            // Reserved — we always send JSON. A user-supplied
+            // Content-Type would silently break body templating.
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("x-pier-signature") {
+            // Reserved when hmac_secret is set, otherwise allow the
+            // user's literal value. The check below only filters when
+            // we actually computed a signature.
+            if !hmac_secret.is_empty() {
+                continue;
+            }
+        }
+        request = request.set(trimmed, &h.value);
+    }
+    let result = request.send_string(body);
     let latency_ms = started.elapsed().as_millis() as u64;
     match result {
         Ok(resp) => {
@@ -726,6 +786,23 @@ fn fire_with_body_blocking(
 fn is_acceptable_url(url: &str) -> bool {
     let trimmed = url.trim();
     trimmed.starts_with("http://") || trimmed.starts_with("https://")
+}
+
+/// Compute HMAC-SHA256 over `body` using `secret` as the key,
+/// formatted as a lowercase hex string. Used by the fire path to
+/// populate the `X-Pier-Signature: sha256=<hex>` header when a
+/// webhook entry has `hmac_secret` set. Receivers verify by
+/// recomputing the same HMAC over the body they received.
+pub fn compute_hmac_sha256(secret: &str, body: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => return String::new(), // empty secret → empty digest
+    };
+    mac.update(body.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
 }
 
 /// Helper: build a Slack-shaped `text:` line for an install /
@@ -779,6 +856,8 @@ mod tests {
                     body_template: String::new(),
                     max_retries: 0,
                     retry_backoff_secs: 0,
+                    headers: Vec::new(),
+                    hmac_secret: String::new(),
                 },
                 WebhookEntry {
                     url: "https://example.invalid/all".to_string(),
@@ -788,6 +867,8 @@ mod tests {
                     body_template: String::new(),
                     max_retries: 0,
                     retry_backoff_secs: 0,
+                    headers: Vec::new(),
+                    hmac_secret: String::new(),
                 },
                 WebhookEntry {
                     url: "https://example.invalid/disabled".to_string(),
@@ -797,6 +878,8 @@ mod tests {
                     body_template: String::new(),
                     max_retries: 0,
                     retry_backoff_secs: 0,
+                    headers: Vec::new(),
+                    hmac_secret: String::new(),
                 },
             ],
         }
@@ -1009,6 +1092,8 @@ mod tests {
             // the test wall clock.
             max_retries: 0,
             retry_backoff_secs: 1,
+            headers: Vec::new(),
+            hmac_secret: String::new(),
         };
         let report = fire_with_retries_blocking(&entry, "{}", Duration::from_millis(50));
         assert_eq!(report.attempts, 1);
@@ -1060,6 +1145,8 @@ mod tests {
             // exercised by the saturating_add in the function.
             max_retries: 0,
             retry_backoff_secs: 1,
+            headers: Vec::new(),
+            hmac_secret: String::new(),
         };
         let report = fire_with_retries_blocking(&entry, "{}", Duration::from_millis(50));
         assert!(report.attempts <= MAX_RETRIES_CAP + 1);

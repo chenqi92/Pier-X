@@ -1836,6 +1836,16 @@ button,
   font-size: var(--size-micro);
   color: var(--muted);
   margin-top: var(--sp-1-5);
+  /* Disk subtitle is the longest of the four gauges
+     ("X.X GB free of Y.Y GB · N mounts"). Without nowrap the
+     final glyph wraps to a second line on narrower right panels
+     (≈ 360px), pushing the next gauge row down by ~14px.
+     Truncating with ellipsis keeps every gauge box the same
+     height; the full text is still discoverable via hover (set
+     by the inline title attribute on the parent .mon-gauge). */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .mon-actions {
@@ -4316,6 +4326,16 @@ button,
   background: var(--panel);
 }
 .lg-picker-spacer { flex: 1; min-width: 0; }
+
+.lg-backfill {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--size-micro);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
 .lg-pick {
   display: flex;
   align-items: center;
@@ -7346,6 +7366,96 @@ button,
   max-height: 160px;
   overflow: auto;
 }
+.sw-webhooks__lint {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--size-micro);
+  margin-top: var(--sp-1);
+}
+.sw-webhooks__lint-err {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--neg);
+}
+.sw-webhooks__lint-warn {
+  color: var(--warn);
+}
+
+.sw-webhooks__headers {
+  margin-top: var(--sp-1);
+  font-size: var(--size-micro);
+}
+.sw-webhooks__headers-toggle {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--mono);
+}
+.sw-webhooks__headers-toggle:hover {
+  color: var(--accent);
+}
+.sw-webhooks__headers-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+  padding: var(--sp-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+}
+.sw-webhooks__headers-row {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: center;
+}
+.sw-webhooks__headers-name {
+  flex: 0 0 35%;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  padding: 1px var(--sp-1);
+}
+.sw-webhooks__headers-val {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  padding: 1px var(--sp-1);
+}
+
+.sw-webhooks__hmac {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+  font-size: var(--size-micro);
+}
+.sw-webhooks__hmac-input {
+  flex: 1;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  padding: 1px var(--sp-1);
+  font-family: var(--mono);
+}
+
+.sw-webhooks__export-flag {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  font-size: var(--ui-fs-sm);
+  color: var(--ink);
+  padding: var(--sp-1) 0;
+}
 .sw-webhooks__chip--num { gap: var(--sp-1); }
 .sw-webhooks__chip--num input[type="number"] {
   width: 50px;
@@ -7702,6 +7812,263 @@ button,
   color: var(--accent);
   font-size: var(--size-micro);
   flex-wrap: wrap;
+}
+.sw-panel__bundle-rollback {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  background: color-mix(in srgb, var(--neg) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--neg) 30%, transparent);
+  border-radius: var(--radius-sm);
+  font-size: var(--size-micro);
+}
+.sw-panel__bundle-rollback-text {
+  color: var(--ink-2);
+}
+.sw-panel__bundle-rollback-actions {
+  display: flex;
+  gap: var(--sp-1);
+  justify-content: flex-end;
+}
+
+.sw-schedules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.sw-schedules__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.sw-schedules__row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.sw-schedules__row-body {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  font-size: var(--ui-fs-sm);
+}
+
+.sw-schedules__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: var(--size-micro);
+}
+
+.sw-schedules__field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.sw-schedules__field input[type="number"] {
+  width: 56px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: var(--radius-xs);
+  padding: 1px var(--sp-1);
+  font-family: var(--mono);
+}
+
+.sw-schedules__bundle,
+.sw-schedules__kind,
+.sw-schedules__field select {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  font-family: var(--mono);
+  padding: 1px var(--sp-1);
+}
+
+.sw-schedules__summary {
+  font-size: var(--size-micro);
+}
+
+.sw-schedules__last {
+  font-size: var(--size-micro);
+}
+
+.sw-schedules__warn {
+  color: var(--warn);
+  font-size: var(--size-micro);
+}
+
+.sw-schedules__add {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ── Env tag chip ────────────────────────────────────────────── */
+
+.env-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-2);
+  height: 16px;
+  border-radius: var(--radius-pill);
+  font-size: var(--size-micro);
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+.env-tag--compact { height: 14px; padding: 0 6px; }
+.env-tag--prod {
+  background: color-mix(in srgb, var(--neg) 18%, transparent);
+  color: var(--neg);
+  border-color: color-mix(in srgb, var(--neg) 40%, transparent);
+}
+.env-tag--staging {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+.env-tag--dev {
+  background: color-mix(in srgb, var(--info) 18%, transparent);
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 40%, transparent);
+}
+.env-tag--local {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.term-snip-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--sp-2);
+}
+.term-snip-row__head {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+.term-snip-row__head .dlg-input { flex: 1; }
+.term-snip-row__flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--size-micro);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.term-snip-row__cmd {
+  width: 100%;
+  resize: vertical;
+  background: var(--surface-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  padding: var(--sp-1) var(--sp-2);
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+}
+.term-snip-add {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.env-tag--neutral {
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+/* Inline latency sparkline used by the Hosts Bus view. The chart
+ * inherits the cell's text color so it picks up `--muted` by
+ * default and shifts to `--accent` when we tag the cell as hot. */
+.hosts-health-bus__latency {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+.sparkline {
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+
+/* ── Broadcast dialog ────────────────────────────────────────── */
+
+.dlg--broadcast {
+  width: min(560px, 96vw);
+}
+.broadcast-targets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: 220px;
+  overflow: auto;
+  padding: var(--sp-1);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+}
+.broadcast-target {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 2px var(--sp-1);
+  border-radius: var(--radius-xs);
+  font-size: var(--ui-fs-sm);
+}
+.broadcast-target:hover {
+  background: var(--surface);
+}
+.broadcast-target.is-disabled {
+  opacity: 0.55;
+}
+.broadcast-target__name {
+  color: var(--ink);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.broadcast-target__addr {
+  flex: 1;
+  font-size: var(--size-micro);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.broadcast-target__note {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.broadcast-flag {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  font-size: var(--ui-fs-sm);
 }
 .sw-panel__bundle-card-progress {
   position: relative;
@@ -9169,6 +9536,12 @@ button,
   display: inline-flex;
   gap: var(--sp-1);
 }
+.hosts-health-bus__hl {
+  background: var(--accent-subtle, var(--surface-2));
+  color: var(--accent);
+  border-radius: 2px;
+  padding: 0 1px;
+}
 
 .hosts-health-row__actions {
   display: flex;
@@ -9536,6 +9909,11 @@ button,
 }
 .ws-raw__file.is-active .ws-raw__file-name {
   color: var(--accent-hover);
+}
+.ws-raw__file-dirty {
+  color: var(--accent);
+  margin-left: var(--sp-1);
+  font-size: var(--size-micro);
 }
 .ws-raw__toggle {
   display: inline-flex;

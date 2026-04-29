@@ -8,6 +8,13 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import * as cmd from "../lib/commands";
 import { controlKeyMap } from "../lib/commands";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
+import {
+  loadSnippets,
+  saveSnippets,
+  snippetDisplayLabel,
+  makeSnippetId,
+  type TerminalSnippet,
+} from "../lib/terminalSnippets";
 import TerminalSyntaxOverlay from "../components/TerminalSyntaxOverlay";
 import CompletionPopover from "../components/CompletionPopover";
 import ManPagePopover from "../components/ManPagePopover";
@@ -140,6 +147,32 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // until a different snapshot arrives at the post-resize row count.
   const activationSnapshotRef = useRef<TerminalSnapshot | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  // Persistent user snippets surfaced in the right-click menu. Loaded
+  // once on mount; the manager dialog re-saves on each commit.
+  const [snippets, setSnippets] = useState<TerminalSnippet[]>(() =>
+    loadSnippets(),
+  );
+  const [snippetsDialogOpen, setSnippetsDialogOpen] = useState(false);
+
+  /** Paste a snippet's command into the active session. Honors the
+   *  snippet's `runOnPaste` flag — when set, appends a newline so the
+   *  shell submits without the user having to press Enter. Otherwise
+   *  the line lands at the prompt for review. */
+  async function pasteSnippet(s: TerminalSnippet) {
+    if (!session) return;
+    const text = s.runOnPaste ? `${s.command}\n` : s.command;
+    try {
+      await cmd.terminalWrite(session.sessionId, text);
+    } catch {
+      /* PTY write blocked */
+    }
+  }
+
+  /** Save snippet edits and persist. Used by the manager dialog. */
+  function commitSnippets(next: TerminalSnippet[]) {
+    setSnippets(next);
+    saveSnippets(next);
+  }
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const measureRef = useRef<HTMLSpanElement | null>(null);
   const startupAppliedRef = useRef<string | null>(null);
@@ -2387,6 +2420,36 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
             action: () => void restartTerminal(),
           },
         ];
+        // Cap the inline snippet count to keep the menu navigable —
+        // anything beyond the first 12 lives behind the manager.
+        const SNIPPETS_INLINE_CAP = 12;
+        const visible = snippets.slice(0, SNIPPETS_INLINE_CAP);
+        if (visible.length > 0 || snippets.length === 0) {
+          items.push({ divider: true });
+          items.push({ section: t("Snippets") });
+          for (const s of visible) {
+            items.push({
+              label: snippetDisplayLabel(s),
+              disabled: !session,
+              action: () => void pasteSnippet(s),
+            });
+          }
+          if (snippets.length > SNIPPETS_INLINE_CAP) {
+            items.push({
+              label: t("(+{n} more — open manager)", {
+                n: snippets.length - SNIPPETS_INLINE_CAP,
+              }),
+              action: () => setSnippetsDialogOpen(true),
+            });
+          }
+          items.push({
+            label:
+              snippets.length === 0
+                ? t("Add snippet…")
+                : t("Manage snippets…"),
+            action: () => setSnippetsDialogOpen(true),
+          });
+        }
         return (
           <ContextMenu
             x={ctxMenu.x}
@@ -2396,6 +2459,14 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           />
         );
       })()}
+
+      {snippetsDialogOpen && (
+        <TerminalSnippetsDialog
+          snippets={snippets}
+          onClose={() => setSnippetsDialogOpen(false)}
+          onChange={commitSnippets}
+        />
+      )}
 
       <CompletionPopover
         open={completion.open}
@@ -2425,5 +2496,115 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
         onClose={() => closeMan()}
       />
     </section>
+  );
+}
+
+/** Per-user manager for terminal snippets. Lives behind the
+ *  context-menu "Manage snippets…" item. CRUD over the localStorage-
+ *  persisted list — no SSH, no IPC, just React state. Closes via the
+ *  overlay click / Esc / explicit Done button. */
+function TerminalSnippetsDialog({
+  snippets,
+  onChange,
+  onClose,
+}: {
+  snippets: TerminalSnippet[];
+  onChange: (next: TerminalSnippet[]) => void;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+
+  function update(idx: number, patch: Partial<TerminalSnippet>) {
+    onChange(snippets.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
+  }
+  function remove(idx: number) {
+    onChange(snippets.filter((_, i) => i !== idx));
+  }
+  function add() {
+    onChange([
+      ...snippets,
+      { id: makeSnippetId(), label: "", command: "" },
+    ]);
+  }
+
+  return (
+    <div className="dlg-overlay" onClick={onClose}>
+      <div className="dlg" onClick={(e) => e.stopPropagation()}>
+        <div className="dlg-head">
+          <span className="dlg-title">{t("Terminal snippets")}</span>
+          <div style={{ flex: 1 }} />
+          <span className="muted mono" style={{ fontSize: "var(--size-micro)" }}>
+            {t(
+              "Saved per-user. Right-click the terminal to paste a snippet.",
+            )}
+          </span>
+        </div>
+        <div className="dlg-body dlg-body--form">
+          {snippets.length === 0 && (
+            <div className="status-note mono">
+              {t(
+                "No snippets yet. Add one — e.g. `journalctl -u nginx -f` or `docker compose logs -f --tail=200`.",
+              )}
+            </div>
+          )}
+          {snippets.map((s, i) => (
+            <div key={s.id} className="term-snip-row">
+              <div className="term-snip-row__head">
+                <input
+                  className="dlg-input"
+                  placeholder={t("Label (optional)")}
+                  value={s.label}
+                  onChange={(e) => update(i, { label: e.currentTarget.value })}
+                />
+                <label className="term-snip-row__flag mono">
+                  <input
+                    type="checkbox"
+                    checked={!!s.runOnPaste}
+                    onChange={(e) =>
+                      update(i, { runOnPaste: e.currentTarget.checked })
+                    }
+                  />
+                  <span>{t("Run on paste")}</span>
+                </label>
+                <button
+                  type="button"
+                  className="btn is-ghost is-compact"
+                  onClick={() => remove(i)}
+                  title={t("Remove")}
+                >
+                  ×
+                </button>
+              </div>
+              <textarea
+                className="term-snip-row__cmd mono"
+                value={s.command}
+                spellCheck={false}
+                rows={2}
+                placeholder={t("Command body")}
+                onChange={(e) => update(i, { command: e.currentTarget.value })}
+              />
+            </div>
+          ))}
+          <div className="term-snip-add">
+            <button
+              type="button"
+              className="btn is-ghost is-compact"
+              onClick={add}
+            >
+              + {t("Add snippet")}
+            </button>
+          </div>
+        </div>
+        <div className="dlg-foot">
+          <button
+            type="button"
+            className="btn is-primary is-compact"
+            onClick={onClose}
+          >
+            {t("Done")}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

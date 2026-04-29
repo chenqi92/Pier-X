@@ -76,6 +76,18 @@ pub struct PostgresConfig {
     pub database: Option<String>,
 }
 
+/// One user-defined enum type in the active schema. Used by the
+/// data grid to render a `<datalist>` whenever a column's resolved
+/// type (`format_type`) matches an enum name — gives the user a
+/// dropdown of valid values when editing an enum cell.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnumType {
+    /// Enum name as it appears in `format_type` (e.g. `mood`).
+    pub name: String,
+    /// Values declared on the enum, in catalog order.
+    pub values: Vec<String>,
+}
+
 /// Column metadata from `information_schema.columns`.
 /// Same field names as [`super::mysql::ColumnInfo`] so shared
 /// UI/runtime code can bind the same roles.
@@ -440,10 +452,19 @@ impl PostgresClient {
         // We pull `col_description` via the catalog OID to reach the
         // attribute comment. `information_schema.columns` doesn't
         // expose comments directly, hence the join through pg_attribute.
+        // `format_type(atttypid, atttypmod)` is the catalog's own
+        // pretty-printer: it expands `_int4` → `integer[]`, prints
+        // `varchar(255)` from atttypmod, distinguishes `numeric(10,2)`
+        // from a bare `numeric`, and surfaces user-defined enum / domain
+        // names verbatim. We fall back to `c.data_type` if the format
+        // call ever returns an empty string (won't normally happen, but
+        // a robust fallback keeps the panel useful on weird catalogs).
         let rows = self
             .client
             .query(
-                "SELECT c.column_name, c.data_type, c.is_nullable, \
+                "SELECT c.column_name, \
+                        COALESCE(NULLIF(pg_catalog.format_type(a.atttypid, a.atttypmod), ''), c.data_type) AS pretty_type, \
+                        c.is_nullable, \
                         c.column_default, '' AS extra, \
                         COALESCE(pg_catalog.col_description(pgc.oid, a.attnum), '') AS comment \
                  FROM information_schema.columns c \
@@ -599,6 +620,51 @@ impl PostgresClient {
     /// Blocking wrapper for [`Self::list_routines`].
     pub fn list_routines_blocking(&self, schema: &str) -> Result<Vec<RoutineSummary>> {
         crate::ssh::runtime::shared().block_on(self.list_routines(schema))
+    }
+
+    /// User-defined enum types in `schema`. Walks `pg_type` joined
+    /// with `pg_enum` so each enum gets one row per declared value.
+    /// Values are returned in catalog order (`enumsortorder`) which
+    /// is also the declaration order — what users expect to see in
+    /// a dropdown.
+    pub async fn list_enums(&self, schema: &str) -> Result<Vec<EnumType>> {
+        let schema = if schema.is_empty() { "public" } else { schema };
+        if !super::mysql::is_safe_ident(schema) {
+            return Err(PostgresError::InvalidConfig(format!(
+                "refusing unsafe schema identifier {schema:?}"
+            )));
+        }
+        let rows = self
+            .client
+            .query(
+                "SELECT t.typname, e.enumlabel \
+                 FROM pg_catalog.pg_type t \
+                 JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace \
+                 JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid \
+                 WHERE n.nspname = $1 \
+                 ORDER BY t.typname, e.enumsortorder",
+                &[&schema],
+            )
+            .await?;
+
+        let mut out: Vec<EnumType> = Vec::new();
+        for r in rows.iter() {
+            let name: String = r.get(0);
+            let label: String = r.get(1);
+            match out.last_mut() {
+                Some(last) if last.name == name => last.values.push(label),
+                _ => out.push(EnumType {
+                    name,
+                    values: vec![label],
+                }),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Blocking wrapper for [`Self::list_enums`].
+    pub fn list_enums_blocking(&self, schema: &str) -> Result<Vec<EnumType>> {
+        crate::ssh::runtime::shared().block_on(self.list_enums(schema))
     }
 
     /// All indexes on `<schema>.<table>`. Walks `pg_index` joined

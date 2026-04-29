@@ -438,6 +438,8 @@ export const sshConnectionSave = (params: {
   keyPath: string;
   /** Sidebar group label. Empty / missing → default (ungrouped). */
   group?: string | null;
+  /** Environment tag (prod / staging / dev / local / free-form). */
+  envTag?: string | null;
 }) => invoke<void>("ssh_connection_save", {
   name: params.name,
   host: params.host,
@@ -447,6 +449,7 @@ export const sshConnectionSave = (params: {
   password: params.password || null,
   keyPath: params.keyPath || null,
   group: params.group && params.group.trim() ? params.group.trim() : null,
+  envTag: params.envTag && params.envTag.trim() ? params.envTag.trim() : null,
 });
 
 export const sshConnectionUpdate = (params: {
@@ -461,6 +464,8 @@ export const sshConnectionUpdate = (params: {
   /** When `undefined`, the backend preserves the existing group.
    *  Pass `null` or `""` to explicitly ungroup, or a label to reassign. */
   group?: string | null;
+  /** Same semantics as `group` — undefined preserves, "" clears. */
+  envTag?: string | null;
 }) => invoke<void>("ssh_connection_update", {
   index: params.index,
   name: params.name,
@@ -473,6 +478,12 @@ export const sshConnectionUpdate = (params: {
   group: params.group === undefined
     ? null
     : params.group && params.group.trim() ? params.group.trim() : "",
+  envTag:
+    params.envTag === undefined
+      ? null
+      : params.envTag && params.envTag.trim()
+        ? params.envTag.trim()
+        : "",
 });
 
 export const sshConnectionDelete = (index: number) =>
@@ -1355,6 +1366,11 @@ export const softwareBundleInstallOrder = (ids: string[]) =>
 
 export type WebhookEventKindLabel = "install" | "update" | "uninstall";
 
+export type WebhookHeader = {
+  name: string;
+  value: string;
+};
+
 export type WebhookEntry = {
   url: string;
   label: string;
@@ -1374,6 +1390,14 @@ export type WebhookEntry = {
   /** Base seconds for exponential backoff between retries. 0 =
    *  use the backend default (5s, doubling each attempt). */
   retryBackoffSecs?: number;
+  /** Extra HTTP headers attached to the outgoing request. The
+   *  Content-Type header is always overridden to application/json
+   *  by the backend; entries with that name are ignored. */
+  headers?: WebhookHeader[];
+  /** Optional HMAC-SHA256 shared secret. When set, the backend
+   *  emits `X-Pier-Signature: sha256=<hex>` over the request body
+   *  so the receiver can verify integrity. Empty disables. */
+  hmacSecret?: string;
 };
 
 export type WebhookConfig = {
@@ -1417,10 +1441,19 @@ export const softwareWebhooksSave = (config: WebhookConfig) =>
 export const softwareWebhooksTestFire = (params: {
   url: string;
   bodyTemplate?: string;
+  headers?: WebhookHeader[];
+  /** Optional host identity to thread into the synthetic payload —
+   *  used by the bulk-fire flow on the Hosts panel so per-host
+   *  fires include `{{host}}` in the rendered body. */
+  host?: string;
+  hmacSecret?: string;
 }) =>
   invoke<WebhookFireReport>("software_webhooks_test_fire", {
     url: params.url,
     bodyTemplate: params.bodyTemplate ?? null,
+    headers: params.headers ?? null,
+    host: params.host ?? null,
+    hmacSecret: params.hmacSecret ?? null,
   });
 
 /** Render a body template against a synthetic install payload —
@@ -1453,10 +1486,14 @@ export const softwareWebhooksFailuresClear = () =>
 export const softwareWebhooksReplay = (params: {
   url: string;
   body: string;
+  headers?: WebhookHeader[];
+  hmacSecret?: string;
 }) =>
   invoke<WebhookFireReport>("software_webhooks_replay", {
     url: params.url,
     body: params.body,
+    headers: params.headers ?? null,
+    hmacSecret: params.hmacSecret ?? null,
   });
 
 /** One row of the batch-replay result. `id` echoes the original
@@ -2197,6 +2234,20 @@ export type WebServerSaveResult = {
   backupPath: string;
 };
 
+export type WebServerBatchSaveEntry = {
+  path: string;
+  content: string;
+};
+
+export type WebServerBatchSaveResult = {
+  backupPaths: string[];
+  validate: WebServerActionResult;
+  reloaded: boolean;
+  reloadOutput: string;
+  restored: boolean;
+  restoreErrors: string[];
+};
+
 export const webServerLayout = (
   params: SshParams & { kind: WebServerKind },
 ) => invoke<WebServerLayout>("web_server_layout", params);
@@ -2208,6 +2259,18 @@ export const webServerReadFile = (
 export const webServerSaveFile = (
   params: SshParams & { kind: WebServerKind; path: string; content: string },
 ) => invoke<WebServerSaveResult>("web_server_save_file", params);
+
+export const webServerSaveFilesBatch = (
+  params: SshParams & {
+    kind: WebServerKind;
+    entries: WebServerBatchSaveEntry[];
+  },
+) =>
+  invoke<WebServerBatchSaveResult>("web_server_save_files_batch", params);
+
+export const webServerLintHints = (
+  params: SshParams & { kind: WebServerKind },
+) => invoke<WebServerActionResult>("web_server_lint_hints", params);
 
 export const webServerToggleSite = (
   params: SshParams & {
@@ -2592,6 +2655,34 @@ export const sftpDownloadTree = (params: {
   savedConnectionIndex?: number | null;
   transferId?: string | null;
 }) => invoke<void>("sftp_download_tree", params);
+
+/** Copy a single file from one remote host to another by streaming
+ *  through a local temp file. Progress events fire under
+ *  `transferId`; the bar reports each leg as half the total. */
+export const sftpRemoteToRemoteCopy = (params: {
+  src: SshParams & { remotePath: string };
+  dst: SshParams & { remotePath: string };
+  transferId?: string | null;
+}) =>
+  invoke<void>("sftp_remote_to_remote_copy", {
+    srcHost: params.src.host,
+    srcPort: params.src.port,
+    srcUser: params.src.user,
+    srcAuthMode: params.src.authMode,
+    srcPassword: params.src.password,
+    srcKeyPath: params.src.keyPath,
+    srcSavedConnectionIndex: params.src.savedConnectionIndex ?? null,
+    srcRemotePath: params.src.remotePath,
+    dstHost: params.dst.host,
+    dstPort: params.dst.port,
+    dstUser: params.dst.user,
+    dstAuthMode: params.dst.authMode,
+    dstPassword: params.dst.password,
+    dstKeyPath: params.dst.keyPath,
+    dstSavedConnectionIndex: params.dst.savedConnectionIndex ?? null,
+    dstRemotePath: params.dst.remotePath,
+    transferId: params.transferId ?? null,
+  });
 
 /** Result of {@link sftpOpenExternal} — backend has already
  *  downloaded the remote file to `localPath` and handed it off to

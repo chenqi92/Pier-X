@@ -283,6 +283,56 @@ pub fn reload_blocking(
     crate::ssh::runtime::shared().block_on(reload(session, kind))
 }
 
+/// Run a deeper static-analysis pass per server kind. Apache uses
+/// `apachectl -S` to dump the resolved vhost map; this surfaces
+/// duplicate `ServerName`s and overlapping `_default_:port` listens
+/// that `configtest` happily accepts. Caddy's `caddy adapt
+/// --pretty` re-reads the canonical Caddyfile and prints any
+/// adapter warnings to stderr alongside the JSON output.
+///
+/// The result is purely advisory — not used as a save-gate. Panels
+/// that want to surface lint hints call this *after* a successful
+/// `validate`.
+pub async fn lint_hints(
+    session: &SshSession,
+    kind: WebServerKind,
+) -> Result<WebServerActionResult> {
+    let cmd = match kind {
+        WebServerKind::Nginx => {
+            // `nginx -T 2>&1 | head -200` would dump the merged config
+            // — too noisy. Stick to `nginx -t -q` which only prints
+            // warnings (and is silent on a clean config).
+            "sh -c 'nginx -t -q 2>&1 || true'"
+        }
+        WebServerKind::Apache => {
+            "sh -c 'if command -v apachectl >/dev/null 2>&1; then \
+                apachectl -S 2>&1; \
+             elif command -v apache2ctl >/dev/null 2>&1; then \
+                apache2ctl -S 2>&1; \
+             elif command -v httpd >/dev/null 2>&1; then \
+                httpd -S 2>&1; \
+             else \
+                echo \"no apache control binary found\" >&2; exit 127; \
+             fi'"
+        }
+        WebServerKind::Caddy => {
+            // `caddy adapt` writes the JSON to stdout and warnings to
+            // stderr. We merge both so the panel sees everything in
+            // one stream; the panel filters to lines that start with
+            // `WARN:` / `ERROR:` for display.
+            "sh -c 'caddy adapt --config /etc/caddy/Caddyfile --pretty 2>&1 >/dev/null || true'"
+        }
+    };
+    run_with_sudo(session, cmd).await
+}
+
+pub fn lint_hints_blocking(
+    session: &SshSession,
+    kind: WebServerKind,
+) -> Result<WebServerActionResult> {
+    crate::ssh::runtime::shared().block_on(lint_hints(session, kind))
+}
+
 async fn run_with_sudo(session: &SshSession, cmd: &str) -> Result<WebServerActionResult> {
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
@@ -355,6 +405,35 @@ pub struct WebServerSaveResult {
     pub restored: bool,
     pub restore_error: Option<String>,
     pub backup_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebServerBatchSaveEntry {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebServerBatchSaveResult {
+    /// Per-file backup paths, paired by index with the input entries.
+    /// Always present — even on validate-fail we keep the backups
+    /// around until restore confirms.
+    pub backup_paths: Vec<String>,
+    /// Single `apachectl configtest` / `nginx -t` / `caddy validate`
+    /// run after all writes land.
+    pub validate: WebServerActionResult,
+    /// True when the daemon was reloaded (only happens on validate.ok).
+    pub reloaded: bool,
+    pub reload_output: String,
+    /// True when on-disk state is clean — true on save+reload path AND
+    /// on validate-fail-then-restore path. False only if any restore
+    /// step itself failed.
+    pub restored: bool,
+    /// Per-file restore failure messages, paired by index. Empty
+    /// strings for entries that restored cleanly or didn't need to.
+    pub restore_errors: Vec<String>,
 }
 
 pub async fn list_layout(
@@ -636,6 +715,35 @@ pub fn read_file_blocking(
     crate::ssh::runtime::shared().block_on(read_file(session, kind, path))
 }
 
+/// Cap backups per source file. After a successful save we keep at
+/// most this many `.pier-bak.<ts>` siblings; older ones are removed
+/// so a noisy edit cycle doesn't accumulate hundreds of stale files
+/// next to a vhost. Picked at 10 because:
+///  - generous enough that you can roll back ~10 edits worth of work
+///  - small enough that it's painless even on tiny `/etc` partitions
+const BACKUP_RETENTION: usize = 10;
+
+/// Trim `<path>.pier-bak.*` siblings down to the most-recent
+/// `BACKUP_RETENTION` entries. Best-effort: a removal failure is
+/// logged via the shell's exit code but never propagates as a save
+/// error, since the user's primary save already succeeded.
+async fn trim_old_backups(session: &SshSession, prefix: &str, path: &str) {
+    let q_path = crate::services::nginx::shell_single_quote(path);
+    // `ls -1` then `sort -r` (lexical) is good enough: backup names are
+    // `<path>.pier-bak.<unix-secs>[.<idx>]`, all the same prefix, so
+    // a reverse string sort puts the newest first. We keep the top N
+    // and `rm -f` the rest. `2>/dev/null` swallows the no-match case.
+    let inner = format!(
+        "ls -1 {q_path}.pier-bak.* 2>/dev/null | sort -r | tail -n +{} | xargs -r rm -f",
+        BACKUP_RETENTION + 1,
+    );
+    let cmd = format!(
+        "{prefix}sh -c {}",
+        crate::services::nginx::shell_single_quote(&inner)
+    );
+    let _ = session.exec_command(&cmd).await;
+}
+
 fn is_path_under_config_root(kind: WebServerKind, path: &str) -> bool {
     if path.split('/').any(|seg| seg == "..") {
         return false;
@@ -740,6 +848,11 @@ pub async fn save_file_validate_reload(
     // 5) Reload.
     let reload_result = reload(session, kind).await?;
 
+    // Trim aged backups now that we know the new content is good and
+    // reloaded — keeping the latest backup intact in case the user
+    // hits "restore" through the file tree.
+    trim_old_backups(session, prefix, path).await;
+
     Ok(WebServerSaveResult {
         validate,
         reloaded: reload_result.ok,
@@ -758,6 +871,170 @@ pub fn save_file_validate_reload_blocking(
 ) -> Result<WebServerSaveResult> {
     crate::ssh::runtime::shared()
         .block_on(save_file_validate_reload(session, kind, path, content))
+}
+
+/// Batch-save several files atomically: backup each, write each,
+/// run validate ONCE for the whole tree, reload ONCE on success.
+/// On validate-fail every backup is restored.
+///
+/// Useful for Apache-style configs where vhosts live in separate
+/// `sites-enabled/*` files and `apachectl configtest` covers the
+/// whole tree — committing them one-by-one would run validate N
+/// times and reload N times.
+pub async fn save_files_batch(
+    session: &SshSession,
+    kind: WebServerKind,
+    entries: &[WebServerBatchSaveEntry],
+) -> Result<WebServerBatchSaveResult> {
+    if entries.is_empty() {
+        return Err(crate::ssh::error::SshError::InvalidConfig(
+            "save_files_batch: no entries".to_string(),
+        ));
+    }
+    for entry in entries {
+        if !is_path_under_config_root(kind, &entry.path) {
+            return Err(crate::ssh::error::SshError::InvalidConfig(format!(
+                "refusing to write {}: must live under {}",
+                entry.path,
+                default_config_root(kind)
+            )));
+        }
+    }
+
+    let is_root = match session.exec_command("id -u").await {
+        Ok((0, stdout)) => stdout.trim() == "0",
+        _ => false,
+    };
+    let prefix = if is_root { "" } else { "sudo -n " };
+
+    let ts = match session.exec_command("date +%s").await {
+        Ok((0, out)) => out.trim().to_string(),
+        _ => "0".to_string(),
+    };
+
+    // 1) Backup + write each file. If any step fails midway, restore
+    //    all completed-so-far backups in reverse order before bailing.
+    let mut backup_paths: Vec<String> = Vec::with_capacity(entries.len());
+    for (idx, entry) in entries.iter().enumerate() {
+        let backup_path = format!("{}.pier-bak.{ts}.{idx}", entry.path);
+        let q_path = crate::services::nginx::shell_single_quote(&entry.path);
+        let q_backup = crate::services::nginx::shell_single_quote(&backup_path);
+        let backup_cmd = format!("{prefix}cp -p {q_path} {q_backup}");
+        let (bc, bo) = session.exec_command(&backup_cmd).await?;
+        if bc != 0 {
+            // Roll back already-completed backups (just unlink them —
+            // no source files were touched yet).
+            for prev in &backup_paths {
+                let q_prev = crate::services::nginx::shell_single_quote(prev);
+                let _ = session
+                    .exec_command(&format!("{prefix}rm -f {q_prev}"))
+                    .await;
+            }
+            return Err(crate::ssh::error::SshError::InvalidConfig(format!(
+                "backup {} failed: {}",
+                entry.path,
+                bo.trim()
+            )));
+        }
+        backup_paths.push(backup_path);
+
+        // Atomic write via base64 → tmp → mv.
+        use std::io::Write;
+        let mut encoded = String::new();
+        {
+            let mut writer = crate::services::nginx::base64_writer(&mut encoded);
+            writer.write_all(entry.content.as_bytes()).ok();
+            writer.flush().ok();
+        }
+        let tmp_path = format!("/tmp/pier-webserver-{ts}-{idx}.conf");
+        let q_tmp = crate::services::nginx::shell_single_quote(&tmp_path);
+        let q_b64 = crate::services::nginx::shell_single_quote(&encoded);
+        let inner = format!(
+            "echo {q_b64} | base64 -d > {q_tmp} && chmod --reference={q_path} {q_tmp} 2>/dev/null || true; mv {q_tmp} {q_path}"
+        );
+        let write_cmd = format!(
+            "{prefix}sh -c {}",
+            crate::services::nginx::shell_single_quote(&inner)
+        );
+        let (wc, wo) = session.exec_command(&write_cmd).await?;
+        if wc != 0 {
+            // Restore everything completed so far.
+            let restore_errors = restore_all(session, prefix, entries, &backup_paths).await;
+            return Err(crate::ssh::error::SshError::InvalidConfig(format!(
+                "write {} failed: {}{}",
+                entry.path,
+                wo.trim(),
+                if restore_errors.iter().any(|e| !e.is_empty()) {
+                    format!(" — restore had errors: {restore_errors:?}")
+                } else {
+                    String::new()
+                }
+            )));
+        }
+    }
+
+    // 2) Validate once for the whole tree.
+    let validate = validate(session, kind).await?;
+
+    if !validate.ok {
+        // 3) Restore on validation failure.
+        let restore_errors = restore_all(session, prefix, entries, &backup_paths).await;
+        let restored = restore_errors.iter().all(|e| e.is_empty());
+        return Ok(WebServerBatchSaveResult {
+            backup_paths,
+            validate,
+            reloaded: false,
+            reload_output: String::new(),
+            restored,
+            restore_errors,
+        });
+    }
+
+    // 4) Reload once.
+    let reload_result = reload(session, kind).await?;
+
+    // 5) Trim aged backups for each touched file. Best-effort, won't
+    //    fail the batch save.
+    for entry in entries {
+        trim_old_backups(session, prefix, &entry.path).await;
+    }
+
+    Ok(WebServerBatchSaveResult {
+        backup_paths,
+        validate,
+        reloaded: reload_result.ok,
+        reload_output: reload_result.output,
+        restored: true,
+        restore_errors: vec![String::new(); entries.len()],
+    })
+}
+
+async fn restore_all(
+    session: &SshSession,
+    prefix: &str,
+    entries: &[WebServerBatchSaveEntry],
+    backup_paths: &[String],
+) -> Vec<String> {
+    let mut errors = Vec::with_capacity(entries.len());
+    for (entry, backup) in entries.iter().zip(backup_paths.iter()) {
+        let q_path = crate::services::nginx::shell_single_quote(&entry.path);
+        let q_backup = crate::services::nginx::shell_single_quote(backup);
+        let cmd = format!("{prefix}mv {q_backup} {q_path}");
+        match session.exec_command(&cmd).await {
+            Ok((0, _)) => errors.push(String::new()),
+            Ok((_, out)) => errors.push(out.trim().to_string()),
+            Err(e) => errors.push(e.to_string()),
+        }
+    }
+    errors
+}
+
+pub fn save_files_batch_blocking(
+    session: &SshSession,
+    kind: WebServerKind,
+    entries: &[WebServerBatchSaveEntry],
+) -> Result<WebServerBatchSaveResult> {
+    crate::ssh::runtime::shared().block_on(save_files_batch(session, kind, entries))
 }
 
 pub async fn toggle_site(

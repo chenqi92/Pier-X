@@ -76,7 +76,11 @@ function Gauge({
       <div className="mon-gauge-bar">
         <div className="mon-gauge-fill" style={{ width: `${clamped}%`, background: color }} />
       </div>
-      <div className="mon-gauge-sub mono">{sub}</div>
+      {/* `title` exposes the full subtitle text on hover so the CSS
+          ellipsis (.mon-gauge-sub) doesn't hide info on narrow
+          panels — `1111.5 GB free of 2338.6 GB · 3 mounts` is the
+          common offender. */}
+      <div className="mon-gauge-sub mono" title={sub}>{sub}</div>
     </div>
   );
 }

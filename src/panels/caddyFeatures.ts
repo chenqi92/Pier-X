@@ -971,17 +971,169 @@ const acmeDefaults: Feature & { group: FeatureGroup } = {
 
 export type GroupedFeature = Feature & { group: FeatureGroup };
 
+// ── handle_path (path-stripped route group) ────────────────────────
+
+const handlePath: Feature & { group: FeatureGroup } = {
+  id: "handle-path",
+  group: "routing",
+  title: "handle_path (strip + route)",
+  description:
+    "Wrap a path prefix into a route group that strips the prefix before forwarding (`handle_path /api/* { reverse_proxy backend:8080 }`). Common for mounting backends under a sub-path.",
+  contexts: ["site"],
+  fields: [
+    {
+      type: "text",
+      key: "pathPrefix",
+      label: "Path prefix",
+      placeholder: "/api/*",
+    },
+    {
+      type: "text",
+      key: "upstream",
+      label: "reverse_proxy upstream inside the group",
+      placeholder: "backend:8080",
+    },
+  ],
+  defaults: { pathPrefix: "/api/*", upstream: "" },
+  detect: (b) =>
+    b.some((n) => isDirective(n) && n.name === "handle_path"),
+  read: (b) => {
+    const hp = b.find(
+      (n): n is Directive => isDirective(n) && n.name === "handle_path",
+    );
+    if (!hp) return { pathPrefix: "/api/*", upstream: "" };
+    const inner = hp.block ?? [];
+    const proxy = inner.find(
+      (n): n is Directive => isDirective(n) && n.name === "reverse_proxy",
+    );
+    return {
+      pathPrefix: hp.args[0] ?? "/api/*",
+      upstream: proxy?.args[0] ?? "",
+    };
+  },
+  enable: (b, v) => {
+    const path = String(v.pathPrefix ?? "/api/*").trim() || "/api/*";
+    const upstream = String(v.upstream ?? "").trim();
+    const inner: Directive[] = [];
+    if (upstream) {
+      inner.push(newDirective("reverse_proxy", [quoteArgIfNeeded(upstream)]));
+    }
+    const card: Directive = {
+      ...newDirective("handle_path", [path]),
+      block: inner,
+    };
+    return upsert(b, card);
+  },
+  disable: (b) => removeAll(b, "handle_path"),
+};
+
+// ── rate_limit (caddy-rate-limit plugin) ───────────────────────────
+
+const rateLimit: Feature & { group: FeatureGroup } = {
+  id: "rate-limit",
+  group: "performance",
+  title: "rate_limit (per-zone)",
+  description:
+    "Apply per-IP rate limiting via the `caddy-rate-limit` plugin. Requires the plugin to be built into the Caddy binary (xcaddy or a custom build).",
+  contexts: ["site"],
+  fields: [
+    {
+      type: "text",
+      key: "zone",
+      label: "Zone name",
+      placeholder: "static_zone",
+    },
+    {
+      type: "text",
+      key: "key",
+      label: "Key (typically `{remote_host}`)",
+      placeholder: "{remote_host}",
+    },
+    { type: "text", key: "events", label: "Events", placeholder: "100" },
+    { type: "text", key: "window", label: "Window", placeholder: "1m" },
+  ],
+  defaults: {
+    zone: "static_zone",
+    key: "{remote_host}",
+    events: "100",
+    window: "1m",
+  },
+  detect: (b) => findFirst(b, "rate_limit") !== null,
+  read: (b) => {
+    const rl = findFirst(b, "rate_limit");
+    if (!rl || !rl.block) return { zone: "", key: "", events: "", window: "" };
+    const inner = rl.block;
+    const zone = rl.args[0] ?? "";
+    const key = findFirst(inner, "key")?.args[0] ?? "";
+    const events = findFirst(inner, "events")?.args[0] ?? "";
+    const window = findFirst(inner, "window")?.args[0] ?? "";
+    return { zone, key, events, window };
+  },
+  enable: (b, v) => {
+    const zone = String(v.zone ?? "static_zone").trim() || "static_zone";
+    const inner: Directive[] = [];
+    const key = String(v.key ?? "").trim();
+    if (key) inner.push(newDirective("key", [key]));
+    const events = String(v.events ?? "").trim();
+    if (events) inner.push(newDirective("events", [events]));
+    const window = String(v.window ?? "").trim();
+    if (window) inner.push(newDirective("window", [window]));
+    const card: Directive = {
+      ...newDirective("rate_limit", [zone]),
+      block: inner,
+    };
+    return upsert(b, card);
+  },
+  disable: (b) => removeAll(b, "rate_limit"),
+};
+
+// ── templates (server-side template rendering) ─────────────────────
+
+const templates: Feature & { group: FeatureGroup } = {
+  id: "templates",
+  group: "static",
+  title: "templates (server-side rendering)",
+  description:
+    "Enable Caddy's templates module so HTML files can include `{{.Host}}`, `{{listFiles}}`, and other actions. Pairs naturally with `file_server`.",
+  contexts: ["site"],
+  fields: [
+    {
+      type: "text",
+      key: "between",
+      label: "Match path (optional, e.g. *.html)",
+      placeholder: "*.html",
+    },
+  ],
+  defaults: { between: "" },
+  detect: (b) => findFirst(b, "templates") !== null,
+  read: (b) => {
+    const d = findFirst(b, "templates");
+    return { between: d?.args[0] ?? "" };
+  },
+  enable: (b, v) => {
+    const between = String(v.between ?? "").trim();
+    return upsert(
+      b,
+      newDirective("templates", between ? [between] : []),
+    );
+  },
+  disable: (b) => removeAll(b, "templates"),
+};
+
 export const FEATURES: GroupedFeature[] = [
   acmeDefaults,
   tls,
   reverseProxy,
   phpFastcgi,
   fileServer,
+  templates,
   encode,
+  rateLimit,
   securityHeaders,
   basicAuth,
   rewrite,
   redir,
+  handlePath,
   tryFiles,
   respond,
   log,

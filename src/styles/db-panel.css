@@ -856,6 +856,29 @@
   text-transform: uppercase;
   font-weight: var(--weight-bold);
 }
+.sq-hist-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.sq-hist-search-input {
+  flex: 1;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  padding: 1px var(--sp-2);
+  font-size: var(--size-micro);
+}
+.sq-hist-empty {
+  padding: var(--sp-3);
+  color: var(--muted);
+  font-size: var(--size-micro);
+  text-align: center;
+}
 .sq-hist-list {
   flex: 1;
   overflow-y: auto;
@@ -1375,6 +1398,40 @@
   padding: 0 var(--sp-1) !important;
 }
 .rg-td-acts .mini-button { vertical-align: middle; }
+
+/* Per-column resize grip on the right edge of each th. Sits above
+ * the th's body but doesn't affect its content layout because it's
+ * absolutely positioned. The header `position: sticky` keeps the
+ * grip visible while scrolling. */
+.rg-th { position: relative; }
+.rg-th-grip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  z-index: 1;
+}
+.rg-th-grip:hover {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* Column-reorder drag visuals. The dragged source th doesn't need a
+ * special class because the browser's own ghost handles it; we only
+ * style the drop target so users see exactly where the column will
+ * land before they release the button. */
+.rg-th[draggable="true"] {
+  cursor: grab;
+}
+.rg-th[draggable="true"]:active {
+  cursor: grabbing;
+}
+.rg-th-drop {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
 
 /* Filter row inside the table head — one input per column. */
 .rg-th-sorted { color: var(--accent); }
@@ -2512,4 +2569,214 @@
     grid-auto-rows: minmax(0, 1fr);
   }
   .rds-browser { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+
+/* ── EXPLAIN ANALYZE plan tree ─────────────────────────────── */
+
+.explain-plan {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  margin: var(--sp-2) 0;
+  overflow: hidden;
+}
+
+.explain-plan__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--ui-fs-sm);
+}
+
+.explain-plan__title {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.explain-plan__meta {
+  color: var(--muted);
+}
+
+.explain-plan__spacer {
+  flex: 1;
+}
+
+.explain-plan__body {
+  max-height: 360px;
+  overflow: auto;
+  padding: var(--sp-2) 0;
+}
+
+.explain-plan__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--ui-fs-sm);
+}
+
+.explain-plan__row:hover {
+  background: var(--surface-2);
+}
+
+.explain-plan__chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.explain-plan__chev:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.explain-plan__chev-spacer {
+  display: inline-block;
+  width: 10px;
+}
+
+.explain-plan__node {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.explain-plan__label {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.explain-plan__detail {
+  color: var(--ink-2);
+  word-break: break-word;
+}
+
+.explain-plan__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: 2px;
+}
+
+.explain-plan__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-2);
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  border: 1px solid var(--line);
+  font-size: var(--size-micro);
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.explain-plan__chip--accent {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.explain-plan__chip--delta-bad {
+  background: color-mix(in srgb, var(--neg) 18%, transparent);
+  color: var(--neg);
+  border-color: color-mix(in srgb, var(--neg) 38%, transparent);
+}
+
+.explain-plan__chip--delta-good {
+  background: color-mix(in srgb, var(--pos) 18%, transparent);
+  color: var(--pos);
+  border-color: color-mix(in srgb, var(--pos) 38%, transparent);
+}
+
+/* Heatmap: row tint scales with this node's share of total
+ * actual_time. Tier 0 (cool) is bare, tier 4 is the loudest. We
+ * lean on color-mix so dark/light themes both look right. */
+.explain-plan__row--heat-1 {
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.explain-plan__row--heat-2 {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.explain-plan__row--heat-3 {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.explain-plan__row--heat-4 {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.explain-plan__label-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.explain-plan__raw-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-xs);
+  height: 16px;
+}
+
+.explain-plan__raw-toggle:hover {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
+.explain-plan__raw-toggle[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.explain-plan__raw {
+  margin: var(--sp-1) 0 0 0;
+  padding: var(--sp-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  font-size: var(--size-micro);
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre;
+  color: var(--ink-2);
+}
+
+.explain-plan-history {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  margin: var(--sp-2) 0 0 0;
+  font-size: var(--ui-fs-sm);
+}
+
+.explain-plan-history__label {
+  color: var(--muted);
 }

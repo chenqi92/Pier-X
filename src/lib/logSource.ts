@@ -118,6 +118,70 @@ export function compileLogSource(src: LogSource): string {
   }
 }
 
+/**
+ * Compile a one-shot historical fetch for the same source. Drops
+ * the streaming flag (`-F` / `-f` / `-w`) and asks the source for
+ * roughly `windowMinutes` of history before exit. Returns "" when
+ * the source can't sensibly back-fill (e.g. a `tail -F` on a file
+ * we'd be guessing at line count for).
+ *
+ * Output goes through the existing `log_stream_start` pipe — the
+ * stream just finishes and emits an Exit event when the historical
+ * dump is done, so the panel stops draining naturally.
+ */
+export function compileLogSourceBackfill(
+  src: LogSource,
+  windowMinutes: number,
+): string {
+  // Cap at 24 hours of history. Anything bigger ought to use a
+  // proper log-search tool, not a streaming console.
+  const mins = Math.min(Math.max(1, Math.round(windowMinutes)), 1440);
+  switch (src.mode) {
+    case "file": {
+      const p = src.filePath.trim();
+      if (!p) return "";
+      // For files we approximate by line count. ~2000 lines/min is
+      // generous for app logs and short for nginx access; pick a
+      // healthy bound and let the in-memory time filter trim.
+      const approxLines = Math.min(50_000, mins * 2_000);
+      return `tail -n ${approxLines} ${shellEscape(p)}`;
+    }
+    case "system": {
+      const preset = findPreset(src.systemPresetId);
+      if (!preset) return "";
+      const arg = src.systemArg.trim();
+      switch (preset.id) {
+        case "syslog":
+          return `journalctl --no-pager --since "${mins} minutes ago" 2>/dev/null || tail -n ${mins * 1000} /var/log/syslog`;
+        case "auth":
+          return `journalctl --no-pager --since "${mins} minutes ago" -t sshd 2>/dev/null || tail -n ${mins * 1000} /var/log/auth.log`;
+        case "nginx-access":
+          return `tail -n ${Math.min(50_000, mins * 2_000)} /var/log/nginx/access.log`;
+        case "nginx-error":
+          return `tail -n ${Math.min(50_000, mins * 200)} /var/log/nginx/error.log`;
+        case "dmesg":
+          return `dmesg --since "${mins} minutes ago" 2>/dev/null || dmesg`;
+        case "journald":
+          return `journalctl --no-pager --since "${mins} minutes ago"`;
+        case "journald-unit":
+          return arg
+            ? `journalctl -u ${shellEscape(arg)} --no-pager --since "${mins} minutes ago"`
+            : "";
+        case "docker-container":
+          return arg
+            ? `docker logs --since ${mins}m ${shellEscape(arg)}`
+            : "";
+        default:
+          return "";
+      }
+    }
+    case "custom":
+      // Custom commands are arbitrary — we can't safely modify them,
+      // so back-fill is unavailable for this mode.
+      return "";
+  }
+}
+
 /** Short human summary shown in the lg-head row. */
 export function describeLogSource(src: LogSource): string {
   switch (src.mode) {

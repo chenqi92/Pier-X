@@ -719,6 +719,20 @@ pub async fn save_file_validate_reload(
     let (reload_code, reload_out) = session.exec_command(&reload_cmd).await?;
     let reloaded = reload_code == 0;
 
+    // Trim aged `.pier-bak.*` siblings now that the new content is
+    // good and reloaded. Best-effort — failure here doesn't undo the
+    // user's successful save. Cap matches the web_server module's
+    // BACKUP_RETENTION (10) so users get the same hygiene whether
+    // they're editing nginx, apache, or caddy.
+    let trim_cmd = format!(
+        "{prefix}sh -c {}",
+        shell_single_quote(&format!(
+            "ls -1 {q}.pier-bak.* 2>/dev/null | sort -r | tail -n +11 | xargs -r rm -f",
+            q = shell_single_quote(path),
+        ))
+    );
+    let _ = session.exec_command(&trim_cmd).await;
+
     Ok(NginxSaveResult {
         validate,
         reloaded,

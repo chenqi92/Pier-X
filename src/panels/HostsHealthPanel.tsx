@@ -23,6 +23,8 @@ import { useI18n } from "../i18n/useI18n";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import { writeClipboardText } from "../lib/clipboard";
 import * as cmd from "../lib/commands";
+import EnvTagChip from "../components/EnvTagChip";
+import Sparkline from "../components/Sparkline";
 import { desktopNotify } from "../lib/notify";
 import { toast } from "../stores/useToastStore";
 import { useConnectionStore } from "../stores/useConnectionStore";
@@ -50,6 +52,14 @@ const AUTO_REFRESH_MS = 60_000;
 // short enough that a 50-host batch still finishes within ~5 s
 // because probes run concurrently.
 const PROBE_TIMEOUT_MS = 3000;
+/** Sparkline retention: enough to show a few minutes of auto-refresh
+ *  cadence (60s × 30 = 30 min) without making the localStorage write
+ *  hot path expensive. Trimmed inside the probe callback. */
+const LATENCY_HISTORY_CAP = 30;
+/** Persistence bucket for the rolling latency window. Keyed by saved-
+ *  connection index, so removing a connection naturally orphans its
+ *  history — small enough that we don't bother garbage-collecting. */
+const LATENCY_HISTORY_KEY = "pier-x:hosts-latency-history";
 
 export default function HostsHealthPanel({
   isActive,
@@ -62,6 +72,50 @@ export default function HostsHealthPanel({
   const refreshConnections = useConnectionStore((s) => s.refresh);
 
   const [probes, setProbes] = useState<ProbeMap>({});
+  // Per-host rolling window of recent latencies. `null` entries
+  // mark probes that came back offline / timeout — kept in the
+  // history so the sparkline can show drops as gaps rather than
+  // synthetic zeros. Capped at LATENCY_HISTORY_CAP samples per host.
+  // Persisted to localStorage so the trail survives a panel remount
+  // / app restart — without it the spark line is empty on every
+  // first probe and the user has to wait several auto-refresh ticks
+  // to see anything useful.
+  const [latencyHistory, setLatencyHistory] = useState<
+    Record<number, (number | null)[]>
+  >(() => {
+    try {
+      const raw = localStorage.getItem(LATENCY_HISTORY_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return {};
+      const out: Record<number, (number | null)[]> = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (!Array.isArray(v)) continue;
+        const idx = Number(k);
+        if (!Number.isFinite(idx)) continue;
+        out[idx] = v
+          .filter((x) => x === null || (typeof x === "number" && Number.isFinite(x)))
+          .slice(-LATENCY_HISTORY_CAP) as (number | null)[];
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    try {
+      if (Object.keys(latencyHistory).length === 0) {
+        localStorage.removeItem(LATENCY_HISTORY_KEY);
+      } else {
+        localStorage.setItem(
+          LATENCY_HISTORY_KEY,
+          JSON.stringify(latencyHistory),
+        );
+      }
+    } catch {
+      /* localStorage full — silent, history is best-effort */
+    }
+  }, [latencyHistory]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("");
@@ -229,14 +283,83 @@ export default function HostsHealthPanel({
    *  has a chance to dedupe (`get_or_open_ssh_session`); also
    *  avoids hammering sshd's `MaxStartups` on a fleet-wide
    *  click. Clears the selection on completion so a second
-   *  click doesn't unintentionally re-open the same set. */
+   *  click doesn't unintentionally re-open the same set. A
+   *  single toast announces the batch so the user has feedback
+   *  while the new tabs spool up — opening 30 SSH tabs without
+   *  acknowledgement feels broken. */
   function connectAllSelected() {
     if (busSelected.size === 0) return;
     // Snapshot before clearing so React's state batching can't
     // race the iteration.
     const ids = Array.from(busSelected);
     setBusSelected(new Set());
-    for (const i of ids) onConnectSaved(i);
+    const total = ids.length;
+    let opened = 0;
+    for (const i of ids) {
+      onConnectSaved(i);
+      opened += 1;
+    }
+    toast.info(t("Opened {n}/{total} SSH tabs", { n: opened, total }));
+  }
+
+  /** Bulk-fire a test webhook for every selected host. We iterate
+   *  selected hosts × configured webhook URLs, firing one HTTP POST
+   *  per cross product. Slow on big fleets * many endpoints — toast
+   *  reports a running count so the user knows it's making progress.
+   *  Disabled webhooks are skipped. Errors are aggregated into a
+   *  single end-of-run toast so individual failures don't stack up. */
+  const [webhookFiring, setWebhookFiring] = useState(false);
+  async function fireWebhookForSelected() {
+    if (busSelected.size === 0 || webhookFiring) return;
+    const ids = Array.from(busSelected);
+    setWebhookFiring(true);
+    try {
+      const cfg = await cmd.softwareWebhooksLoad();
+      const endpoints = cfg.entries.filter(
+        (e) => !e.disabled && e.url.trim().length > 0,
+      );
+      if (endpoints.length === 0) {
+        toast.warn(
+          t(
+            "No active webhooks configured. Add one in Software → Webhooks first.",
+          ),
+        );
+        return;
+      }
+      let ok = 0;
+      let bad = 0;
+      for (const i of ids) {
+        const conn = connections.find((c) => c.index === i);
+        if (!conn) continue;
+        const hostStr = `${conn.user}@${conn.host}:${conn.port ?? 22}`;
+        for (const ep of endpoints) {
+          try {
+            const r = await cmd.softwareWebhooksTestFire({
+              url: ep.url.trim(),
+              bodyTemplate: ep.bodyTemplate ?? "",
+              headers: ep.headers ?? [],
+              host: hostStr,
+              hmacSecret: ep.hmacSecret ?? "",
+            });
+            if (r.error) bad += 1;
+            else ok += 1;
+          } catch {
+            bad += 1;
+          }
+        }
+      }
+      toast.info(
+        t("Fired webhooks: {ok} ok, {bad} failed", { ok, bad }),
+      );
+    } catch (e) {
+      toast.warn(
+        t("Could not load webhook config: {err}", {
+          err: e instanceof Error ? e.message : String(e),
+        }),
+      );
+    } finally {
+      setWebhookFiring(false);
+    }
   }
 
   function openHostMenu(
@@ -311,6 +434,21 @@ export default function HostsHealthPanel({
         const reports = await cmd.hostHealthProbe({
           indices,
           timeoutMs: PROBE_TIMEOUT_MS,
+        });
+        // Roll the latency history first — independent of the
+        // online → offline desktop-notify path below, and we want
+        // failed probes (latencyMs == null) to appear as gaps in the
+        // sparkline.
+        setLatencyHistory((prev) => {
+          const next = { ...prev };
+          for (const r of reports) {
+            if (r.savedConnectionIndex < 0) continue;
+            const series = next[r.savedConnectionIndex] ?? [];
+            const sample = r.latencyMs ?? null;
+            const grown = [...series, sample];
+            next[r.savedConnectionIndex] = grown.slice(-LATENCY_HISTORY_CAP);
+          }
+          return next;
         });
         setProbes((prev) => {
           const next = { ...prev };
@@ -615,6 +753,19 @@ export default function HostsHealthPanel({
                 >
                   {t("Connect to {n}", { n: busSelected.size })}
                 </button>
+                <button
+                  type="button"
+                  className="mini-button"
+                  onClick={() => void fireWebhookForSelected()}
+                  disabled={webhookFiring}
+                  title={t(
+                    "Fire a test webhook for every configured endpoint, once per selected host",
+                  )}
+                >
+                  {webhookFiring
+                    ? t("Firing…")
+                    : t("Fire test webhook")}
+                </button>
               </div>
             </div>
           )}
@@ -724,13 +875,21 @@ export default function HostsHealthPanel({
                       />
                     </td>
                     <td className="hosts-health-bus__name">
-                      {c.name || `${c.user}@${c.host}`}
+                      <EnvTagChip tag={c.envTag} compact />
+                      {highlightFilter(
+                        c.name || `${c.user}@${c.host}`,
+                        filter,
+                      )}
                     </td>
                     <td className="mono muted">
-                      {c.user}@{c.host}:{c.port}
+                      {highlightFilter(
+                        `${c.user}@${c.host}:${c.port}`,
+                        filter,
+                      )}
                     </td>
-                    <td className="mono muted">
-                      {r?.latencyMs != null ? `${r.latencyMs} ms` : "—"}
+                    <td className="mono muted hosts-health-bus__latency">
+                      <span>{r?.latencyMs != null ? `${r.latencyMs} ms` : "—"}</span>
+                      <Sparkline values={latencyHistory[c.index] ?? []} />
                     </td>
                     <td className="muted">{authLabel(c.authKind, t)}</td>
                     <td className="muted">{c.group ?? ""}</td>
@@ -1074,6 +1233,7 @@ function HostRow({
           <span className="hosts-health-row__name">
             {conn.name || `${conn.user}@${conn.host}`}
           </span>
+          <EnvTagChip tag={conn.envTag} />
           {conn.group && (
             <span className="meta-pill meta-pill--ghost">{conn.group}</span>
           )}
@@ -1170,6 +1330,36 @@ function HostRow({
       </div>
     </li>
   );
+}
+
+/// Wrap every case-insensitive occurrence of `filter` inside
+/// `text` with a `<mark>` element so the Bus view shows users
+/// where their filter matched. Empty filter returns the text
+/// untouched. Splits on the literal substring (no regex) so
+/// special characters in the filter don't blow up.
+function highlightFilter(text: string, filter: string): React.ReactNode {
+  const q = filter.trim();
+  if (!q) return text;
+  const lower = text.toLowerCase();
+  const needle = q.toLowerCase();
+  const out: React.ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  while (i < text.length) {
+    const hit = lower.indexOf(needle, i);
+    if (hit < 0) {
+      out.push(text.slice(i));
+      break;
+    }
+    if (hit > i) out.push(text.slice(i, hit));
+    out.push(
+      <mark key={key++} className="hosts-health-bus__hl">
+        {text.slice(hit, hit + q.length)}
+      </mark>,
+    );
+    i = hit + q.length;
+  }
+  return out;
 }
 
 function authLabel(

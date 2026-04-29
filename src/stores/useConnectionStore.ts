@@ -19,6 +19,7 @@ type ConnectionStore = {
     password: string;
     keyPath: string;
     group?: string | null;
+    envTag?: string | null;
   }) => Promise<void>;
   update: (params: {
     index: number;
@@ -30,6 +31,7 @@ type ConnectionStore = {
     password: string;
     keyPath: string;
     group?: string | null;
+    envTag?: string | null;
   }) => Promise<void>;
   remove: (index: number) => Promise<void>;
   /** Atomic reorder + group-reassign across the whole list. */

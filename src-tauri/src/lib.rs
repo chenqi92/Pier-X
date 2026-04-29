@@ -720,6 +720,18 @@ struct PostgresBrowserState {
     /// when the role lacks `pg_stat_activity` access — the panel
     /// hides the chip in that case.
     pool: PostgresPoolView,
+    /// User-defined enum types in the active schema. The grid
+    /// renders a `<datalist>` for any column whose pretty type
+    /// (`format_type`) matches one of these names, giving the
+    /// user a dropdown of valid values when editing.
+    enums: Vec<PostgresEnumView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PostgresEnumView {
+    name: String,
+    values: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -923,6 +935,12 @@ struct SavedSshConnection {
     key_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     group: Option<String>,
+    /// Free-form environment tag — `prod` / `staging` / `dev` /
+    /// `local` are styled specially in the UI; any other string is
+    /// shown verbatim with a neutral pill. Empty / missing means
+    /// "no tag, don't render a chip".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    env_tag: Option<String>,
     /// DB credentials remembered for this profile. Passwords
     /// are never sent — only a `has_password` flag, resolved
     /// lazily via `db_cred_resolve` at connect time.
@@ -2084,6 +2102,11 @@ fn map_saved_connection(index: usize, config: &SshConfig) -> SavedSshConnection 
             .as_ref()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
+        env_tag: config
+            .env_tag
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         databases: config.databases.iter().map(map_db_credential).collect(),
     }
 }
@@ -3183,6 +3206,7 @@ fn ssh_connection_save(
     password: Option<String>,
     key_path: Option<String>,
     group: Option<String>,
+    env_tag: Option<String>,
 ) -> Result<(), String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
@@ -3243,6 +3267,9 @@ fn ssh_connection_save(
     config.group = group
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    config.env_tag = env_tag
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
     store.add(config);
@@ -3296,6 +3323,7 @@ fn ssh_connection_update(
     password: Option<String>,
     key_path: Option<String>,
     group: Option<String>,
+    env_tag: Option<String>,
 ) -> Result<(), String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
@@ -3407,6 +3435,18 @@ fn ssh_connection_update(
             }
         }
         None => existing.group.clone(),
+    };
+    // Same preserve-on-None / clear-on-empty semantics as `group`.
+    config.env_tag = match env_tag {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        None => existing.env_tag.clone(),
     };
 
     let new_auth = config.auth.clone();
@@ -4714,6 +4754,23 @@ fn postgres_browse(
 
     let (active, total) = client.pool_status_blocking().unwrap_or((0, 0));
 
+    // Enum types for the active schema — failsoft when the role
+    // can't read pg_type. The data grid uses these as datalist
+    // options when editing a column whose type matches an enum.
+    let enums = if database_name.is_empty() {
+        Vec::new()
+    } else {
+        client
+            .list_enums_blocking(&schema_name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| PostgresEnumView {
+                name: e.name,
+                values: e.values,
+            })
+            .collect()
+    };
+
     Ok(PostgresBrowserState {
         database_name,
         databases,
@@ -4729,6 +4786,7 @@ fn postgres_browse(
         foreign_keys,
         preview,
         pool: PostgresPoolView { active, total },
+        enums,
     })
 }
 
@@ -7106,6 +7164,13 @@ struct WebhookEntryView {
     /// Base seconds for exponential backoff. 0 = use default (5s).
     #[serde(default)]
     retry_backoff_secs: u8,
+    /// Extra request headers attached to every fire of this entry.
+    #[serde(default)]
+    headers: Vec<pier_core::services::webhook::WebhookHeader>,
+    /// Optional HMAC-SHA256 shared secret. When set, the fire path
+    /// emits `X-Pier-Signature: sha256=<hex>`. Empty disables.
+    #[serde(default)]
+    hmac_secret: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -7141,6 +7206,8 @@ fn webhook_view_to_core(view: &WebhookConfigView) -> pier_core::services::webhoo
                 body_template: e.body_template.clone(),
                 max_retries: e.max_retries,
                 retry_backoff_secs: e.retry_backoff_secs,
+                headers: e.headers.clone(),
+                hmac_secret: e.hmac_secret.clone(),
             })
             .collect(),
     }
@@ -7178,6 +7245,8 @@ fn webhook_core_to_view(
                 body_template: e.body_template.clone(),
                 max_retries: e.max_retries,
                 retry_backoff_secs: e.retry_backoff_secs,
+                headers: e.headers.clone(),
+                hmac_secret: e.hmac_secret.clone(),
             })
             .collect(),
     }
@@ -7276,12 +7345,18 @@ async fn software_webhooks_failures_clear() -> Result<(), String> {
 async fn software_webhooks_replay(
     url: String,
     body: String,
+    headers: Option<Vec<pier_core::services::webhook::WebhookHeader>>,
+    hmac_secret: Option<String>,
 ) -> Result<WebhookFireReportView, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let h = headers.unwrap_or_default();
+        let secret = hmac_secret.unwrap_or_default();
         let r = pier_core::services::webhook::replay_blocking(
             &url,
             &body,
             std::time::Duration::from_secs(5),
+            &h,
+            &secret,
         );
         Ok::<_, String>(WebhookFireReportView {
             url: r.url,
@@ -7335,6 +7410,8 @@ async fn software_webhooks_replay_batch(
                 &f.url,
                 &f.body,
                 std::time::Duration::from_secs(5),
+                &[],
+                "",
             );
             // Drop the failure record from the persistent log
             // when the replay landed — keeps the Failures tab
@@ -7360,15 +7437,25 @@ async fn software_webhooks_replay_batch(
 async fn software_webhooks_test_fire(
     url: String,
     body_template: Option<String>,
+    headers: Option<Vec<pier_core::services::webhook::WebhookHeader>>,
+    host: Option<String>,
+    hmac_secret: Option<String>,
 ) -> Result<WebhookFireReportView, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let host_str = host.unwrap_or_default();
+        let text = if host_str.is_empty() {
+            "Pier-X webhook test — if you see this, the URL is wired up correctly.".to_string()
+        } else {
+            format!(
+                "Pier-X webhook test from {host_str} — if you see this, the URL is wired up correctly."
+            )
+        };
         let payload = pier_core::services::webhook::WebhookPayload {
-            text: "Pier-X webhook test — if you see this, the URL is wired up correctly."
-                .to_string(),
+            text,
             event: "test",
             status: "test".to_string(),
             package_id: "pier-x-test".to_string(),
-            host: String::new(),
+            host: host_str,
             package_manager: String::new(),
             version: None,
             fired_at: SystemTime::now()
@@ -7380,6 +7467,8 @@ async fn software_webhooks_test_fire(
             // trigger a real failing install first.
             output_tail: "Reading package lists... Done\nE: Unable to locate package fake-pkg".to_string(),
         };
+        let h = headers.unwrap_or_default();
+        let secret = hmac_secret.unwrap_or_default();
         let r = match body_template {
             Some(tpl) if !tpl.is_empty() => {
                 pier_core::services::webhook::fire_one_with_template_blocking(
@@ -7387,12 +7476,24 @@ async fn software_webhooks_test_fire(
                     &payload,
                     &tpl,
                     std::time::Duration::from_secs(5),
+                    &h,
+                    &secret,
                 )
             }
-            _ => pier_core::services::webhook::fire_one_blocking(
+            _ if h.is_empty() && secret.is_empty() => {
+                pier_core::services::webhook::fire_one_blocking(
+                    &url,
+                    &payload,
+                    std::time::Duration::from_secs(5),
+                )
+            }
+            _ => pier_core::services::webhook::fire_one_with_template_blocking(
                 &url,
                 &payload,
+                "",
                 std::time::Duration::from_secs(5),
+                &h,
+                &secret,
             ),
         };
         Ok::<_, String>(WebhookFireReportView {
@@ -9475,6 +9576,68 @@ async fn web_server_save_file(
 }
 
 #[tauri::command]
+async fn web_server_lint_hints(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    kind: web_server::WebServerKind,
+) -> Result<web_server::WebServerActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        web_server::lint_hints_blocking(&session, kind).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("web_server_lint_hints join: {e}"))?
+}
+
+#[tauri::command]
+async fn web_server_save_files_batch(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    kind: web_server::WebServerKind,
+    entries: Vec<web_server::WebServerBatchSaveEntry>,
+) -> Result<web_server::WebServerBatchSaveResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        web_server::save_files_batch_blocking(&session, kind, &entries)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("web_server_save_files_batch join: {e}"))?
+}
+
+#[tauri::command]
 async fn web_server_toggle_site(
     app: tauri::AppHandle,
     host: String,
@@ -10883,6 +11046,190 @@ fn sftp_upload_tree(
     }
 }
 
+/// Copy a single file from one remote host to another by streaming
+/// through a local temp file. Two-phase progress: the first half of
+/// the reported `total` is the download leg, the second half is the
+/// upload leg. The temp file is removed on the way out (success or
+/// failure) so we don't leak `/tmp` space across runs.
+///
+/// Limitations: file-only (no directory recursion), and the local
+/// disk is the bottleneck — for very large transfers a streaming
+/// pipe between the two SFTP channels would be faster but needs a
+/// custom implementation. v1 ships the simple path that covers the
+/// "copy this config file from staging to prod" common case.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn sftp_remote_to_remote_copy(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    src_host: String,
+    src_port: u16,
+    src_user: String,
+    src_auth_mode: String,
+    src_password: String,
+    src_key_path: String,
+    src_saved_connection_index: Option<usize>,
+    src_remote_path: String,
+    dst_host: String,
+    dst_port: u16,
+    dst_user: String,
+    dst_auth_mode: String,
+    dst_password: String,
+    dst_key_path: String,
+    dst_saved_connection_index: Option<usize>,
+    dst_remote_path: String,
+    transfer_id: Option<String>,
+) -> Result<(), String> {
+    let id = transfer_id.unwrap_or_default();
+
+    // 1) Open both SFTP clients first so an auth failure on either
+    //    side surfaces before we touch the disk.
+    let src_session = get_or_open_ssh_session(
+        &state,
+        &src_host,
+        src_port,
+        &src_user,
+        &src_auth_mode,
+        &src_password,
+        &src_key_path,
+        src_saved_connection_index,
+    )?;
+    let src_sftp = get_or_open_sftp_client(
+        &state,
+        &src_session,
+        &src_host,
+        src_port,
+        &src_user,
+        &src_auth_mode,
+    )?;
+    let dst_session = get_or_open_ssh_session(
+        &state,
+        &dst_host,
+        dst_port,
+        &dst_user,
+        &dst_auth_mode,
+        &dst_password,
+        &dst_key_path,
+        dst_saved_connection_index,
+    )?;
+    let dst_sftp = get_or_open_sftp_client(
+        &state,
+        &dst_session,
+        &dst_host,
+        dst_port,
+        &dst_user,
+        &dst_auth_mode,
+    )?;
+
+    // 2) Pick a temp file. Stamp the path with the transfer id when
+    //    available so concurrent copies don't trample each other; fall
+    //    back to a timestamp otherwise.
+    let temp_root = std::env::temp_dir();
+    let stamp = if id.is_empty() {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos().to_string())
+            .unwrap_or_else(|_| "0".to_string())
+    } else {
+        id.replace(['/', '\\'], "_")
+    };
+    let temp_path = temp_root.join(format!("pier-x-xfer-{stamp}.bin"));
+
+    let app_dl = app.clone();
+    let id_dl = id.clone();
+    let download_result = src_sftp.download_to_with_progress_blocking(
+        &src_remote_path,
+        &temp_path,
+        move |bytes, total| {
+            emit_sftp_progress(
+                &app_dl,
+                SftpProgressEvent {
+                    id: id_dl.clone(),
+                    // First half of the bar = download leg.
+                    bytes: bytes / 2,
+                    total: total.max(bytes),
+                    done: false,
+                    error: None,
+                },
+            );
+        },
+    );
+
+    let bytes = match download_result {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_path);
+            let msg = e.to_string();
+            emit_sftp_progress(
+                &app,
+                SftpProgressEvent {
+                    id: id.clone(),
+                    bytes: 0,
+                    total: 0,
+                    done: true,
+                    error: Some(format!("download failed: {msg}")),
+                },
+            );
+            return Err(msg);
+        }
+    };
+
+    let app_up = app.clone();
+    let id_up = id.clone();
+    let upload_result = dst_sftp.upload_from_with_progress_blocking(
+        &temp_path,
+        &dst_remote_path,
+        move |bytes_up, total| {
+            // Map upload bytes onto the second half of the bar so the
+            // single transfer-row chip in the UI advances smoothly
+            // through both legs.
+            let mapped = total / 2 + bytes_up / 2;
+            emit_sftp_progress(
+                &app_up,
+                SftpProgressEvent {
+                    id: id_up.clone(),
+                    bytes: mapped,
+                    total: total.max(mapped),
+                    done: false,
+                    error: None,
+                },
+            );
+        },
+    );
+
+    let _ = std::fs::remove_file(&temp_path);
+
+    match upload_result {
+        Ok(_) => {
+            emit_sftp_progress(
+                &app,
+                SftpProgressEvent {
+                    id,
+                    bytes,
+                    total: bytes,
+                    done: true,
+                    error: None,
+                },
+            );
+            Ok(())
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            emit_sftp_progress(
+                &app,
+                SftpProgressEvent {
+                    id,
+                    bytes: 0,
+                    total: 0,
+                    done: true,
+                    error: Some(format!("upload failed: {msg}")),
+                },
+            );
+            Err(msg)
+        }
+    }
+}
+
 /// Download a remote directory recursively to `local_path`. Mirror
 /// image of [`sftp_upload_tree`].
 #[tauri::command]
@@ -11868,26 +12215,65 @@ fn local_system_info(include_disks: bool) -> Result<ServerSnapshotView, String> 
         // Windows local probe — shells out to PowerShell once per call
         // and parses a tagged-line protocol. Cheaper than spinning up
         // multiple WMIC processes, and Get-CimInstance ships with every
-        // supported Windows release. CPU% / per-process tables are left
-        // empty (matching the macOS branch); the gauge falls back to
-        // its placeholder tone when cpu_pct < 0.
+        // supported Windows release.
+        //
+        // The script forces UTF-8 output so non-ASCII characters in
+        // OS captions and process names (e.g. the Chinese build labels
+        // in `Win32_OperatingSystem.Caption`) survive the round-trip
+        // through the stdout pipe — without this the default OEM code
+        // page (936/GBK on zh-CN Windows) gets re-decoded as UTF-8
+        // and the panel displays mojibake.
+        //
+        // CPU% comes from `Win32_Processor.LoadPercentage` (instantaneous
+        // sample, no extra cost). Per-process CPU% is derived from
+        // cumulative CPU time over the process lifetime — Windows
+        // doesn't expose a cheap instantaneous per-process counter
+        // through CIM, and `Get-Counter '\Process(*)\% Processor Time'`
+        // would dominate the probe latency. The lifetime average is a
+        // reasonable signal for "what's burning the box right now"
+        // on long-lived processes.
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
         let want_disks = if include_disks { "1" } else { "0" };
         let script = format!(
-            r#"$ErrorActionPreference='SilentlyContinue'
+            r#"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+$ErrorActionPreference='SilentlyContinue'
 $os = Get-CimInstance Win32_OperatingSystem
 $totalKB = [int64]$os.TotalVisibleMemorySize
 $freeKB = [int64]$os.FreePhysicalMemory
+$totalBytes = [int64]$totalKB * 1024
 $uptime = [int64]((Get-Date) - $os.LastBootUpTime).TotalSeconds
 $cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+$cpuLoad = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
+if ($null -eq $cpuLoad) {{ $cpuLoad = -1 }}
 $procs = (Get-Process).Count
 Write-Output "MEM_KB $totalKB $freeKB"
 Write-Output "UPTIME $uptime"
 Write-Output "CORES $cores"
 Write-Output "PROCS $procs"
+Write-Output "CPU_PCT $cpuLoad"
 Write-Output "OS $($os.Caption) $($os.Version)"
+
+$rawCpu = Get-Process | Where-Object {{ $_.Id -ne 0 -and $_.CPU -ne $null }} | Sort-Object CPU -Descending | Select-Object -First 12
+foreach ($p in $rawCpu) {{
+  $cpuSec = if ($p.CPU) {{ [math]::Round($p.CPU, 2) }} else {{ 0 }}
+  $memBytes = [int64]$p.WorkingSet64
+  $memPct = if ($totalBytes -gt 0) {{ [math]::Round(($memBytes * 100.0)/$totalBytes, 1) }} else {{ 0 }}
+  $started = if ($p.StartTime) {{ [int64]((Get-Date) - $p.StartTime).TotalSeconds }} else {{ 0 }}
+  Write-Output "PROC_CPU $($p.Id)`t$cpuSec`t$memPct`t$started`t$($p.ProcessName)"
+}}
+$rawMem = Get-Process | Where-Object {{ $_.Id -ne 0 }} | Sort-Object WorkingSet64 -Descending | Select-Object -First 12
+foreach ($p in $rawMem) {{
+  $cpuSec = if ($p.CPU) {{ [math]::Round($p.CPU, 2) }} else {{ 0 }}
+  $memBytes = [int64]$p.WorkingSet64
+  $memPct = if ($totalBytes -gt 0) {{ [math]::Round(($memBytes * 100.0)/$totalBytes, 1) }} else {{ 0 }}
+  $started = if ($p.StartTime) {{ [int64]((Get-Date) - $p.StartTime).TotalSeconds }} else {{ 0 }}
+  Write-Output "PROC_MEM $($p.Id)`t$cpuSec`t$memPct`t$started`t$($p.ProcessName)"
+}}
+
 if ('{}' -eq '1') {{
   Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {{
     $size = [int64]$_.Size
@@ -11910,6 +12296,10 @@ if ('{}' -eq '1') {{
         let output = command
             .output()
             .map_err(|e| format!("powershell spawn failed: {e}"))?;
+        // Stdout is UTF-8 because the script sets `[Console]::OutputEncoding`
+        // before any `Write-Output` runs. `from_utf8_lossy` is a safety
+        // net for the unlikely case where the script aborts before
+        // that line lands.
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
         let mut mem_total_mb = 0.0_f64;
@@ -11917,11 +12307,30 @@ if ('{}' -eq '1') {{
         let mut uptime_secs: u64 = 0;
         let mut cpu_count: u32 = 0;
         let mut proc_count: u32 = 0;
+        let mut cpu_pct = -1.0_f64;
         let mut os_label = String::new();
         let mut disks: Vec<DiskEntryView> = Vec::new();
         let mut total_disk: u64 = 0;
         let mut used_disk: u64 = 0;
         let mut avail_disk: u64 = 0;
+        let mut top_cpu: Vec<ProcessRowView> = Vec::new();
+        let mut top_mem: Vec<ProcessRowView> = Vec::new();
+
+        // Format an elapsed-seconds count to the same `D-HH:MM:SS` /
+        // `HH:MM:SS` shape `ps -eo etime` produces, so the per-process
+        // tables read identically across SSH and local probes.
+        fn fmt_elapsed(secs: u64) -> String {
+            let days = secs / 86_400;
+            let rem = secs % 86_400;
+            let h = rem / 3600;
+            let m = (rem % 3600) / 60;
+            let s = rem % 60;
+            if days > 0 {
+                format!("{}-{:02}:{:02}:{:02}", days, h, m, s)
+            } else {
+                format!("{:02}:{:02}:{:02}", h, m, s)
+            }
+        }
 
         for line in stdout.lines() {
             if let Some(rest) = line.strip_prefix("MEM_KB ") {
@@ -11938,8 +12347,45 @@ if ('{}' -eq '1') {{
                 cpu_count = rest.trim().parse::<u32>().unwrap_or(0);
             } else if let Some(rest) = line.strip_prefix("PROCS ") {
                 proc_count = rest.trim().parse::<u32>().unwrap_or(0);
+            } else if let Some(rest) = line.strip_prefix("CPU_PCT ") {
+                cpu_pct = rest.trim().parse::<f64>().unwrap_or(-1.0);
             } else if let Some(rest) = line.strip_prefix("OS ") {
                 os_label = rest.trim().to_string();
+            } else if line.starts_with("PROC_CPU ") || line.starts_with("PROC_MEM ") {
+                let is_cpu = line.starts_with("PROC_CPU ");
+                let rest = &line[9..];
+                // tab-separated: pid \t cpuSec \t memPct \t startedSec \t name
+                let parts: Vec<&str> = rest.splitn(5, '\t').collect();
+                if parts.len() == 5 {
+                    let pid = parts[0].trim().to_string();
+                    let cpu_sec = parts[1].trim().parse::<f64>().unwrap_or(0.0);
+                    let mem_pct = parts[2].trim().parse::<f64>().unwrap_or(0.0);
+                    let started = parts[3].trim().parse::<u64>().unwrap_or(0);
+                    let name = parts[4].trim().to_string();
+                    // Lifetime CPU% across all logical cores. Mirrors
+                    // top's "lifetime average" semantics; the panel
+                    // header carries an authoritative aggregate gauge.
+                    let denom = (started.max(1) as f64) * (cpu_count.max(1) as f64);
+                    let pct = if denom > 0.0 {
+                        (cpu_sec * 100.0) / denom
+                    } else {
+                        0.0
+                    };
+                    let row = ProcessRowView {
+                        pid,
+                        command: name,
+                        cpu_pct: format!("{:.1}", pct),
+                        mem_pct: format!("{:.1}", mem_pct),
+                        elapsed: fmt_elapsed(started),
+                    };
+                    if is_cpu {
+                        if top_cpu.len() < 8 {
+                            top_cpu.push(row);
+                        }
+                    } else if top_mem.len() < 8 {
+                        top_mem.push(row);
+                    }
+                }
             } else if let Some(rest) = line.strip_prefix("DISK ") {
                 let parts: Vec<&str> = rest.split_whitespace().collect();
                 if parts.len() >= 6 {
@@ -11990,14 +12436,14 @@ if ('{}' -eq '1') {{
             disk_used: if have_disks { format_size(used_disk) } else { String::new() },
             disk_avail: if have_disks { format_size(avail_disk) } else { String::new() },
             disk_use_pct,
-            cpu_pct: -1.0,
+            cpu_pct,
             cpu_count,
             proc_count,
             os_label,
             net_rx_bps: -1.0,
             net_tx_bps: -1.0,
-            top_processes: Vec::new(),
-            top_processes_mem: Vec::new(),
+            top_processes: top_cpu,
+            top_processes_mem: top_mem,
             disks,
             // No lsblk-equivalent; leave empty so the BLOCK DEVICES
             // section auto-hides on the frontend.
@@ -12517,6 +12963,8 @@ pub fn run() {
             web_server_layout,
             web_server_read_file,
             web_server_save_file,
+            web_server_save_files_batch,
+            web_server_lint_hints,
             web_server_toggle_site,
             web_server_create_site,
             caddy_parse,
@@ -12545,6 +12993,7 @@ pub fn run() {
             sftp_download,
             sftp_upload,
             sftp_upload_tree,
+            sftp_remote_to_remote_copy,
             sftp_download_tree,
             sftp_open_external,
             sftp_external_edit_stop,

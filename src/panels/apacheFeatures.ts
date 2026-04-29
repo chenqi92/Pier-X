@@ -1183,6 +1183,225 @@ const deflate: Feature & { group: FeatureGroup } = {
 
 export type GroupedFeature = Feature & { group: FeatureGroup };
 
+// ── MPM tuning (mod_mpm_event/prefork/worker) ──────────────────────
+
+const mpmTuning: Feature & { group: FeatureGroup } = {
+  id: "mpm-tuning",
+  group: "performance",
+  title: "MPM tuning",
+  description:
+    "StartServers / MinSpareThreads / MaxSpareThreads / ThreadsPerChild / MaxRequestWorkers / MaxConnectionsPerChild. Tune the multi-processing module for your workload.",
+  contexts: ["main"],
+  fields: [
+    { type: "text", key: "startServers", label: "StartServers", placeholder: "3" },
+    { type: "text", key: "minSpareThreads", label: "MinSpareThreads", placeholder: "75" },
+    { type: "text", key: "maxSpareThreads", label: "MaxSpareThreads", placeholder: "250" },
+    { type: "text", key: "threadsPerChild", label: "ThreadsPerChild", placeholder: "25" },
+    { type: "text", key: "maxRequestWorkers", label: "MaxRequestWorkers", placeholder: "400" },
+    { type: "text", key: "maxConnectionsPerChild", label: "MaxConnectionsPerChild", placeholder: "0" },
+  ],
+  defaults: {
+    startServers: "",
+    minSpareThreads: "",
+    maxSpareThreads: "",
+    threadsPerChild: "",
+    maxRequestWorkers: "",
+    maxConnectionsPerChild: "",
+  },
+  detect: (b) =>
+    [
+      "StartServers",
+      "MinSpareThreads",
+      "MaxSpareThreads",
+      "ThreadsPerChild",
+      "MaxRequestWorkers",
+      "MaxConnectionsPerChild",
+    ].some((d) => findFirst(b, d) !== null),
+  read: (b) => ({
+    startServers: findFirst(b, "StartServers")?.args[0] ?? "",
+    minSpareThreads: findFirst(b, "MinSpareThreads")?.args[0] ?? "",
+    maxSpareThreads: findFirst(b, "MaxSpareThreads")?.args[0] ?? "",
+    threadsPerChild: findFirst(b, "ThreadsPerChild")?.args[0] ?? "",
+    maxRequestWorkers: findFirst(b, "MaxRequestWorkers")?.args[0] ?? "",
+    maxConnectionsPerChild:
+      findFirst(b, "MaxConnectionsPerChild")?.args[0] ?? "",
+  }),
+  enable: (b, v) => {
+    const map: [string, string][] = [
+      ["StartServers", String(v.startServers ?? "").trim()],
+      ["MinSpareThreads", String(v.minSpareThreads ?? "").trim()],
+      ["MaxSpareThreads", String(v.maxSpareThreads ?? "").trim()],
+      ["ThreadsPerChild", String(v.threadsPerChild ?? "").trim()],
+      ["MaxRequestWorkers", String(v.maxRequestWorkers ?? "").trim()],
+      ["MaxConnectionsPerChild", String(v.maxConnectionsPerChild ?? "").trim()],
+    ];
+    let next = b;
+    for (const [name, value] of map) {
+      next = value
+        ? upsert(next, newDirective(name, [value]))
+        : removeAll(next, name);
+    }
+    return next;
+  },
+  disable: (b) => {
+    let next = b;
+    for (const name of [
+      "StartServers",
+      "MinSpareThreads",
+      "MaxSpareThreads",
+      "ThreadsPerChild",
+      "MaxRequestWorkers",
+      "MaxConnectionsPerChild",
+    ]) {
+      next = removeAll(next, name);
+    }
+    return next;
+  },
+};
+
+// ── ServerTokens / ServerSignature ─────────────────────────────────
+
+const serverInfoLeak: Feature & { group: FeatureGroup } = {
+  id: "server-info-leak",
+  group: "headers",
+  title: "ServerTokens / ServerSignature",
+  description:
+    "Hide Apache version / module list from response headers and error pages — `ServerTokens Prod` + `ServerSignature Off` is the locked-down combo most security scanners expect.",
+  contexts: ["main"],
+  fields: [
+    {
+      type: "select",
+      key: "serverTokens",
+      label: "ServerTokens",
+      options: [
+        { value: "Prod", label: "Prod (Apache only)" },
+        { value: "Major", label: "Major (Apache/2)" },
+        { value: "Minor", label: "Minor (Apache/2.4)" },
+        { value: "Min", label: "Min (Apache/2.4.x)" },
+        { value: "OS", label: "OS (Apache/2.4.x (Ubuntu))" },
+        { value: "Full", label: "Full (default — exposes module list)" },
+      ],
+    },
+    {
+      type: "select",
+      key: "serverSignature",
+      label: "ServerSignature",
+      options: [
+        { value: "Off", label: "Off (no signature)" },
+        { value: "On", label: "On (server name)" },
+        { value: "EMail", label: "EMail (with admin contact)" },
+      ],
+    },
+  ],
+  defaults: { serverTokens: "Prod", serverSignature: "Off" },
+  detect: (b) =>
+    findFirst(b, "ServerTokens") !== null ||
+    findFirst(b, "ServerSignature") !== null,
+  read: (b) => ({
+    serverTokens: findFirst(b, "ServerTokens")?.args[0] ?? "Prod",
+    serverSignature: findFirst(b, "ServerSignature")?.args[0] ?? "Off",
+  }),
+  enable: (b, v) => {
+    let next = upsert(
+      b,
+      newDirective("ServerTokens", [String(v.serverTokens ?? "Prod")]),
+    );
+    next = upsert(
+      next,
+      newDirective("ServerSignature", [String(v.serverSignature ?? "Off")]),
+    );
+    return next;
+  },
+  disable: (b) => {
+    let next = removeAll(b, "ServerTokens");
+    next = removeAll(next, "ServerSignature");
+    return next;
+  },
+};
+
+// ── mod_expires (caching headers) ──────────────────────────────────
+
+const modExpires: Feature & { group: FeatureGroup } = {
+  id: "mod-expires",
+  group: "performance",
+  title: "mod_expires (cache control)",
+  description:
+    "Set far-future Expires headers for static assets so browsers cache them aggressively. Requires `mod_expires` to be loaded.",
+  contexts: ["main", "vhost"],
+  fields: [
+    {
+      type: "text",
+      key: "defaultExpires",
+      label: "ExpiresDefault",
+      placeholder: "access plus 1 hour",
+    },
+    {
+      type: "text",
+      key: "imageExpires",
+      label: "ExpiresByType image/* (skip if blank)",
+      placeholder: "access plus 1 month",
+    },
+    {
+      type: "text",
+      key: "cssJsExpires",
+      label: "ExpiresByType text/css + application/javascript",
+      placeholder: "access plus 1 week",
+    },
+  ],
+  defaults: {
+    defaultExpires: "access plus 1 hour",
+    imageExpires: "access plus 1 month",
+    cssJsExpires: "access plus 1 week",
+  },
+  detect: (b) => findFirst(b, "ExpiresActive") !== null,
+  read: (b) => {
+    const def = findFirst(b, "ExpiresDefault");
+    const byType = findAll(b, "ExpiresByType");
+    const findByType = (mt: string): string => {
+      const hit = byType.find(
+        (d) => d.args[0]?.toLowerCase() === mt.toLowerCase(),
+      );
+      return hit ? hit.args.slice(1).join(" ") : "";
+    };
+    const img = findByType("image/jpeg");
+    const css = findByType("text/css");
+    return {
+      defaultExpires: def?.args.join(" ") ?? "",
+      imageExpires: img,
+      cssJsExpires: css,
+    };
+  },
+  enable: (b, v) => {
+    let next = upsert(b, newDirective("ExpiresActive", ["On"]));
+    const defStr = String(v.defaultExpires ?? "").trim();
+    next = defStr
+      ? upsert(next, newDirective("ExpiresDefault", [`"${defStr}"`]))
+      : removeAll(next, "ExpiresDefault");
+    // ExpiresByType is multi-line; we drop all and re-add for the
+    // three media types the panel exposes.
+    next = removeAll(next, "ExpiresByType");
+    const img = String(v.imageExpires ?? "").trim();
+    if (img) {
+      for (const mt of ["image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"]) {
+        next = upsert(next, newDirective("ExpiresByType", [mt, `"${img}"`]));
+      }
+    }
+    const css = String(v.cssJsExpires ?? "").trim();
+    if (css) {
+      for (const mt of ["text/css", "application/javascript", "text/javascript"]) {
+        next = upsert(next, newDirective("ExpiresByType", [mt, `"${css}"`]));
+      }
+    }
+    return next;
+  },
+  disable: (b) => {
+    let next = removeAll(b, "ExpiresActive");
+    next = removeAll(next, "ExpiresDefault");
+    next = removeAll(next, "ExpiresByType");
+    return next;
+  },
+};
+
 export const FEATURES: GroupedFeature[] = [
   serverIdentity,
   listen,
@@ -1194,7 +1413,10 @@ export const FEATURES: GroupedFeature[] = [
   basicAuth,
   directoryAccess,
   deflate,
+  modExpires,
   connectionTuning,
   requestBodyLimit,
+  mpmTuning,
+  serverInfoLeak,
   logging,
 ];

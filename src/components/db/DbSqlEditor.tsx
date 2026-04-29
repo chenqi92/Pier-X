@@ -1,4 +1,4 @@
-import { Activity, Edit, FileText, History, Lock, Play, Plus, Star, Unlock, Wand2, X } from "lucide-react";
+import { Activity, Edit, FileText, GitBranch, History, Lock, Play, Plus, Star, Unlock, Wand2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
@@ -82,6 +82,10 @@ type Props = {
 
   /** Optional EXPLAIN handler — when omitted, button hidden. */
   onExplain?: () => void;
+  /** Optional EXPLAIN ANALYZE handler — surfaces a "Plan" button
+   *  next to EXPLAIN. The parent runs the engine-specific JSON-format
+   *  EXPLAIN (with ANALYZE on PG) and renders the result as a tree. */
+  onPlan?: () => void;
 
   /** Optional Format-SQL handler. When provided, the wand button
    *  in the toolbar is enabled and clicking it asks the parent to
@@ -122,12 +126,14 @@ export default function DbSqlEditor({
   onRemoveFavorite,
   onPickFavorite,
   onExplain,
+  onPlan,
   onFormat,
 }: Props) {
   const { t } = useI18n();
   const lines = useMemo(() => sql.split("\n"), [sql]);
   const tokens = useMemo(() => renderSqlTokens(sql), [sql]);
   const [histOpen, setHistOpen] = useState(false);
+  const [histFilter, setHistFilter] = useState("");
   const [favOpen, setFavOpen] = useState(false);
   const favoritesEnabled = !!favorites && !!onAddFavorite;
   const activeTabName =
@@ -284,37 +290,78 @@ export default function DbSqlEditor({
                 <X size={10} />
               </button>
             </div>
-            <div className="sq-hist-list">
-              {history.map((h, i) => (
+            <div className="sq-hist-search">
+              <input
+                className="sq-hist-search-input mono"
+                placeholder={t("Filter history…")}
+                value={histFilter}
+                onChange={(e) => setHistFilter(e.currentTarget.value)}
+                spellCheck={false}
+              />
+              {histFilter && (
                 <button
-                  key={i}
                   type="button"
-                  className="sq-hist-row"
-                  onClick={() => onPickHistory?.(h)}
+                  className="mini-button mini-button--ghost"
+                  onClick={() => setHistFilter("")}
+                  title={t("Clear")}
                 >
-                  <span className={"sq-hist-ic" + (h.write ? " w" : "")}>
-                    {h.write ? <Edit size={9} /> : <Play size={9} />}
-                  </span>
-                  <div className="sq-hist-body">
-                    <div className="sq-hist-sql">{h.sql}</div>
-                    <div className="sq-hist-meta">
-                      <span>{h.at}</span>
-                      {h.rows != null && (
-                        <>
-                          <span className="sep">·</span>
-                          <span>{t("{rows} rows", { rows: h.rows })}</span>
-                        </>
-                      )}
-                      {typeof h.ms === "number" && (
-                        <>
-                          <span className="sep">·</span>
-                          <span>{h.ms}ms</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
+                  <X size={9} />
                 </button>
-              ))}
+              )}
+            </div>
+            <div className="sq-hist-list">
+              {(() => {
+                // Local-only filter — works against the SQL body case-
+                // insensitively. Match on substring rather than
+                // word-prefix because users typically remember a
+                // table / column name from the middle of the query
+                // ("FROM users" / "user_id").
+                const q = histFilter.trim().toLowerCase();
+                const filtered = q
+                  ? history.filter((h) =>
+                      h.sql.toLowerCase().includes(q),
+                    )
+                  : history;
+                if (filtered.length === 0) {
+                  return (
+                    <div className="sq-hist-empty mono">
+                      {q
+                        ? t("No history entries match this filter.")
+                        : t("(no history yet)")}
+                    </div>
+                  );
+                }
+                return filtered.map((h, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="sq-hist-row"
+                    onClick={() => onPickHistory?.(h)}
+                  >
+                    <span className={"sq-hist-ic" + (h.write ? " w" : "")}>
+                      {h.write ? <Edit size={9} /> : <Play size={9} />}
+                    </span>
+                    <div className="sq-hist-body">
+                      <div className="sq-hist-sql">{h.sql}</div>
+                      <div className="sq-hist-meta">
+                        <span>{h.at}</span>
+                        {h.rows != null && (
+                          <>
+                            <span className="sep">·</span>
+                            <span>{t("{rows} rows", { rows: h.rows })}</span>
+                          </>
+                        )}
+                        {typeof h.ms === "number" && (
+                          <>
+                            <span className="sep">·</span>
+                            <span>{h.ms}ms</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                ));
+              })()}
             </div>
           </div>
         )}
@@ -411,6 +458,17 @@ export default function DbSqlEditor({
             title={t("EXPLAIN selected query")}
           >
             <Activity size={10} /> {t("EXPLAIN")}
+          </button>
+        )}
+        {onPlan && (
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            disabled={!canRun}
+            onClick={onPlan}
+            title={t("EXPLAIN ANALYZE — render as plan tree")}
+          >
+            <GitBranch size={10} /> {t("Plan")}
           </button>
         )}
         <button

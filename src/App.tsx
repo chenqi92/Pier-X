@@ -38,6 +38,7 @@ import HostsHealthPanel from "./panels/HostsHealthPanel";
 import CommandPalette, { type PaletteCommand } from "./shell/CommandPalette";
 import NewConnectionDialog from "./shell/NewConnectionDialog";
 import TopBar from "./shell/TopBar";
+import BroadcastDialog from "./shell/BroadcastDialog";
 import StatusBar from "./shell/StatusBar";
 import Sidebar from "./shell/Sidebar";
 import TabBar from "./shell/TabBar";
@@ -102,6 +103,10 @@ function App() {
     "About" | "Keymap" | undefined
   >(undefined);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [broadcastOpen, setBroadcastOpen] = useState(false);
+  const [broadcastPrefilter, setBroadcastPrefilter] = useState<
+    string[] | null
+  >(null);
   const [portForwardOpen, setPortForwardOpen] = useState(false);
   const [newConnOpen, setNewConnOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<SavedSshConnection | null>(null);
@@ -703,6 +708,7 @@ function App() {
           { label: i18n.t("New local terminal"), shortcut: "Ctrl+T", action: () => openLocalTerminal() },
           { label: i18n.t("New SSH connection"), shortcut: "Ctrl+N", action: openNewConnectionDialog },
           { label: i18n.t("Open host health dashboard"), action: openHostsHealth },
+          { label: i18n.t("Broadcast to terminals…"), action: () => setBroadcastOpen(true) },
           { divider: true },
           { label: i18n.t("Close tab"), shortcut: "Ctrl+W", disabled: !activeTabId, action: () => { if (activeTabId) closeTab(activeTabId); } },
         ],
@@ -855,6 +861,24 @@ function App() {
             onFileSelect={handleFileSelect}
             selectedFilePath={selectedMarkdownPath}
             workspaceRoot={coreInfo?.workspaceRoot}
+            onBroadcastToIndices={(indices) => {
+              // Resolve saved-connection indices → tab ids by
+              // matching `sshSavedConnectionIndex`. Tabs not yet
+              // open for a given saved index are silently dropped;
+              // the BroadcastDialog already filters to live tabs.
+              const wanted = new Set(indices);
+              const tabIds = useTabStore
+                .getState()
+                .tabs.filter(
+                  (t) =>
+                    t.backend === "ssh" &&
+                    t.sshSavedConnectionIndex !== null &&
+                    wanted.has(t.sshSavedConnectionIndex),
+                )
+                .map((t) => t.id);
+              setBroadcastPrefilter(tabIds.length > 0 ? tabIds : null);
+              setBroadcastOpen(true);
+            }}
           />
 
           <div className="center">
@@ -937,6 +961,17 @@ function App() {
             open={paletteOpen}
             onClose={() => setPaletteOpen(false)}
             commands={paletteCommands}
+          />
+          <BroadcastDialog
+            open={broadcastOpen}
+            onClose={() => {
+              setBroadcastOpen(false);
+              // Drop the prefilter on close so the next "Broadcast to
+              // terminals" from the menu defaults back to the
+              // all-live-tabs behaviour.
+              setBroadcastPrefilter(null);
+            }}
+            prefilterTabIds={broadcastPrefilter}
           />
           <NewConnectionDialog
             open={newConnOpen}

@@ -48,14 +48,15 @@ header on merge and drop rows once they're confirmed shipped.
 | Data tab | Column width resize grip | hidden | Pure frontend (when we add per-column width state) |
 | Data tab | Per-column filter row | stub | Frontend-only filter against already-loaded preview rows |
 | Data tab | Sort indicator on header | stub | Same — runs against loaded rows, not a server sort |
-| Data tab | Inline CRUD (edit / insert / delete with pending commit batch) | hidden | `mysqlExecute` can run DML but there's no "row-level diff → batched UPDATE" command |
+| Data tab | Inline CRUD (edit / insert / delete with pending commit batch) | shipped | `feat/db-grid-crud` — `DbResultGrid` collects pending mutations, `mutationToSql` builds quoted UPDATE/INSERT/DELETE per dialect, single Commit button fans them through `mysqlExecute` (works for both MySQL and PG) |
 | Data tab | Server-side paging (page N of M) | shipped | `feat/mysql-paging-history` — `mysql_browse(offset, limit)` + `total_rows`; pager + page-size dropdown in toolbar |
 | Data tab | Elapsed `ms` on grid toolbar | hidden | Only `queryResult.elapsedMs` exists, not a per-browse number |
 | SQL editor | Multiple query tabs | stub | Pure frontend state (add later, no backend) |
 | SQL editor | History drawer (recent queries + status) | shipped | `feat/mysql-paging-history` — `useDbSqlTabs` persists per-engine to localStorage (`pier-x:sql-history:<engine>`), 200-entry cap |
-| SQL editor | Favorites | hidden | Needs a saved-query store |
+| SQL editor | Favorites | shipped | `useDbSqlTabs` persists pinned queries per engine in `pier-x:sql-favorites:<engine>` (50-entry cap); editor exposes Add/Remove/Pick from the rail |
 | SQL editor | Format SQL button | shipped | `feat/sql-explain-format` — sql-formatter dep + button on all three SQL panels |
 | SQL editor | EXPLAIN button | shipped | `feat/sql-explain-format` — runs `EXPLAIN <sql>` via existing execute |
+| SQL editor | EXPLAIN ANALYZE plan tree | shipped | `feat/explain-plan-tree` — `Plan` button runs `EXPLAIN (ANALYZE, FORMAT JSON, BUFFERS)` (PG) or `EXPLAIN FORMAT=JSON` (MySQL); JSON parsed by `lib/explainPlan.ts` into a unified `PlanNode`; rendered hierarchically by `ExplainPlanView` with rows/cost/actual-time/buffers chips |
 | Row detail | Foreign-key "X (N) →" links | partial | `feat/db-structure-keys` ships the underlying FK metadata; row-detail navigation still pending |
 | Structure tab | Columns / Indexes / Foreign keys tables | shipped | `feat/db-structure-keys` — indexes + FK sections under the column grid |
 | Schema tab | Per-table engine / rows / data / idx / updated | shipped | `feat/mysql-schema-enrichment` — table-meta tooltip exposes engine / rows / size |
@@ -79,9 +80,9 @@ Mirrors MySQL, with the following PG-specific gaps on top:
 |---|---|---|---|
 | Key list | Per-key type (`STR` / `HASH` / `LIST` / `ZSET` / `STREAM`) badge | shipped | `feat/redis-key-meta` — TYPE pipeline after SCAN, badge per row |
 | Key list | TTL + size per row | shipped | `feat/redis-key-meta` — PTTL pipeline; ∞ / s / m / h / d chip |
-| Key tree | Colon-separated hierarchical tree view | stub | Pure frontend now that the type/TTL data has landed |
-| Key detail | Inline edit (SET / HSET / LPUSH / XADD / ZADD) | hidden | Add a write-side `redisWrite` command family — current `redisExecute` runs raw strings but has no structured edit |
-| Key detail | Rename / Delete actions | hidden | Need `RENAME` + `DEL` through the existing `redisExecute`, but we'd want a confirm-guarded command |
+| Key tree | Colon-separated hierarchical tree view | shipped | `feat/redis-edits-tree` — `RedisKeyList` collapses on `:` (configurable separator); tree mode is the default |
+| Key detail | Inline edit (SET / HSET / LPUSH / XADD / ZADD) | shipped | `feat/redis-edits-tree` — `RedisEdit` op union covers string/hash/list/set/zset + TTL; XADD stream stays read-only by design |
+| Key detail | Rename / Delete actions | shipped | `feat/redis-edits-tree` — confirm-guarded `RENAMENX` (safe) + `DEL` Tauri commands |
 | Header stats | Round-trip `ms` chip | shipped | `feat/redis-key-meta` — `rtt_ms` measured around the SCAN+TYPE+PTTL pipeline |
 | Scan | Cursor-based paging (load-more) | shipped | `feat/redis-key-meta` — `next_cursor` + Load-more button; merged-and-deduped append |
 | Scan | Pattern + DB change without running the full browse | partial | `redisBrowse` already does this — UI just needs to feed the new values |
@@ -143,8 +144,8 @@ wizard, parsers, and feature catalogs all shipped via
 
 | Area | Status | Notes |
 |---|---|---|
-| Apache structured tree view | hidden | `apache_parse` ships a working AST (7 tests); needs an `ApacheTreeView.tsx` mirror of `CaddyTreeView`. ~200 LOC. |
-| Caddy editable tree mode | partial | Tree currently re-parses on every edit but cards are click-to-expand only — no add/remove/rename ops on AST nodes. ~400 LOC. |
+| Apache structured tree view | shipped | `ApacheTreeView` mirrors `CaddyTreeView` — pencil edit (name + args) / add-top-level / add-child / trash-remove. AST mutations round-trip through `apache_render` to update the dirty buffer. |
+| Caddy editable tree mode | shipped | `CaddyTreeView` supports add-top-level / add-child / pencil-edit (name + args) / trash-remove on every node; AST mutations round-trip through `caddy_render` to update the dirty buffer. |
 | Apache feature catalog beyond 9 | partial | Shipped: identity / TLS / proxy / alias / rewrite / headers / auth / directory / logging. Not yet: `<IfModule>` conditional editor, `LimitRequestBody`, `Timeout`/`KeepAlive`, MPM tuning (StartServers / MaxRequestWorkers), `<RequireAll>` / `<RequireAny>`, `mod_deflate`, `mod_expires`, `Listen`, `ServerTokens` / `ServerSignature`. Each ~60-80 LOC. |
 | Caddy feature catalog beyond 9 | partial | Shipped: tls / reverse_proxy / file_server / encode / headers / basicauth / rewrite / redir / log. Not yet: `handle_path` / `handle` route grouping, `rate_limit`, named matchers (`@matcher`) editor, `import` smart manager, `php_fastcgi`, `try_files`, `templates`, global options block (acme_dns / debug / admin / order). |
 | Diff preview before save | hidden | Show backup → new diff in a `<details>` before the user commits, so prod edits get a sanity-check window. Reuse existing diff infrastructure. |

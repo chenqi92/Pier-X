@@ -33,6 +33,14 @@ serde_yml = "0.0.12"
 # runtime never blocks waiting on a webhook timeout.
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 
+# HMAC-SHA256 for optional webhook payload signing. `hmac` + `sha2`
+# is the canonical Rust pair; `hex` formats the 32-byte digest as
+# the lowercase hex string the receiving service typically expects
+# in the `X-Pier-Signature` header.
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
 # Cross-platform credential storage
 keyring = "3"
 

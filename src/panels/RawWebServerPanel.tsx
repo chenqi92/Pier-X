@@ -55,9 +55,24 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
   const [layout, setLayout] = useState<WebServerLayout | null>(null);
   const [layoutBusy, setLayoutBusy] = useState(false);
   const [layoutError, setLayoutError] = useState("");
-  const [activePath, setActivePath] = useState<string | null>(null);
+  const [activePath, setActivePathState] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(null);
   const [dirty, setDirty] = useState<string | null>(null);
+  // Pending edits for files other than the currently-open one. We
+  // stash dirty-buffer + on-disk baseline keyed by file path so the
+  // user can switch tabs without losing work and so a Save-all run
+  // has the full set in one place. The active file's edit lives in
+  // `dirty` until either (a) the user switches files (we move it
+  // into the map) or (b) a save commits it.
+  const [pendingDirty, setPendingDirty] = useState<Record<string, string>>(
+    {},
+  );
+  const [pendingBaselines, setPendingBaselines] = useState<
+    Record<string, string>
+  >({});
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchResult, setBatchResult] =
+    useState<cmd.WebServerBatchSaveResult | null>(null);
   const [openBusy, setOpenBusy] = useState(false);
   const [openError, setOpenError] = useState("");
   const [saveBusy, setSaveBusy] = useState(false);
@@ -67,6 +82,9 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
     useState<WebServerActionResult | null>(null);
   const [reloadBusy, setReloadBusy] = useState(false);
   const [reloadResult, setReloadResult] =
+    useState<WebServerActionResult | null>(null);
+  const [lintBusy, setLintBusy] = useState(false);
+  const [lintResult, setLintResult] =
     useState<WebServerActionResult | null>(null);
   const [actionError, setActionError] = useState("");
   const [toggleBusy, setToggleBusy] = useState<string | null>(null);
@@ -114,11 +132,42 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sshParams.host, sshParams.port, sshParams.user, kind]);
 
-  // Load active file content.
+  /** Switch the active file. Snapshots the current dirty buffer +
+   *  on-disk baseline into the pending maps so the user can switch
+   *  tabs without losing edits. */
+  const setActivePath = (next: string | null) => {
+    if (activePath && content !== null) {
+      const isDirtyNow = dirty !== null && dirty !== content;
+      setPendingDirty((prev) => {
+        const out = { ...prev };
+        if (isDirtyNow) {
+          out[activePath] = dirty as string;
+        } else {
+          delete out[activePath];
+        }
+        return out;
+      });
+      setPendingBaselines((prev) => ({ ...prev, [activePath]: content }));
+    }
+    setActivePathState(next);
+  };
+
+  // Load active file content. If we already have a baseline + a
+  // pending dirty buffer for this path (because the user is flipping
+  // back to a tab they edited earlier), seed from the maps instead of
+  // hitting the server again.
   useEffect(() => {
     if (!activePath) {
       setContent(null);
       setDirty(null);
+      setSaveResult(null);
+      return;
+    }
+    const cachedBaseline = pendingBaselines[activePath];
+    const cachedDirty = pendingDirty[activePath];
+    if (cachedBaseline !== undefined) {
+      setContent(cachedBaseline);
+      setDirty(cachedDirty !== undefined ? cachedDirty : null);
       setSaveResult(null);
       return;
     }
@@ -269,6 +318,26 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
     }
   };
 
+  /** Deeper static-analysis pass: `apachectl -S` for Apache,
+   *  `caddy adapt --pretty` for Caddy, `nginx -t -q` for nginx.
+   *  Surfaces duplicate ServerNames, fall-through routes, and
+   *  adapter warnings that pass `validate` but indicate sketchy
+   *  config. */
+  const runLint = async () => {
+    if (lintBusy) return;
+    setLintBusy(true);
+    setActionError("");
+    setLintResult(null);
+    try {
+      const result = await cmd.webServerLintHints({ ...sshParams, kind });
+      setLintResult(result);
+    } catch (e) {
+      setActionError(formatError(e));
+    } finally {
+      setLintBusy(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!activePath || !isDirty || saveBusy) return;
     setSaveBusy(true);
@@ -302,6 +371,86 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
       setActionError(formatError(e));
     } finally {
       setSaveBusy(false);
+    }
+  };
+
+  /** All paths currently dirty across the panel — pendingDirty plus
+   *  the active file when its buffer differs from on-disk. */
+  const allDirtyPaths = useMemo(() => {
+    const paths = new Set(Object.keys(pendingDirty));
+    if (activePath && isDirty) paths.add(activePath);
+    return Array.from(paths);
+    // isDirty is derived; tracking dirty/content/activePath suffices.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDirty, activePath, dirty, content]);
+
+  /** Save every dirty file in one shot: write all → validate the
+   *  whole tree once → reload once. On validate-fail the backend
+   *  restores every backup before returning, so the panel state
+   *  needs to refetch for accurate baselines either way. */
+  const handleBatchSave = async () => {
+    if (batchBusy || saveBusy) return;
+    if (allDirtyPaths.length === 0) return;
+    const entries = allDirtyPaths.map((path) => {
+      const draft =
+        path === activePath ? editorValue : pendingDirty[path] ?? "";
+      return { path, content: draft };
+    });
+    setBatchBusy(true);
+    setActionError("");
+    setSaveResult(null);
+    setBatchResult(null);
+    try {
+      const result = await cmd.webServerSaveFilesBatch({
+        ...sshParams,
+        kind,
+        entries,
+      });
+      setBatchResult(result);
+      if (result.validate.ok) {
+        // On success, clear pending edits and refresh baselines for
+        // edited files. The active file's `content` follows suit.
+        setPendingDirty({});
+        const newBaselines: Record<string, string> = {
+          ...pendingBaselines,
+        };
+        for (const e of entries) {
+          newBaselines[e.path] = e.content;
+        }
+        setPendingBaselines(newBaselines);
+        if (activePath) {
+          if (newBaselines[activePath] !== undefined) {
+            setContent(newBaselines[activePath]);
+          }
+          setDirty(null);
+        }
+      } else {
+        // Restore landed; re-read every edited file so baselines and
+        // visible buffers reflect the original on-disk content.
+        const refreshed: Record<string, string> = { ...pendingBaselines };
+        for (const e of entries) {
+          try {
+            const fresh = await cmd.webServerReadFile({
+              ...sshParams,
+              kind,
+              path: e.path,
+            });
+            refreshed[e.path] = fresh;
+          } catch {
+            // best-effort
+          }
+        }
+        setPendingBaselines(refreshed);
+        setPendingDirty({});
+        if (activePath && refreshed[activePath] !== undefined) {
+          setContent(refreshed[activePath]);
+          setDirty(null);
+        }
+      }
+    } catch (e) {
+      setActionError(formatError(e));
+    } finally {
+      setBatchBusy(false);
     }
   };
 
@@ -424,6 +573,17 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
         <button
           type="button"
           className="btn btn--ghost"
+          onClick={() => void runLint()}
+          disabled={lintBusy}
+          title={t(
+            "Run a deeper static analysis (apachectl -S / caddy adapt --pretty / nginx -t -q)",
+          )}
+        >
+          <Sparkles size={11} /> {lintBusy ? t("Linting…") : t("Lint")}
+        </button>
+        <button
+          type="button"
+          className="btn btn--ghost"
           onClick={() => void runReload()}
           disabled={reloadBusy}
           title={t("Reload the daemon")}
@@ -443,11 +603,27 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
           type="button"
           className="btn btn--primary"
           onClick={() => void handleSave()}
-          disabled={!isDirty || saveBusy || !activePath}
+          disabled={!isDirty || saveBusy || batchBusy || !activePath}
           title={t("Save → validate → reload (with auto-restore on fail)")}
         >
           <Save size={11} /> {saveBusy ? t("Saving…") : t("Save")}
         </button>
+        {allDirtyPaths.length > 1 && (
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={() => void handleBatchSave()}
+            disabled={batchBusy || saveBusy}
+            title={t(
+              "Write every dirty file, then run a single validate + reload (auto-restores all on fail)",
+            )}
+          >
+            <Save size={11} />{" "}
+            {batchBusy
+              ? t("Saving all…")
+              : t("Save all ({n})", { n: allDirtyPaths.length })}
+          </button>
+        )}
       </div>
 
       <div className="ws-raw__body">
@@ -457,16 +633,11 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
           loading={layoutBusy && !layout}
           error={layoutError}
           installed={layout?.installed !== false}
+          dirtyPaths={new Set(allDirtyPaths)}
           onPick={(p) => {
-            if (isDirty) {
-              const ok = window.confirm(
-                t("Discard unsaved changes to {file}?").replace(
-                  "{file}",
-                  activePath ?? "",
-                ),
-              );
-              if (!ok) return;
-            }
+            // Switching files no longer discards: the edit is stashed
+            // into the pending map by setActivePath and reappears when
+            // the user comes back.
             setActivePath(p);
           }}
           canToggle={kind === "apache"}
@@ -483,13 +654,9 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
             <div className="ws-raw__editor-head mono">
               <span>{activePath}</span>
               <span className="ws-raw__mode-hint">
-                {kind === "apache"
-                  ? isDirty
-                    ? t("(unsaved — tree shows draft)")
-                    : t("(read-only view)")
-                  : isDirty
-                    ? t("(unsaved — tree shows draft)")
-                    : t("(editable — changes update the buffer)")}
+                {isDirty
+                ? t("(unsaved — tree shows draft)")
+                : t("(editable — changes update the buffer)")}
               </span>
             </div>
             {kind === "caddy" ? (
@@ -498,7 +665,10 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
                 onChange={handleTreeChange}
               />
             ) : (
-              <ApacheTreeView content={editorValue} />
+              <ApacheTreeView
+                content={editorValue}
+                onChange={handleTreeChange}
+              />
             )}
           </div>
         ) : (kind === "caddy" || kind === "apache") &&
@@ -557,6 +727,8 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
         validateResult={validateResult}
         reloadResult={reloadResult}
         saveResult={saveResult}
+        batchResult={batchResult}
+        lintResult={lintResult}
         t={t}
       />
 
@@ -585,6 +757,7 @@ function FileTree({
   canToggle,
   toggleBusy,
   onToggle,
+  dirtyPaths,
   t,
 }: {
   files: WebServerFile[];
@@ -596,6 +769,7 @@ function FileTree({
   canToggle: boolean;
   toggleBusy: string | null;
   onToggle: (f: WebServerFile) => void;
+  dirtyPaths: Set<string>;
   t: (s: string) => string;
 }) {
   // Group by section.
@@ -635,6 +809,7 @@ function FileTree({
           canToggle={false}
           toggleBusy={toggleBusy}
           onToggle={onToggle}
+          dirtyPaths={dirtyPaths}
         />
       )}
       {sections.confd.length > 0 && (
@@ -646,6 +821,7 @@ function FileTree({
           canToggle={false}
           toggleBusy={toggleBusy}
           onToggle={onToggle}
+          dirtyPaths={dirtyPaths}
         />
       )}
       {sections.sites.length > 0 && (
@@ -657,6 +833,7 @@ function FileTree({
           canToggle={canToggle}
           toggleBusy={toggleBusy}
           onToggle={onToggle}
+          dirtyPaths={dirtyPaths}
         />
       )}
       {sections.other.length > 0 && (
@@ -668,6 +845,7 @@ function FileTree({
           canToggle={false}
           toggleBusy={toggleBusy}
           onToggle={onToggle}
+          dirtyPaths={dirtyPaths}
         />
       )}
     </div>
@@ -682,6 +860,7 @@ function FileGroup({
   canToggle,
   toggleBusy,
   onToggle,
+  dirtyPaths,
 }: {
   title: string;
   files: WebServerFile[];
@@ -690,6 +869,7 @@ function FileGroup({
   canToggle: boolean;
   toggleBusy: string | null;
   onToggle: (f: WebServerFile) => void;
+  dirtyPaths: Set<string>;
 }) {
   return (
     <div className="ws-raw__group">
@@ -697,6 +877,7 @@ function FileGroup({
       {files.map((f) => {
         const isSite = f.kind.kind === "site-available";
         const enabled = isSite && (f.kind as { enabled: boolean }).enabled;
+        const isDirty = dirtyPaths.has(f.path);
         return (
           <div
             key={f.path}
@@ -708,9 +889,10 @@ function FileGroup({
               type="button"
               className="ws-raw__file-name mono"
               onClick={() => onPick(f.path)}
-              title={f.path}
+              title={isDirty ? `${f.path} · modified` : f.path}
             >
               <FileText size={10} /> {f.label}
+              {isDirty && <span className="ws-raw__file-dirty">●</span>}
             </button>
             {isSite && canToggle && (
               <button
@@ -798,15 +980,26 @@ function StatusBar({
   validateResult,
   reloadResult,
   saveResult,
+  batchResult,
+  lintResult,
   t,
 }: {
   actionError: string;
   validateResult: WebServerActionResult | null;
   reloadResult: WebServerActionResult | null;
   saveResult: WebServerSaveResult | null;
+  batchResult: cmd.WebServerBatchSaveResult | null;
+  lintResult: WebServerActionResult | null;
   t: (s: string) => string;
 }) {
-  if (!actionError && !validateResult && !reloadResult && !saveResult) {
+  if (
+    !actionError &&
+    !validateResult &&
+    !reloadResult &&
+    !saveResult &&
+    !batchResult &&
+    !lintResult
+  ) {
     return null;
   }
   return (
@@ -832,10 +1025,60 @@ function StatusBar({
           output={reloadResult.output}
         />
       )}
-      {saveResult && (
-        <SaveLine result={saveResult} t={t} />
+      {saveResult && <SaveLine result={saveResult} t={t} />}
+      {batchResult && <BatchSaveLine result={batchResult} t={t} />}
+      {lintResult && (
+        <ResultLine
+          label={t("Lint")}
+          ok={lintResult.ok}
+          exit={lintResult.exitCode}
+          output={lintResult.output || t("(no warnings)")}
+        />
       )}
     </div>
+  );
+}
+
+function BatchSaveLine({
+  result,
+  t,
+}: {
+  result: cmd.WebServerBatchSaveResult;
+  t: (
+    s: string,
+    vars?: Record<string, string | number | null | undefined>,
+  ) => string;
+}) {
+  const ok = result.validate.ok && result.reloaded;
+  const restoreFails = result.restoreErrors.filter((e) => e.length > 0).length;
+  const summary = ok
+    ? t("Save all · {n} files written, validate + reload OK", {
+        n: result.backupPaths.length,
+      })
+    : result.validate.ok
+      ? t(
+          "Save all · {n} files written, reload failed (config still valid)",
+          { n: result.backupPaths.length },
+        )
+      : restoreFails === 0
+        ? t("Save all · validate failed, all {n} backups restored", {
+            n: result.backupPaths.length,
+          })
+        : t(
+            "Save all · validate failed and {fails}/{n} restore steps had errors",
+            { fails: restoreFails, n: result.backupPaths.length },
+          );
+  return (
+    <ResultLine
+      label={t("Save all")}
+      ok={ok}
+      exit={result.validate.exitCode}
+      output={
+        result.validate.output
+          ? `${summary}\n${result.validate.output}`
+          : summary
+      }
+    />
   );
 }
 

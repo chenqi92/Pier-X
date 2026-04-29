@@ -14,6 +14,7 @@ import * as cmd from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import {
   compileLogSource,
+  compileLogSourceBackfill,
   describeLogSource,
   findPreset,
   isLogLikeFilename,
@@ -89,6 +90,7 @@ function LogViewerPanelBody({ tab }: Props) {
   const [streamId, setStreamId] = useState<string | null>(null);
   const [events, setEvents] = useState<Enriched[]>([]);
   const [busy, setBusy] = useState(false);
+  const [backfillBusy, setBackfillBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [follow, setFollow] = useState(true);
@@ -158,6 +160,53 @@ function LogViewerPanelBody({ tab }: Props) {
     if (!resolvedId) return;
     await cmd.logStreamStop(resolvedId).catch(() => {});
     setStreamId((current) => (current === resolvedId ? null : current));
+  }
+
+  /** Run a one-shot historical fetch for the last `windowMinutes`.
+   *  Stops the live stream (if any), starts a new finite stream with
+   *  the back-fill command, and lets the existing drain loop pull the
+   *  events. The exit event from the finite command will naturally
+   *  flip `streaming` to false at the end. We don't auto-restart the
+   *  live stream — the user backfilled to inspect, restarting tail -F
+   *  would scroll them away from what they just loaded. */
+  async function runBackfill(windowMinutes: number) {
+    if (!hasSsh || backfillBusy) return;
+    const command = compileLogSourceBackfill(source, windowMinutes);
+    if (!command) {
+      setError(t("This source can't be back-filled."));
+      return;
+    }
+    setBackfillBusy(true);
+    setError("");
+    setNotice("");
+    if (streamId) {
+      await stopStream(streamId);
+    }
+    try {
+      const nextId = await cmd.logStreamStart({
+        host: sshArgs.host,
+        port: sshArgs.port,
+        user: sshArgs.user,
+        authMode: sshArgs.authMode,
+        password: sshArgs.password,
+        keyPath: sshArgs.keyPath,
+        command,
+        savedConnectionIndex: sshArgs.savedConnectionIndex,
+      });
+      setEvents([]);
+      counter.current = 0;
+      rateEma.current = 0;
+      lastDrainAt.current = null;
+      setLinesPerSecond(0);
+      setStreamId(nextId);
+      setNotice(
+        t("Backfilling {n} min of history.", { n: windowMinutes }),
+      );
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setBackfillBusy(false);
+    }
   }
 
   async function startStream() {
@@ -388,6 +437,43 @@ function LogViewerPanelBody({ tab }: Props) {
             {streaming ? t("Stop") : busy ? t("Starting...") : t("Start")}
           </button>
         </div>
+
+        {/* Backfill row — one-shot historical fetch over the chosen
+            window. Disabled when the source can't sensibly back-fill
+            (custom command or empty file path). */}
+        {(() => {
+          const canBackfill =
+            !!hasSsh &&
+            !backfillBusy &&
+            compileLogSourceBackfill(source, 1).length > 0;
+          return (
+            <div className="lg-backfill mono">
+              <span className="muted">{t("Backfill")}:</span>
+              {[
+                { mins: 1, label: "1m" },
+                { mins: 15, label: "15m" },
+                { mins: 60, label: "1h" },
+                { mins: 1440, label: "24h" },
+              ].map((b) => (
+                <button
+                  key={b.label}
+                  type="button"
+                  className="btn is-ghost is-compact"
+                  disabled={!canBackfill}
+                  onClick={() => void runBackfill(b.mins)}
+                  title={t("Run a one-shot historical fetch for the last {n}", {
+                    n: b.label,
+                  })}
+                >
+                  {b.label}
+                </button>
+              ))}
+              {backfillBusy && (
+                <span className="muted">{t("Backfilling…")}</span>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Secondary row — changes by mode */}
         {source.mode === "file" && (

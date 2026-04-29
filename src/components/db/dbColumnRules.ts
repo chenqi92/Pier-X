@@ -28,6 +28,10 @@ export type GridColumnMeta = {
   numeric: boolean;
   /** Part of the primary key — required to identify rows for UPDATE/DELETE. */
   pk: boolean;
+  /** Pre-computed list of valid values when the column's type is an
+   *  enum (PG only for now). The grid renders a `<datalist>` so the
+   *  edit cell behaves like a dropdown. */
+  enumValues?: string[];
 };
 
 export type DbMutation =
@@ -328,13 +332,26 @@ export function gridColumnsFromMysql(cols: MysqlColumnView[]): GridColumnMeta[] 
   }));
 }
 
-export function gridColumnsFromPostgres(cols: PostgresColumnView[]): GridColumnMeta[] {
-  return cols.map((c) => ({
-    name: c.name,
-    type: c.columnType,
-    numeric: isNumericType(c.columnType),
-    pk: c.key.toUpperCase() === "PRI",
-  }));
+export function gridColumnsFromPostgres(
+  cols: PostgresColumnView[],
+  enums?: { name: string; values: string[] }[],
+): GridColumnMeta[] {
+  // Build a fast type-name lookup. PG's `format_type` may emit the
+  // enum name with `[]` appended for arrays, so we strip that off
+  // before matching — array editing lands on the same dropdown.
+  const enumMap = new Map<string, string[]>();
+  for (const e of enums ?? []) enumMap.set(e.name, e.values);
+  return cols.map((c) => {
+    const baseType = c.columnType.replace(/\[\]$/, "");
+    const enumValues = enumMap.get(baseType);
+    return {
+      name: c.name,
+      type: c.columnType,
+      numeric: isNumericType(c.columnType),
+      pk: c.key.toUpperCase() === "PRI",
+      enumValues,
+    };
+  });
 }
 
 export function gridColumnsFromSqlite(cols: SqliteColumnView[]): GridColumnMeta[] {

@@ -2027,6 +2027,8 @@ export const zhExtra: Record<string, string> = {
   "PAUSED": "已暂停",
   "Bundle is paused — current package will start as soon as you click Resume.":
     "Bundle 已暂停——下一包会在点击「继续」后立即开始。",
+  "Bundle paused at step {step}": "Bundle 在第 {step} 步暂停",
+  "Next package: {pkg}": "下一个包：{pkg}",
   "Next: {pkg}": "下一个：{pkg}",
   "Webhook failed: {target}": "Webhook 失败：{target}",
   "Open Failures": "打开失败列表",
@@ -2334,4 +2336,262 @@ export const zhExtra: Record<string, string> = {
   // Nginx features — common labels
   "includeSubDomains": "includeSubDomains",
   "preload": "preload",
+
+  // Hosts bus / Software webhook presets
+  "Opened {n}/{total} SSH tabs": "已打开 {n}/{total} 个 SSH 标签",
+  "Discord with output tail": "Discord（含命令尾部输出）",
+
+  // Compose template refresh cron
+  "Refresh cron line": "刷新 cron 行",
+  "Copy a cron line that runs `docker compose pull && up -d` against this stack. Paste into `crontab -e` on the host so images stay refreshed even when Pier-X is closed.":
+    "复制 cron 行（`docker compose pull && up -d`）。在主机上 `crontab -e` 粘贴即可在 Pier-X 关闭时自动刷新镜像。",
+  "Template not found.": "模板未找到。",
+  "Copied refresh cron line for {name}. Paste into `crontab -e` on the host (default cadence: daily at 03:00 — edit before saving to suit your needs).":
+    "已复制 {name} 的刷新 cron 行。请在主机 `crontab -e` 粘贴（默认每日 03:00 执行——保存前可修改为合适的频率）。",
+
+  // Bundle cron line export
+  "Cron line": "Cron 行",
+  "Build a cron line for this schedule + bundle and copy it to the clipboard. Paste into `crontab -e` on the target host so the bundle runs even when Pier-X is closed.":
+    "为该调度 + bundle 生成 cron 行并复制到剪贴板。在目标主机上 `crontab -e` 粘贴即可在 Pier-X 关闭时也能运行。",
+  "Connect to a host first.": "请先连接主机。",
+  "Could not build install command for any package.": "无法生成任何包的安装命令。",
+  "Schedule cannot be expressed as a cron line.": "此调度无法表达为 cron 行。",
+  "Copied cron line — paste into `crontab -e` on the host.":
+    "已复制 cron 行——请在主机上 `crontab -e` 粘贴。",
+  "Could not build cron line: {err}": "生成 cron 行失败：{err}",
+
+  // Bundle schedules
+  "Schedules": "调度",
+  "Schedule a bundle install on an interval / daily / weekly timer (only fires while Pier-X is open).":
+    "按间隔 / 每日 / 每周定时执行 bundle（仅在 Pier-X 打开时触发）",
+  "Bundle schedules": "Bundle 调度",
+  "Run a bundle on a timer. Only fires while Pier-X is open and this panel is mounted for the matching host.":
+    "按计划运行 bundle。仅当 Pier-X 打开且对应主机面板挂载时触发。",
+  "Connect to a host to manage its schedules.": "请先连接主机以管理调度。",
+  "No bundles configured for this host.": "此主机未配置 bundle。",
+  'No schedules yet — click "Add schedule".': "暂无调度——点击「新增调度」。",
+  "Add schedule": "新增调度",
+  "Schedule on": "已启用",
+  "Schedule off": "已停用",
+  "Every N min": "每 N 分钟",
+  "Daily": "每日",
+  "Weekly": "每周",
+  "Every": "每",
+  "min": "分钟",
+  "Weekday": "星期",
+  "At": "于",
+  "Sun": "周日",
+  "Mon": "周一",
+  "Tue": "周二",
+  "Wed": "周三",
+  "Thu": "周四",
+  "Fri": "周五",
+  "Sat": "周六",
+  "Last run: {when}": "上次运行：{when}",
+  "Bundle not found": "Bundle 未找到",
+
+  // Bundle rollback
+  "Bundle failed after installing {n} package(s). Roll back?":
+    "Bundle 在已安装 {n} 个包后失败。是否回滚？",
+  "Keep installs": "保留已安装",
+  "Roll back {n}": "回滚 {n} 个",
+  "Bundle rolled back: {name}": "Bundle 已回滚：{name}",
+  "{n} package(s) reverted": "已回滚 {n} 个包",
+
+  // FK row navigation
+  "{ref} ({summary})": "{ref}（{summary}）",
+
+  // Log viewer backfill
+  "Backfill": "回填",
+  "Backfilling…": "回填中…",
+  "Backfilling {n} min of history.": "正在回填最近 {n} 分钟历史。",
+  "This source can't be back-filled.": "此源不支持回填。",
+  "Run a one-shot historical fetch for the last {n}":
+    "拉取最近 {n} 的历史日志（一次性）",
+
+  // DB grid TSV paste insert
+  "Paste TSV": "粘贴 TSV",
+  "Paste a TSV block from the clipboard — each line becomes a pending INSERT.":
+    "从剪贴板粘贴 TSV 块——每行作为一条待提交的 INSERT。",
+  "Paste TSV (one row per line, columns separated by Tab):":
+    "粘贴 TSV（每行一条记录，列之间用 Tab 分隔）：",
+
+  // DB grid column reorder
+  "Reset order": "重置列顺序",
+  "Restore the original column order from the source query.":
+    "恢复查询返回的原始列顺序。",
+
+  // DB grid column resize
+  "Drag to resize · double-click to reset": "拖动调整列宽 · 双击重置",
+
+  // Terminal snippets
+  "Snippets": "片段",
+  "Add snippet…": "新增片段…",
+  "Manage snippets…": "管理片段…",
+  "(+{n} more — open manager)": "（还有 {n} 条 — 打开管理器）",
+  "Terminal snippets": "终端片段",
+  "Saved per-user. Right-click the terminal to paste a snippet.":
+    "按用户保存。在终端右键即可粘贴片段。",
+  "No snippets yet. Add one — e.g. `journalctl -u nginx -f` or `docker compose logs -f --tail=200`.":
+    "暂无片段。新增一个吧——例如 `journalctl -u nginx -f` 或 `docker compose logs -f --tail=200`。",
+  "Run on paste": "粘贴后立即执行",
+  "Command body": "命令内容",
+  "Add snippet": "新增片段",
+
+  // SFTP remote→remote copy
+  "Copy to other host…": "复制到其他主机…",
+  "Copy to other host": "复制到其他主机",
+  "Target host": "目标主机",
+  "Target path": "目标路径",
+  "(pick a saved connection)": "（选择已保存的连接）",
+  "Leave empty to use the saved keychain entry.":
+    "留空则使用已保存的钥匙串密码。",
+  "Target is the same as the source.": "目标与源是同一主机。",
+  "Copied {name} to {host}.": "已将 {name} 复制到 {host}。",
+
+  // SQL history search
+  "Filter history…": "搜索历史…",
+  "No history entries match this filter.": "没有匹配此过滤条件的历史记录。",
+  "(no history yet)": "（暂无历史）",
+
+  // Terminal broadcast
+  "Broadcast to terminals…": "广播到终端…",
+  "Broadcast to terminals": "广播到终端",
+  "Pick at least one live SSH tab.": "至少选择一个活跃的 SSH 标签。",
+  "Type a command first.": "请先输入命令。",
+  "Broadcast sent: {ok} ok, {bad} failed":
+    "广播已发送：{ok} 成功，{bad} 失败",
+  "No live SSH tabs. Open a connection first, then come back.":
+    "没有活跃的 SSH 标签。请先打开一个连接再回来。",
+  "Targets": "目标",
+  "(not connected)": "（未连接）",
+  "e.g. uptime ; df -h ; sudo journalctl -u nginx --since '5 min ago'":
+    "例如：uptime ; df -h ; sudo journalctl -u nginx --since '5 min ago'",
+  "Append newline (run immediately on each host).":
+    "追加换行（在每台主机上立即执行）。",
+  "Verify before sending — this fans the same command into every checked tab. ⌘/Ctrl+Enter to send.":
+    "发送前请确认——同一命令会被发送到每个勾选的标签。⌘/Ctrl+Enter 发送。",
+  "Send to {n}": "发送到 {n} 个",
+
+  // SSH connection bulk-connect
+  "Open all ({n})": "全部打开（{n}）",
+  "Probe all ({n})": "全部探测（{n}）",
+  "Broadcast to group ({n})": "广播到群组（{n}）",
+
+  // SSH connection import/export
+  "Import SSH connections from a JSON file": "从 JSON 文件导入 SSH 连接",
+  "Export SSH connections to a JSON file (passwords stripped)":
+    "导出 SSH 连接到 JSON 文件（不含密码）",
+  "Export SSH connections": "导出 SSH 连接",
+  "Import SSH connections": "导入 SSH 连接",
+  "Exported {n} SSH connection(s).": "已导出 {n} 个 SSH 连接。",
+  "File doesn't look like an SSH connection list.":
+    "文件格式不像 SSH 连接列表。",
+  "Imported {added} new ({skipped} skipped).":
+    "已导入 {added} 个新连接（{skipped} 个跳过）。",
+
+  // SSH connection env tag
+  "Env tag": "环境标签",
+  "prod / staging / dev / local": "prod / staging / dev / local",
+
+  // Hosts Bus bulk webhook
+  "Fire test webhook": "测试 webhook",
+  "Firing…": "发送中…",
+  "Fire a test webhook for every configured endpoint, once per selected host":
+    "对每个已配置的 webhook 端点，按选中的主机各发一次测试",
+  "No active webhooks configured. Add one in Software → Webhooks first.":
+    "尚未配置有效 webhook。请在「软件 → Webhooks」中先添加。",
+  "Fired webhooks: {ok} ok, {bad} failed":
+    "Webhook 已发送：{ok} 成功，{bad} 失败",
+  "Could not load webhook config: {err}":
+    "无法加载 webhook 配置：{err}",
+
+  // Webhook import/export
+  "Export…": "导出…",
+  "Import…": "导入…",
+  "Save the current webhook config to a JSON file — share or move between machines.":
+    "把当前 webhook 配置保存为 JSON 文件——便于在不同机器间共享或迁移。",
+  "Load a webhook JSON exported from this dialog (merges into the current list).":
+    "加载本对话框导出的 webhook JSON（合并到当前列表）。",
+  "Export webhook config": "导出 webhook 配置",
+  "Import webhook config": "导入 webhook 配置",
+  "Exported {n} webhook(s).": "已导出 {n} 个 webhook。",
+  "Exported {n} webhook(s) — secrets are base64-obfuscated, NOT encrypted. Verify the recipient.":
+    "已导出 {n} 个 webhook —— 密钥仅做 base64 混淆而非加密。请确认接收方再分享。",
+  "Exported {n} webhook(s) with secrets stripped. The recipient must re-enter HMAC / auth values after import.":
+    "已导出 {n} 个 webhook（已剔除密钥）。接收方导入后需重新填写 HMAC / 认证值。",
+  "{n} webhook(s) selected. Secrets in this config: {hmac} HMAC, {hdr} auth-style headers.":
+    "已选择 {n} 个 webhook。其中包含的密钥：{hmac} 个 HMAC，{hdr} 个认证类请求头。",
+  "Include sensitive fields (HMAC secrets, auth headers).":
+    "包含敏感字段（HMAC 密钥、认证请求头）。",
+  "Secrets will be base64-encoded with a `_pierx_b64:` prefix — this is OBFUSCATION, not encryption. Anyone with the file can decode them. Verify the recipient before sharing.":
+    "密钥会以 `_pierx_b64:` 前缀做 base64 编码——这是混淆而非加密，任何人拿到文件都能还原。分享前请确认接收方。",
+  "Sensitive fields will be stripped. The recipient re-types HMAC / auth values after importing.":
+    "敏感字段会被移除。接收方导入后需手动填写 HMAC / 认证值。",
+  "Export with secrets": "包含密钥导出",
+  "Export redacted": "脱敏导出",
+  "File doesn't look like a webhook config.": "文件格式不像 webhook 配置。",
+  "Imported {n} new webhook(s) ({skipped} duplicate skipped).":
+    "已导入 {n} 个新 webhook（{skipped} 个重复已跳过）。",
+
+  // Webhook HMAC
+  "HMAC secret": "HMAC 密钥",
+  "Empty = no signing. Set a shared secret to send X-Pier-Signature.":
+    "留空不签名；设置共享密钥后会发送 X-Pier-Signature 头。",
+
+  // Webhook custom headers
+  "Custom headers": "自定义请求头",
+  "No extra headers. Content-Type is always application/json.":
+    "无额外请求头。Content-Type 始终为 application/json。",
+  "Header name (e.g. Authorization)": "请求头名（如 Authorization）",
+  "Value (e.g. Bearer xyz123)": "值（如 Bearer xyz123）",
+  "Add header": "新增请求头",
+
+  // Webhook template lint
+  "Invalid JSON: {err}": "JSON 不合法：{err}",
+  "Unknown placeholders: {names}": "未知占位符：{names}",
+
+  // Web Server lint
+  "Lint": "深检",
+  "Linting…": "深检中…",
+  "Run a deeper static analysis (apachectl -S / caddy adapt --pretty / nginx -t -q)":
+    "运行深度静态分析（apachectl -S / caddy adapt --pretty / nginx -t -q）",
+  "(no warnings)": "（无告警）",
+
+  // Web Server batch save
+  "Save all ({n})": "全部保存（{n}）",
+  "Saving all…": "正在保存全部…",
+  "Save all": "全部保存",
+  "Write every dirty file, then run a single validate + reload (auto-restores all on fail)":
+    "写入所有已修改文件，再统一校验并重载（失败时全部回滚）",
+  "Save all · {n} files written, validate + reload OK":
+    "全部保存 · 已写入 {n} 个文件，校验与重载均通过",
+  "Save all · {n} files written, reload failed (config still valid)":
+    "全部保存 · 已写入 {n} 个文件，但 reload 失败（配置仍然有效）",
+  "Save all · validate failed, all {n} backups restored":
+    "全部保存 · 校验失败，已回滚全部 {n} 个备份",
+  "Save all · validate failed and {fails}/{n} restore steps had errors":
+    "全部保存 · 校验失败，且有 {fails}/{n} 个回滚步骤报错",
+
+  // EXPLAIN ANALYZE plan tree
+  "Plan": "执行计划",
+  "EXPLAIN ANALYZE — render as plan tree": "EXPLAIN ANALYZE — 以计划树呈现",
+  "EXPLAIN ANALYZE · {elapsed} ms": "EXPLAIN ANALYZE · {elapsed} ms",
+  "EXPLAIN FORMAT=JSON · {elapsed} ms": "EXPLAIN FORMAT=JSON · {elapsed} ms",
+  "EXPLAIN returned no plan JSON.": "EXPLAIN 未返回计划 JSON。",
+  "Could not parse the plan JSON.": "无法解析计划 JSON。",
+  "Estimated total cost": "估算总成本",
+  "Actual total time, ms": "实际总耗时（ms）",
+  "Close plan view": "关闭计划视图",
+  "Show raw JSON for this node": "查看此节点的原始 JSON",
+  "Hide raw JSON": "隐藏原始 JSON",
+  "vs prev": "vs 上次",
+  "Comparing against previous run": "正在与上次运行对比",
+  "Rows change vs previous run": "对比上次运行的 rows 变化",
+  "Time change vs previous run": "对比上次运行的耗时变化",
+  "History: {n} run(s)": "历史：{n} 次",
+  "Diff vs previous run": "对比上次运行",
+  "Hide diff": "隐藏对比",
+  "Annotate each node with delta vs previous run":
+    "在每个节点上标注与上次运行的差值",
 };

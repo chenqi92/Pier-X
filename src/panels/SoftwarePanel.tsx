@@ -1,9 +1,11 @@
 import {
+  AlertTriangle,
   BellRing,
   Check,
   ChevronDown,
   ChevronRight,
   Circle,
+  Clock,
   Copy,
   Download,
   FileText,
@@ -12,6 +14,7 @@ import {
   MoreHorizontal,
   Package,
   Play,
+  Plus,
   RefreshCw,
   RotateCw,
   Search,
@@ -45,6 +48,17 @@ import type {
 import { describeInstallOutcome } from "../lib/softwareInstall";
 import { buildRepoCleanupCommand } from "../lib/repoCleanup";
 import { writeClipboardText } from "../lib/clipboard";
+import { desktopNotify } from "../lib/notify";
+import { toast } from "../stores/useToastStore";
+import {
+  buildCronLine,
+  loadSchedules,
+  saveSchedules,
+  isDue,
+  describeSchedule,
+  makeScheduleId,
+  type BundleSchedule,
+} from "../lib/bundleSchedule";
 import { effectiveSshTarget, type TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
@@ -309,6 +323,28 @@ function SoftwarePanelBody({ tab }: Props) {
    *  "停止整条链" buttons can call `software_install_cancel`
    *  against the right id. */
   const bundleCurrentInstallIdRef = useRef<string | null>(null);
+  // Packages that crossed `not-installed → installed` during the
+  // current `runBundle`. Used by the rollback CTA — when the bundle
+  // bails on a real failure (not user-initiated skip / abort) we
+  // offer to reverse-uninstall exactly these so partial state from
+  // a half-finished run doesn't linger. Cleared on every fresh
+  // bundle start.
+  const bundleFreshlyInstalledRef = useRef<string[]>([]);
+  const [pendingRollback, setPendingRollback] = useState<{
+    bundleId: string;
+    bundleName: string;
+    packageIds: string[];
+  } | null>(null);
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
+  const [schedules, setSchedules] = useState<BundleSchedule[]>(() =>
+    loadSchedules(),
+  );
+  // Bundles are looked up by id. Keep the live `runBundle` reference
+  // in a ref so the scheduler tick fires the latest closure (including
+  // any state captured at fire time) rather than a stale one.
+  const runBundleRef = useRef<((b: SoftwareBundle) => Promise<void>) | null>(
+    null,
+  );
   /** Detected mirror state for this host. `null` = not loaded yet. */
   const [mirrorState, setMirrorState] = useState<MirrorState | null>(null);
   const [mirrorCatalog, setMirrorCatalog] = useState<MirrorChoice[]>([]);
@@ -1020,7 +1056,10 @@ function SoftwarePanelBody({ tab }: Props) {
     bundlePauseRef.current = false;
     bundleSkipRef.current = false;
     bundleAbortRef.current = false;
+    bundleFreshlyInstalledRef.current = [];
+    setPendingRollback(null);
     setBundlePaused(false);
+    let bundleFailed = false;
     try {
       let order = bundle.packageIds;
       try {
@@ -1124,9 +1163,144 @@ function SoftwarePanelBody({ tab }: Props) {
             continue;
           }
           // Real failure or unsolicited cancellation — bail out.
+          bundleFailed = true;
+          break;
+        }
+        // Fresh install (was not installed before, is now). Tracked
+        // separately so the rollback CTA only touches packages this
+        // run actually changed.
+        if (!cur?.installed) {
+          bundleFreshlyInstalledRef.current.push(pkgId);
+        }
+      }
+    } finally {
+      // If the bundle bailed mid-loop (real failure, not user abort)
+      // and we'd already crossed at least one package into installed
+      // state, surface a rollback CTA. The user can ignore it (close
+      // the banner) or accept it to reverse-uninstall the partial
+      // run. We only surface on *failure* — a successful bundle
+      // should leave its installs in place.
+      if (
+        bundleFailed &&
+        !bundleAbortRef.current &&
+        bundleFreshlyInstalledRef.current.length > 0
+      ) {
+        setPendingRollback({
+          bundleId: bundle.id,
+          bundleName: bundle.displayName || bundle.id,
+          packageIds: [...bundleFreshlyInstalledRef.current],
+        });
+      }
+      setBundleRunning(null);
+      setBundleProgress(null);
+      bundlePauseRef.current = false;
+      bundleSkipRef.current = false;
+      bundleAbortRef.current = false;
+      bundleCurrentInstallIdRef.current = null;
+      bundleFreshlyInstalledRef.current = [];
+      setBundlePaused(false);
+    }
+  }
+
+  /** Roll back the partial state of a failed bundle by uninstalling
+   *  exactly the packages this run installed, in reverse order.
+   *  Differs from `runBundleUninstall` in that it operates on a
+   *  caller-supplied list rather than the whole bundle membership,
+   *  so packages that were already installed before the bundle ran
+   *  stay put. */
+  async function runBundleRollback(
+    bundleId: string,
+    bundleName: string,
+    packageIds: string[],
+  ) {
+    if (!sshParams || !swKey || bundleRunning) return;
+    setPendingRollback(null);
+    setBundleRunning(bundleId);
+    setBundleProgress({
+      current: 0,
+      total: packageIds.length,
+      skipped: 0,
+      packageId: null,
+      nextPackageId: null,
+      mode: "uninstalling",
+    });
+    bundlePauseRef.current = false;
+    bundleSkipRef.current = false;
+    bundleAbortRef.current = false;
+    setBundlePaused(false);
+    try {
+      const reversed = [...packageIds].reverse();
+      for (let i = 0; i < reversed.length; i++) {
+        // eslint-disable-next-line no-await-in-loop
+        while (bundlePauseRef.current && !bundleAbortRef.current) {
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        if (bundleAbortRef.current) break;
+
+        const pkgId = reversed[i];
+        const nextPkgId = reversed[i + 1] ?? null;
+        const descriptor = registry.find((d) => d.id === pkgId);
+        if (!descriptor) {
+          setBundleProgress((p) =>
+            p
+              ? { ...p, current: i + 1, skipped: p.skipped + 1, nextPackageId: nextPkgId }
+              : p,
+          );
+          continue;
+        }
+        const cur = statuses[pkgId];
+        if (!cur?.installed) {
+          // Already gone (user uninstalled mid-rollback or it never
+          // landed cleanly). Skip without counting as a failure.
+          setBundleProgress((p) =>
+            p
+              ? { ...p, current: i + 1, skipped: p.skipped + 1, packageId: pkgId, nextPackageId: nextPkgId }
+              : p,
+          );
+          continue;
+        }
+        setBundleProgress((p) =>
+          p
+            ? { ...p, current: i + 1, packageId: pkgId, nextPackageId: nextPkgId }
+            : p,
+        );
+        bundleSkipRef.current = false;
+        // eslint-disable-next-line no-await-in-loop
+        const uninstallPromise = runUninstall(descriptor, {
+          purgeConfig: false,
+          autoremove: false,
+          removeDataDirs: false,
+          removeUpstreamSource: false,
+        });
+        const captureId = () => {
+          const live =
+            useSoftwareStore.getState().get(swKey).activity[pkgId];
+          if (live?.installId) {
+            bundleCurrentInstallIdRef.current = live.installId;
+          }
+        };
+        queueMicrotask(captureId);
+        const captureTimer = window.setTimeout(captureId, 50);
+        // eslint-disable-next-line no-await-in-loop
+        await uninstallPromise;
+        window.clearTimeout(captureTimer);
+        bundleCurrentInstallIdRef.current = null;
+        const after =
+          useSoftwareStore.getState().get(swKey).statuses[pkgId];
+        if (after?.installed) {
+          if (bundleSkipRef.current) {
+            bundleSkipRef.current = false;
+            continue;
+          }
           break;
         }
       }
+      desktopNotify(
+        "info",
+        t("Bundle rolled back: {name}", { name: bundleName }),
+        t("{n} package(s) reverted", { n: packageIds.length }),
+      );
     } finally {
       setBundleRunning(null);
       setBundleProgress(null);
@@ -1138,13 +1312,80 @@ function SoftwarePanelBody({ tab }: Props) {
     }
   }
 
+  // Keep a fresh reference so the schedule ticker always invokes the
+  // latest closure (state, refs, swKey).
+  runBundleRef.current = runBundle;
+
+  /** Persist schedules whenever they change. Debouncing isn't worth
+   *  it — the dialog edits are user-paced. */
+  useEffect(() => {
+    saveSchedules(schedules);
+  }, [schedules]);
+
+  /** 60-second tick: scan schedules for the current swKey, fire any
+   *  that are due. We mark `lastRunAt` BEFORE firing so a slow
+   *  install doesn't trigger a second concurrent run on the next
+   *  tick (`bundleRunning` would also gate it, but the timestamp
+   *  bump is what prevents re-fire after the run finishes). */
+  useEffect(() => {
+    if (!swKey) return undefined;
+    const tick = () => {
+      const now = new Date();
+      let fired: string | null = null;
+      setSchedules((prev) => {
+        const updated = prev.map((s) => ({ ...s }));
+        for (const sched of updated) {
+          if (sched.swKey !== swKey) continue;
+          if (!isDue(sched, now)) continue;
+          if (bundleRunning) continue;
+          if (fired) continue; // one fire per tick to avoid a stampede
+          const bundle = bundles.find((b) => b.id === sched.bundleId);
+          if (!bundle) continue;
+          sched.lastRunAt = now.getTime();
+          fired = sched.bundleId;
+          // Fire after the state update settles. Using the ref so we
+          // always invoke the latest runBundle closure.
+          queueMicrotask(() => {
+            runBundleRef.current?.(bundle);
+          });
+        }
+        return updated;
+      });
+    };
+    // First tick after mount waits a moment so we don't run during
+    // initial render churn.
+    const initial = window.setTimeout(tick, 5_000);
+    const timer = window.setInterval(tick, 60_000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
+  }, [swKey, bundles, bundleRunning]);
+
   /** Toggle the bundle's pause flag. The next iteration of the
    *  loop blocks at the pause gate until the flag clears; the
    *  current package keeps running to completion (a half-cancelled
-   *  apt is worse than waiting one more `apt-get install`). */
+   *  apt is worse than waiting one more `apt-get install`).
+   *
+   *  Pause-on transitions also fire a desktop notification: long
+   *  install runs are exactly the case where the user steps away
+   *  to do something else, and clicking pause silently then
+   *  forgetting about it is a real footgun. The notification
+   *  carries the current step so they remember where the bundle
+   *  was when they come back. */
   function togglePauseBundle() {
-    bundlePauseRef.current = !bundlePauseRef.current;
-    setBundlePaused(bundlePauseRef.current);
+    const willPause = !bundlePauseRef.current;
+    bundlePauseRef.current = willPause;
+    setBundlePaused(willPause);
+    if (willPause && bundleProgress) {
+      const step = `${bundleProgress.current}/${bundleProgress.total}`;
+      const next = bundleProgress.nextPackageId;
+      desktopNotify(
+        "info",
+        t("Bundle paused at step {step}", { step }),
+        next ? t("Next package: {pkg}", { pkg: next }) : undefined,
+      );
+    }
   }
 
   /** Cancel the in-flight package's install and continue with the
@@ -1831,6 +2072,16 @@ function SoftwarePanelBody({ tab }: Props) {
         <button
           type="button"
           className="btn is-ghost is-compact"
+          onClick={() => setScheduleDialogOpen(true)}
+          title={t(
+            "Schedule a bundle install on an interval / daily / weekly timer (only fires while Pier-X is open).",
+          )}
+        >
+          <Clock size={10} /> {t("Schedules")}
+        </button>
+        <button
+          type="button"
+          className="btn is-ghost is-compact"
           onClick={() => void probe()}
           disabled={probing}
           title={t("Re-probe host")}
@@ -2011,6 +2262,40 @@ function SoftwarePanelBody({ tab }: Props) {
                     </button>
                   </div>
                 )}
+                {pendingRollback?.bundleId === b.id && !running && (
+                  <div className="sw-panel__bundle-rollback mono">
+                    <div className="sw-panel__bundle-rollback-text">
+                      {t(
+                        "Bundle failed after installing {n} package(s). Roll back?",
+                        { n: pendingRollback.packageIds.length },
+                      )}
+                    </div>
+                    <div className="sw-panel__bundle-rollback-actions">
+                      <button
+                        type="button"
+                        className="mini-button"
+                        onClick={() => setPendingRollback(null)}
+                      >
+                        {t("Keep installs")}
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-button mini-button--destructive"
+                        onClick={() =>
+                          void runBundleRollback(
+                            pendingRollback.bundleId,
+                            pendingRollback.bundleName,
+                            pendingRollback.packageIds,
+                          )
+                        }
+                      >
+                        {t("Roll back {n}", {
+                          n: pendingRollback.packageIds.length,
+                        })}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 </div>
               );
             })}
@@ -2165,6 +2450,15 @@ function SoftwarePanelBody({ tab }: Props) {
           setWebhooksOpen(false);
           setWebhooksInitialTab(null);
         }}
+      />
+      <BundleSchedulesDialog
+        open={scheduleDialogOpen}
+        onClose={() => setScheduleDialogOpen(false)}
+        swKey={swKey}
+        bundles={bundles}
+        schedules={schedules}
+        onChange={setSchedules}
+        sshParams={sshParams}
       />
       <PgQuickConfigDialog
         target={pgQuickTarget}
@@ -4348,6 +4642,36 @@ function ComposeTemplatesDialog({
     }
   }
 
+  /** Build a cron line for "periodic compose pull + up -d" and copy
+   *  it to the clipboard. We default to a daily 3am refresh — the
+   *  user can edit the `0 3 * * *` prefix to whatever cadence they
+   *  want before pasting into `crontab -e`. The directory matches
+   *  what `compose_apply` writes to: `$HOME/pier-x-stacks/<id>`.
+   *  Doesn't try to be clever about resolving `$HOME` — most
+   *  crontabs run with HOME populated, and if not the user can
+   *  swap in an absolute path. */
+  async function copyComposeCronLine(templateId: string) {
+    const tpl = templates.find((x) => x.id === templateId);
+    if (!tpl) {
+      setMessage(t("Template not found."));
+      return;
+    }
+    const dir = `$HOME/pier-x-stacks/${tpl.id}`;
+    const command = `cd ${dir} && docker compose pull && docker compose up -d`;
+    const line = `0 3 * * * ${command}  # pier-x:compose:${tpl.id}`;
+    try {
+      await writeClipboardText(line);
+      setMessage(
+        t(
+          "Copied refresh cron line for {name}. Paste into `crontab -e` on the host (default cadence: daily at 03:00 — edit before saving to suit your needs).",
+          { name: tpl.displayName },
+        ),
+      );
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   /** Toggle the K8s export pane for a template card. First open
    *  fires the conversion (cached on success); subsequent toggles
    *  just flip visibility without re-running. The namespace box at
@@ -4476,6 +4800,16 @@ function ComposeTemplatesDialog({
                       : k8sExportId === tpl.id
                         ? t("Hide K8s YAML")
                         : t("Export K8s YAML")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn is-ghost is-compact"
+                    onClick={() => void copyComposeCronLine(tpl.id)}
+                    title={t(
+                      "Copy a cron line that runs `docker compose pull && up -d` against this stack. Paste into `crontab -e` on the host so images stay refreshed even when Pier-X is closed.",
+                    )}
+                  >
+                    <Copy size={10} /> {t("Refresh cron line")}
                   </button>
                   <button
                     type="button"
@@ -5535,6 +5869,169 @@ function MultiHostDialog({
  *  `<app_config_dir>/webhooks.json` via the backend; new entries
  *  take effect immediately for the next install/uninstall in the
  *  current session (no restart required, unlike software-extras). */
+function WebhookHeadersEditor({
+  headers,
+  onChange,
+  t,
+}: {
+  headers: cmd.WebhookHeader[];
+  onChange: (next: cmd.WebhookHeader[]) => void;
+  t: (
+    s: string,
+    vars?: Record<string, string | number | null | undefined>,
+  ) => string;
+}) {
+  const [open, setOpen] = useState(headers.length > 0);
+  function update(i: number, patch: Partial<cmd.WebhookHeader>) {
+    onChange(headers.map((h, idx) => (idx === i ? { ...h, ...patch } : h)));
+  }
+  function remove(i: number) {
+    onChange(headers.filter((_, idx) => idx !== i));
+  }
+  function add() {
+    onChange([...headers, { name: "", value: "" }]);
+    setOpen(true);
+  }
+  return (
+    <div className="sw-webhooks__headers">
+      <button
+        type="button"
+        className="sw-webhooks__headers-toggle muted"
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? "▾" : "▸"} {t("Custom headers")} ({headers.length})
+      </button>
+      {open && (
+        <div className="sw-webhooks__headers-body">
+          {headers.length === 0 && (
+            <span className="muted">
+              {t("No extra headers. Content-Type is always application/json.")}
+            </span>
+          )}
+          {headers.map((h, i) => (
+            <div key={i} className="sw-webhooks__headers-row">
+              <input
+                className="sw-webhooks__headers-name mono"
+                placeholder={t("Header name (e.g. Authorization)")}
+                value={h.name}
+                onChange={(ev) => update(i, { name: ev.target.value })}
+                spellCheck={false}
+              />
+              <input
+                className="sw-webhooks__headers-val mono"
+                placeholder={t("Value (e.g. Bearer xyz123)")}
+                value={h.value}
+                onChange={(ev) => update(i, { value: ev.target.value })}
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                className="btn is-ghost is-compact"
+                onClick={() => remove(i)}
+                title={t("Remove")}
+              >
+                <X size={10} />
+              </button>
+            </div>
+          ))}
+          <button type="button" className="btn is-ghost is-compact" onClick={add}>
+            <Plus size={10} /> {t("Add header")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Header names treated as secret-bearing for export redaction.
+ *  Match is case-insensitive and uses substring contains (so
+ *  `X-Slack-Signature`, `Authorization`, `My-Bearer-Header` all
+ *  count). Anything not matching here passes through verbatim. */
+const SECRET_HEADER_PATTERNS = [
+  "auth",
+  "token",
+  "key",
+  "secret",
+  "signature",
+  "cookie",
+  "session",
+];
+
+function isSecretHeaderName(name: string): boolean {
+  const lower = name.trim().toLowerCase();
+  if (!lower) return false;
+  return SECRET_HEADER_PATTERNS.some((p) => lower.includes(p));
+}
+
+/** Strip every secret-looking field. Used by the default "redacted"
+ *  export — the file only contains URL / label / events / templates,
+ *  the receiver re-types secrets after import. Safest to share. */
+function redactWebhookSecrets(e: cmd.WebhookEntry): cmd.WebhookEntry {
+  const cleanedHeaders = (e.headers ?? []).map((h) =>
+    isSecretHeaderName(h.name) ? { name: h.name, value: "" } : h,
+  );
+  const out: cmd.WebhookEntry = { ...e };
+  out.headers = cleanedHeaders;
+  out.hmacSecret = "";
+  return out;
+}
+
+/** Base64-encode every secret-looking field with a `_pierx_b64:`
+ *  prefix so the file isn't trivially readable when shared via
+ *  email / Slack / a screenshot, but is still a 1:1 round-trip on
+ *  import. NOT encryption — labelled as obfuscation in the dialog. */
+function encodeWebhookSecrets(e: cmd.WebhookEntry): cmd.WebhookEntry {
+  const wrap = (v: string): string =>
+    v ? `_pierx_b64:${btoa(unescape(encodeURIComponent(v)))}` : "";
+  const cleanedHeaders = (e.headers ?? []).map((h) =>
+    isSecretHeaderName(h.name) ? { name: h.name, value: wrap(h.value) } : h,
+  );
+  const out: cmd.WebhookEntry = { ...e };
+  out.headers = cleanedHeaders;
+  if (e.hmacSecret) out.hmacSecret = wrap(e.hmacSecret);
+  return out;
+}
+
+function decodeWebhookSecrets(e: cmd.WebhookEntry): cmd.WebhookEntry {
+  const unwrap = (v: string): string => {
+    if (typeof v !== "string") return v;
+    if (!v.startsWith("_pierx_b64:")) return v;
+    try {
+      const raw = v.slice("_pierx_b64:".length);
+      return decodeURIComponent(escape(atob(raw)));
+    } catch {
+      return v;
+    }
+  };
+  const cleanedHeaders = (e.headers ?? []).map((h) => ({
+    name: h.name,
+    value: unwrap(h.value),
+  }));
+  const out: cmd.WebhookEntry = { ...e };
+  out.headers = cleanedHeaders;
+  if (e.hmacSecret) out.hmacSecret = unwrap(e.hmacSecret);
+  return out;
+}
+
+/** Set of `{{name}}` placeholders the backend's `render_body` knows
+ *  about. Keep in sync with `pier-core/src/services/webhook.rs`'s
+ *  `pairs` array. */
+const KNOWN_PLACEHOLDERS = new Set<string>([
+  "event",
+  "status",
+  "package_id",
+  "packageId",
+  "host",
+  "package_manager",
+  "packageManager",
+  "version",
+  "fired_at",
+  "firedAt",
+  "text",
+  "output_tail",
+  "outputTail",
+]);
+
 function WebhooksDialog({
   open,
   initialTab,
@@ -5549,6 +6046,7 @@ function WebhooksDialog({
 }) {
   const { t } = useI18n();
   const [entries, setEntries] = useState<cmd.WebhookEntry[]>([]);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [path, setPath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -5758,10 +6256,68 @@ function WebhooksDialog({
       template:
         '{"text":"{{text}}\\n```\\n{{outputTail}}\\n```"}',
     },
+    {
+      // Discord variant of the above — same code-block format,
+      // but Discord uses `content:` instead of Slack's `text:`.
+      id: "discord-with-tail",
+      label: t("Discord with output tail"),
+      template:
+        '{"content":"{{text}}\\n```\\n{{outputTail}}\\n```"}',
+    },
   ];
 
   function removeEntry(idx: number) {
     setEntries((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  /**
+   * Lint a webhook body template against the known placeholder set and
+   * basic JSON validity. Runs locally on every keystroke so the user
+   * sees errors before they save. Empty templates are considered valid
+   * (the backend renders the default Slack-shaped JSON).
+   */
+  function lintTemplate(template: string): {
+    jsonError?: string;
+    unknownPlaceholders: string[];
+  } {
+    if (!template.trim()) return { unknownPlaceholders: [] };
+    // 1) Unknown-placeholder scan.
+    const placeholderRe = /\{\{(\w+)\}\}/g;
+    const unknown = new Set<string>();
+    for (const m of template.matchAll(placeholderRe)) {
+      const name = m[1];
+      if (!KNOWN_PLACEHOLDERS.has(name)) unknown.add(name);
+    }
+    // 2) JSON validity. We substitute placeholders with dummy values
+    //    of the same shape (string for strings, number for firedAt) so
+    //    the preview round-trip mirrors what the server will emit.
+    const stub: Record<string, string> = {
+      event: "install",
+      status: "ok",
+      package_id: "git",
+      packageId: "git",
+      host: "host",
+      package_manager: "apt",
+      packageManager: "apt",
+      version: "1.0",
+      fired_at: "0",
+      firedAt: "0",
+      text: "Pier-X · git installed",
+      output_tail: "",
+      outputTail: "",
+    };
+    const rendered = template.replace(placeholderRe, (_, key: string) =>
+      stub[key] ?? `{{${key}}}`,
+    );
+    try {
+      JSON.parse(rendered);
+      return { unknownPlaceholders: Array.from(unknown) };
+    } catch (e) {
+      return {
+        jsonError: e instanceof Error ? e.message : String(e),
+        unknownPlaceholders: Array.from(unknown),
+      };
+    }
   }
 
   async function save() {
@@ -5785,6 +6341,63 @@ function WebhooksDialog({
     }
   }
 
+  /** Open the export confirmation dialog. The actual write happens
+   *  inside the dialog so the user gets to choose redaction policy
+   *  before any file lands on disk. */
+  function exportEntries() {
+    setMessage("");
+    setExportDialogOpen(true);
+  }
+
+  /** Import a JSON exported from `exportEntries`. Merges into the
+   *  current list — duplicates by URL are skipped so re-importing
+   *  the same file doesn't double up. The import lives in dialog
+   *  state until the user clicks Save (matches save semantics). */
+  async function importEntries() {
+    setMessage("");
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const picked = await dialog.open({
+        title: t("Import webhook config"),
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!picked || typeof picked !== "string") return;
+      const raw = await cmd.localReadTextFile(picked);
+      const parsed = JSON.parse(raw);
+      const incoming = Array.isArray(parsed?.entries)
+        ? (parsed.entries as cmd.WebhookEntry[])
+        : Array.isArray(parsed)
+          ? (parsed as cmd.WebhookEntry[])
+          : null;
+      if (!incoming) {
+        setMessage(t("File doesn't look like a webhook config."));
+        return;
+      }
+      const seen = new Set(entries.map((e) => e.url.trim()));
+      // Decode any `_pierx_b64:` markers so import is the inverse of
+      // export-with-secrets. Unknown shapes (raw plaintext, missing
+      // marker) pass through untouched.
+      const decoded = incoming.map(decodeWebhookSecrets);
+      const fresh = decoded.filter((e) => {
+        const url = (e.url ?? "").trim();
+        if (!url) return false;
+        if (seen.has(url)) return false;
+        seen.add(url);
+        return true;
+      });
+      setEntries((prev) => [...prev, ...fresh]);
+      setMessage(
+        t("Imported {n} new webhook(s) ({skipped} duplicate skipped).", {
+          n: fresh.length,
+          skipped: incoming.length - fresh.length,
+        }),
+      );
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function testFire(idx: number) {
     const entry = entries[idx];
     if (!entry || !entry.url.trim()) return;
@@ -5794,6 +6407,8 @@ function WebhooksDialog({
       const report = await cmd.softwareWebhooksTestFire({
         url: entry.url.trim(),
         bodyTemplate: entry.bodyTemplate ?? "",
+        headers: entry.headers ?? [],
+        hmacSecret: entry.hmacSecret ?? "",
       });
       setLastTest({ index: idx, report });
     } catch (e) {
@@ -5844,6 +6459,54 @@ function WebhooksDialog({
     }
     setPreviewOpen(idx);
     await refreshPreview(idx);
+  }
+
+  /** Resolve the actual write of the export, called by the export
+   *  dialog's primary action. Builds the redacted / obfuscated JSON
+   *  per the user's choice and writes via the local FS bridge. */
+  async function performExport(includeSecrets: boolean) {
+    setExportDialogOpen(false);
+    setMessage("");
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const picked = await dialog.save({
+        title: t("Export webhook config"),
+        defaultPath: includeSecrets
+          ? "pier-x-webhooks-with-secrets.json"
+          : "pier-x-webhooks-redacted.json",
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (typeof picked !== "string") return;
+      const cleaned = entries.map((e) =>
+        includeSecrets ? encodeWebhookSecrets(e) : redactWebhookSecrets(e),
+      );
+      const blob = JSON.stringify(
+        {
+          _meta: {
+            redacted: !includeSecrets,
+            includesSecrets: includeSecrets,
+            exportedAt: new Date().toISOString(),
+          },
+          entries: cleaned,
+        },
+        null,
+        2,
+      );
+      await cmd.localWriteTextFile(picked, blob);
+      setMessage(
+        includeSecrets
+          ? t(
+              "Exported {n} webhook(s) — secrets are base64-obfuscated, NOT encrypted. Verify the recipient.",
+              { n: entries.length },
+            )
+          : t(
+              "Exported {n} webhook(s) with secrets stripped. The recipient must re-enter HMAC / auth values after import.",
+              { n: entries.length },
+            ),
+      );
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    }
   }
 
   return (
@@ -6178,11 +6841,57 @@ function WebhooksDialog({
                     rows={3}
                     spellCheck={false}
                   />
+                  {(() => {
+                    const lint = lintTemplate(e.bodyTemplate ?? "");
+                    if (!lint.jsonError && lint.unknownPlaceholders.length === 0) {
+                      return null;
+                    }
+                    return (
+                      <div className="sw-webhooks__lint mono">
+                        {lint.jsonError && (
+                          <div className="sw-webhooks__lint-err">
+                            <AlertTriangle size={10} />{" "}
+                            {t("Invalid JSON: {err}", { err: lint.jsonError })}
+                          </div>
+                        )}
+                        {lint.unknownPlaceholders.length > 0 && (
+                          <div className="sw-webhooks__lint-warn">
+                            {t("Unknown placeholders: {names}", {
+                              names: lint.unknownPlaceholders
+                                .map((n) => `{{${n}}}`)
+                                .join(", "),
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {previewOpen === idx && (
                     <pre className="sw-webhooks__preview mono">
                       {previewBusy ? t("Rendering…") : previewBody}
                     </pre>
                   )}
+                  <WebhookHeadersEditor
+                    headers={e.headers ?? []}
+                    onChange={(next) => updateEntry(idx, { headers: next })}
+                    t={t}
+                  />
+                  <label className="sw-webhooks__hmac mono">
+                    <span className="muted">{t("HMAC secret")}</span>
+                    <input
+                      type="password"
+                      className="sw-webhooks__hmac-input"
+                      placeholder={t(
+                        "Empty = no signing. Set a shared secret to send X-Pier-Signature.",
+                      )}
+                      value={e.hmacSecret ?? ""}
+                      onChange={(ev) =>
+                        updateEntry(idx, { hmacSecret: ev.target.value })
+                      }
+                      spellCheck={false}
+                      autoCorrect="off"
+                    />
+                  </label>
                 </div>
                 {lastTest && lastTest.index === idx && (
                   <div
@@ -6210,6 +6919,27 @@ function WebhooksDialog({
               onClick={addEntry}
             >
               + {t("Add webhook")}
+            </button>
+            <button
+              type="button"
+              className="btn is-ghost is-compact"
+              onClick={() => void exportEntries()}
+              disabled={entries.length === 0}
+              title={t(
+                "Save the current webhook config to a JSON file — share or move between machines.",
+              )}
+            >
+              {t("Export…")}
+            </button>
+            <button
+              type="button"
+              className="btn is-ghost is-compact"
+              onClick={() => void importEntries()}
+              title={t(
+                "Load a webhook JSON exported from this dialog (merges into the current list).",
+              )}
+            >
+              {t("Import…")}
             </button>
             <div className="sw-webhooks__actions-right">
               <button
@@ -6253,7 +6983,108 @@ function WebhooksDialog({
           </div>
         )}
       </div>
+      {exportDialogOpen && (
+        <WebhookExportConfirmDialog
+          entries={entries}
+          onCancel={() => setExportDialogOpen(false)}
+          onConfirm={(includeSecrets) => void performExport(includeSecrets)}
+        />
+      )}
     </Dialog>
+  );
+}
+
+function WebhookExportConfirmDialog({
+  entries,
+  onCancel,
+  onConfirm,
+}: {
+  entries: cmd.WebhookEntry[];
+  onCancel: () => void;
+  onConfirm: (includeSecrets: boolean) => void;
+}) {
+  const { t } = useI18n();
+  const [includeSecrets, setIncludeSecrets] = useState(false);
+
+  // Quick survey of what would land in the file with secrets included
+  // vs stripped. The user sees the count up front so they don't have
+  // to inspect the JSON before sharing.
+  const secretSummary = (() => {
+    let secretHeaders = 0;
+    let hmacCount = 0;
+    for (const e of entries) {
+      for (const h of e.headers ?? []) {
+        if (isSecretHeaderName(h.name) && h.value) secretHeaders += 1;
+      }
+      if (e.hmacSecret) hmacCount += 1;
+    }
+    return { secretHeaders, hmacCount };
+  })();
+
+  return (
+    <div className="dlg-overlay" onClick={onCancel}>
+      <div className="dlg" onClick={(e) => e.stopPropagation()}>
+        <div className="dlg-head">
+          <span className="dlg-title">{t("Export webhook config")}</span>
+        </div>
+        <div className="dlg-body dlg-body--form">
+          <div className="status-note mono">
+            {t(
+              "{n} webhook(s) selected. Secrets in this config: {hmac} HMAC, {hdr} auth-style headers.",
+              {
+                n: entries.length,
+                hmac: secretSummary.hmacCount,
+                hdr: secretSummary.secretHeaders,
+              },
+            )}
+          </div>
+          <label className="sw-webhooks__export-flag">
+            <input
+              type="checkbox"
+              checked={includeSecrets}
+              onChange={(e) => setIncludeSecrets(e.currentTarget.checked)}
+            />
+            <span>
+              {t(
+                "Include sensitive fields (HMAC secrets, auth headers).",
+              )}
+            </span>
+          </label>
+          {includeSecrets ? (
+            <div className="status-note status-note--error mono">
+              {t(
+                "Secrets will be base64-encoded with a `_pierx_b64:` prefix — this is OBFUSCATION, not encryption. Anyone with the file can decode them. Verify the recipient before sharing.",
+              )}
+            </div>
+          ) : (
+            <div className="status-note mono">
+              {t(
+                "Sensitive fields will be stripped. The recipient re-types HMAC / auth values after importing.",
+              )}
+            </div>
+          )}
+        </div>
+        <div className="dlg-foot">
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            onClick={onCancel}
+          >
+            {t("Cancel")}
+          </button>
+          <button
+            type="button"
+            className={
+              "btn is-compact " +
+              (includeSecrets ? "is-danger" : "is-primary")
+            }
+            onClick={() => onConfirm(includeSecrets)}
+          >
+            {includeSecrets ? t("Export with secrets") : t("Export redacted")}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -7098,6 +7929,314 @@ function VendorScriptConfirmDialog({
             </span>
           </span>
         </label>
+      </div>
+    </Dialog>
+  );
+}
+
+function BundleSchedulesDialog({
+  open,
+  onClose,
+  swKey,
+  bundles,
+  schedules,
+  onChange,
+  sshParams,
+}: {
+  open: boolean;
+  onClose: () => void;
+  swKey: string | null;
+  bundles: SoftwareBundle[];
+  schedules: BundleSchedule[];
+  onChange: (next: BundleSchedule[]) => void;
+  sshParams: cmd.SshParams | null;
+}) {
+  const { t } = useI18n();
+  // Schedules belonging to other hosts are hidden in this dialog —
+  // each panel manages only its own. Stored across all hosts in one
+  // localStorage blob so the user doesn't have to re-add them when
+  // switching tabs back.
+  const visibleSchedules = swKey
+    ? schedules.filter((s) => s.swKey === swKey)
+    : [];
+
+  function update(idx: number, patch: Partial<BundleSchedule>) {
+    const id = visibleSchedules[idx]?.id;
+    if (!id) return;
+    onChange(
+      schedules.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+    );
+  }
+
+  function remove(idx: number) {
+    const id = visibleSchedules[idx]?.id;
+    if (!id) return;
+    onChange(schedules.filter((s) => s.id !== id));
+  }
+
+  function add() {
+    if (!swKey) return;
+    const firstBundle = bundles[0];
+    if (!firstBundle) return;
+    const fresh: BundleSchedule = {
+      id: makeScheduleId(),
+      swKey,
+      bundleId: firstBundle.id,
+      kind: "daily",
+      hour: 3,
+      minute: 0,
+      enabled: false,
+      label: firstBundle.displayName,
+    };
+    onChange([...schedules, fresh]);
+  }
+
+  /** Resolve a bundle's package set into a single shell one-liner the
+   *  remote crontab can run, then chain that onto the schedule's cron
+   *  expression and copy the result to the clipboard. The user pastes
+   *  the line into `crontab -e` on the target host. We use `&&` so a
+   *  failed package aborts the rest — same fail-fast contract as the
+   *  in-app bundle runner. */
+  async function copyCronLine(s: BundleSchedule) {
+    if (!sshParams) {
+      toast.warn(t("Connect to a host first."));
+      return;
+    }
+    const bundle = bundles.find((b) => b.id === s.bundleId);
+    if (!bundle) {
+      toast.warn(t("Bundle not found"));
+      return;
+    }
+    try {
+      const previews = await Promise.all(
+        bundle.packageIds.map((pkgId) =>
+          cmd
+            .softwareInstallPreview({ ...sshParams, packageId: pkgId })
+            .catch(() => null),
+        ),
+      );
+      const commands = previews
+        .filter((p): p is cmd.InstallCommandPreview => p !== null)
+        .map((p) => p.wrappedCommand);
+      if (commands.length === 0) {
+        toast.warn(t("Could not build install command for any package."));
+        return;
+      }
+      const joined = commands.join(" && ");
+      const line = buildCronLine(s, joined);
+      if (!line) {
+        toast.warn(t("Schedule cannot be expressed as a cron line."));
+        return;
+      }
+      await writeClipboardText(line);
+      toast.info(t("Copied cron line — paste into `crontab -e` on the host."));
+    } catch (e) {
+      toast.warn(
+        t("Could not build cron line: {err}", {
+          err: e instanceof Error ? e.message : String(e),
+        }),
+      );
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      title={t("Bundle schedules")}
+      subtitle={t(
+        "Run a bundle on a timer. Only fires while Pier-X is open and this panel is mounted for the matching host.",
+      )}
+      size="md"
+      onClose={onClose}
+    >
+      <div className="sw-schedules">
+        {!swKey && (
+          <div className="status-note mono">
+            {t("Connect to a host to manage its schedules.")}
+          </div>
+        )}
+        {swKey && bundles.length === 0 && (
+          <div className="status-note mono">
+            {t("No bundles configured for this host.")}
+          </div>
+        )}
+        {swKey && visibleSchedules.length === 0 && bundles.length > 0 && (
+          <div className="status-note mono">
+            {t("No schedules yet — click \"Add schedule\".")}
+          </div>
+        )}
+        {visibleSchedules.map((s, idx) => {
+          const bundle = bundles.find((b) => b.id === s.bundleId);
+          return (
+            <div key={s.id} className="sw-schedules__row">
+              <div className="sw-schedules__row-head">
+                <label className="sw-schedules__chip">
+                  <input
+                    type="checkbox"
+                    checked={s.enabled}
+                    onChange={(e) =>
+                      update(idx, { enabled: e.currentTarget.checked })
+                    }
+                  />
+                  <span>
+                    {s.enabled ? t("Schedule on") : t("Schedule off")}
+                  </span>
+                </label>
+                <select
+                  className="sw-schedules__bundle mono"
+                  value={s.bundleId}
+                  onChange={(e) => {
+                    const next = bundles.find(
+                      (b) => b.id === e.currentTarget.value,
+                    );
+                    update(idx, {
+                      bundleId: e.currentTarget.value,
+                      label: next?.displayName,
+                    });
+                  }}
+                >
+                  {bundles.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.displayName}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="sw-schedules__kind mono"
+                  value={s.kind}
+                  onChange={(e) =>
+                    update(idx, {
+                      kind: e.currentTarget.value as BundleSchedule["kind"],
+                    })
+                  }
+                >
+                  <option value="interval">{t("Every N min")}</option>
+                  <option value="daily">{t("Daily")}</option>
+                  <option value="weekly">{t("Weekly")}</option>
+                </select>
+                <button
+                  type="button"
+                  className="btn is-ghost is-compact"
+                  onClick={() => void copyCronLine(s)}
+                  title={t(
+                    "Build a cron line for this schedule + bundle and copy it to the clipboard. Paste into `crontab -e` on the target host so the bundle runs even when Pier-X is closed.",
+                  )}
+                >
+                  <Copy size={10} /> {t("Cron line")}
+                </button>
+                <button
+                  type="button"
+                  className="btn is-ghost is-compact"
+                  onClick={() => remove(idx)}
+                  title={t("Remove")}
+                >
+                  <X size={10} />
+                </button>
+              </div>
+              <div className="sw-schedules__row-body mono">
+                {s.kind === "interval" && (
+                  <label className="sw-schedules__field">
+                    <span className="muted">{t("Every")}</span>
+                    <input
+                      type="number"
+                      min={5}
+                      max={1440}
+                      value={s.intervalMinutes ?? 60}
+                      onChange={(e) =>
+                        update(idx, {
+                          intervalMinutes: Math.max(
+                            5,
+                            Number(e.currentTarget.value) || 60,
+                          ),
+                        })
+                      }
+                    />
+                    <span className="muted">{t("min")}</span>
+                  </label>
+                )}
+                {(s.kind === "daily" || s.kind === "weekly") && (
+                  <>
+                    {s.kind === "weekly" && (
+                      <label className="sw-schedules__field">
+                        <span className="muted">{t("Weekday")}</span>
+                        <select
+                          value={s.weekday ?? 0}
+                          onChange={(e) =>
+                            update(idx, {
+                              weekday: Number(e.currentTarget.value),
+                            })
+                          }
+                        >
+                          <option value={0}>{t("Sun")}</option>
+                          <option value={1}>{t("Mon")}</option>
+                          <option value={2}>{t("Tue")}</option>
+                          <option value={3}>{t("Wed")}</option>
+                          <option value={4}>{t("Thu")}</option>
+                          <option value={5}>{t("Fri")}</option>
+                          <option value={6}>{t("Sat")}</option>
+                        </select>
+                      </label>
+                    )}
+                    <label className="sw-schedules__field">
+                      <span className="muted">{t("At")}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={23}
+                        value={s.hour ?? 0}
+                        onChange={(e) =>
+                          update(idx, {
+                            hour: Math.max(
+                              0,
+                              Math.min(23, Number(e.currentTarget.value) || 0),
+                            ),
+                          })
+                        }
+                      />
+                      <span>:</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={59}
+                        value={s.minute ?? 0}
+                        onChange={(e) =>
+                          update(idx, {
+                            minute: Math.max(
+                              0,
+                              Math.min(59, Number(e.currentTarget.value) || 0),
+                            ),
+                          })
+                        }
+                      />
+                    </label>
+                  </>
+                )}
+                <span className="sw-schedules__summary muted">
+                  {describeSchedule(s)}
+                </span>
+                {s.lastRunAt && (
+                  <span className="sw-schedules__last muted">
+                    {t("Last run: {when}", {
+                      when: new Date(s.lastRunAt).toLocaleString(),
+                    })}
+                  </span>
+                )}
+                {!bundle && (
+                  <span className="sw-schedules__warn">
+                    {t("Bundle not found")}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {swKey && bundles.length > 0 && (
+          <div className="sw-schedules__add">
+            <button type="button" className="btn is-ghost is-compact" onClick={add}>
+              <Plus size={10} /> {t("Add schedule")}
+            </button>
+          </div>
+        )}
       </div>
     </Dialog>
   );

@@ -16,6 +16,7 @@ type ConnectionDraft = {
   authKind: string;
   keyPath: string;
   group: string;
+  envTag: string;
 };
 
 type Props = {
@@ -51,6 +52,7 @@ function toDraft(connection?: SavedSshConnection | null): ConnectionDraft {
     authKind: connection?.authKind ?? "password",
     keyPath: connection?.keyPath ?? "",
     group: connection?.group ?? "",
+    envTag: connection?.envTag ?? "",
   };
 }
 
@@ -68,6 +70,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const [password, setPassword] = useState("");
   const [keyPath, setKeyPath] = useState(initialDraft.keyPath);
   const [group, setGroup] = useState(initialDraft.group);
+  const [envTag, setEnvTag] = useState(initialDraft.envTag);
   const [error, setError] = useState("");
   // Guards double-submit: `persistConnection` is async and the buttons
   // previously stayed enabled while the IPC was in flight, so a quick
@@ -105,6 +108,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
     setPassword("");
     setKeyPath(next.keyPath);
     setGroup(next.group);
+    setEnvTag(next.envTag);
     setError("");
   }, [initialConnection, open]);
 
@@ -136,6 +140,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
 
   async function persistConnection() {
     const trimmedGroup = group.trim();
+    const trimmedEnvTag = envTag.trim();
     const params = {
       name: connectionName,
       host: host.trim(),
@@ -145,6 +150,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       password: authMode === "password" ? password : "",
       keyPath: authMode === "key" ? keyPath.trim() : "",
       group: trimmedGroup ? trimmedGroup : null,
+      envTag: trimmedEnvTag ? trimmedEnvTag : null,
     };
 
     if (isEditing && typeof initialDraft.index === "number") {
@@ -276,6 +282,22 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
                   {knownGroups.map((g) => <option key={g} value={g} />)}
                 </datalist>
               )}
+            </div>
+            <div className="dlg-row">
+              <label className="dlg-row-label">{t("Env tag")}</label>
+              <input
+                className="dlg-input"
+                list="new-conn-envtag-list"
+                onChange={(e) => setEnvTag(e.currentTarget.value)}
+                placeholder={t("prod / staging / dev / local")}
+                value={envTag}
+              />
+              <datalist id="new-conn-envtag-list">
+                <option value="prod" />
+                <option value="staging" />
+                <option value="dev" />
+                <option value="local" />
+              </datalist>
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Host")}</label>

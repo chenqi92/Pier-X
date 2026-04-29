@@ -42,6 +42,14 @@ pub struct SshConfig {
     /// the implicit "default" group. Ignored by the SSH layer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// Optional environment tag (e.g. `prod` / `staging` / `dev` /
+    /// `local`). The host lists / bus view / panel headers render
+    /// a colored chip when set so a prod box is unmistakable from
+    /// staging at a glance. Free-form — UI styles known names but
+    /// passes through anything else with neutral styling. Ignored
+    /// by the SSH layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_tag: Option<String>,
     /// Database connections remembered for this SSH profile.
     /// Passwords live in the OS keyring via `DbPasswordStorage`.
     /// Ignored by the SSH layer — consumed by the right-side DB
@@ -69,6 +77,7 @@ impl SshConfig {
             connect_timeout_secs: default_connect_timeout(),
             tags: Vec::new(),
             group: None,
+            env_tag: None,
             databases: Vec::new(),
         }
     }
@@ -367,6 +376,7 @@ mod tests {
             connect_timeout_secs: 30,
             tags: vec!["prod".into(), "eu-west".into()],
             group: Some("prod".into()),
+            env_tag: Some("prod".into()),
             databases: Vec::new(),
         };
         let json = serde_json::to_string(&original).expect("serialize");
@@ -513,6 +523,7 @@ mod tests {
             connect_timeout_secs: 5,
             tags: vec![],
             group: None,
+            env_tag: None,
             databases: Vec::new(),
         };
         let json = serde_json::to_string(&c).expect("serialize");

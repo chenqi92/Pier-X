@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   Code2,
+  Diff as DiffIcon,
   Eye,
   EyeOff,
   FileCode,
@@ -15,9 +16,11 @@ import {
   RotateCw,
   Save,
   ShieldCheck,
+  Sparkles,
   ToggleRight,
   X,
 } from "lucide-react";
+import DiffPreview from "../components/DiffPreview";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import * as cmd from "../lib/commands";
@@ -105,6 +108,9 @@ function NginxPanelBody({ tab }: Props) {
   const [reloadResult, setReloadResult] =
     useState<NginxValidateResult | null>(null);
   const [reloadBusy, setReloadBusy] = useState(false);
+  const [lintResult, setLintResult] =
+    useState<NginxValidateResult | null>(null);
+  const [lintBusy, setLintBusy] = useState(false);
   /** "features" → curated feature catalog (toggle gzip/HSTS/HTTP2/etc.);
    *  "structured" → directive cards; "raw" → plain textarea editing the
    *  file content. All three round-trip through the AST so a save from
@@ -264,6 +270,19 @@ function NginxPanelBody({ tab }: Props) {
     }
   };
 
+  const handleLint = async () => {
+    if (!sshParams || lintBusy) return;
+    setLintBusy(true);
+    try {
+      const r = await cmd.webServerLintHints({ ...sshParams, kind: "nginx" });
+      setLintResult({ ok: r.ok, exitCode: r.exitCode, output: r.output });
+    } catch (e) {
+      setLintResult({ ok: false, exitCode: -1, output: formatError(e) });
+    } finally {
+      setLintBusy(false);
+    }
+  };
+
   const handleReload = async () => {
     if (!sshParams || reloadBusy) return;
     setReloadBusy(true);
@@ -355,6 +374,17 @@ function NginxPanelBody({ tab }: Props) {
             <button
               type="button"
               className="btn is-ghost is-compact"
+              onClick={() => void handleLint()}
+              disabled={lintBusy || !canProbe}
+              title={t(
+                "Run a deeper static analysis (apachectl -S / caddy adapt --pretty / nginx -t -q)",
+              )}
+            >
+              <Sparkles size={10} /> {lintBusy ? t("Linting…") : t("Lint")}
+            </button>
+            <button
+              type="button"
+              className="btn is-ghost is-compact"
               onClick={() => void handleReload()}
               disabled={reloadBusy || !canProbe}
               title={t("systemctl reload nginx")}
@@ -384,6 +414,9 @@ function NginxPanelBody({ tab }: Props) {
       )}
       {reloadResult && (
         <ValidationBanner result={reloadResult} t={t} kind="reload" />
+      )}
+      {lintResult && (
+        <ValidationBanner result={lintResult} t={t} kind="lint" />
       )}
       {saveResult && <SaveResultBanner result={saveResult} t={t} />}
 
@@ -652,11 +685,16 @@ function ValidationBanner({
   t,
 }: {
   result: NginxValidateResult;
-  kind: "validate" | "reload";
+  kind: "validate" | "reload" | "lint";
   t: ReturnType<typeof useI18n>["t"];
 }) {
   const ok = result.ok;
-  const label = kind === "validate" ? t("nginx -t") : t("reload");
+  const label =
+    kind === "validate"
+      ? t("nginx -t")
+      : kind === "reload"
+        ? t("reload")
+        : t("Lint");
   return (
     <div
       className={`ngx-banner ${ok ? "is-ok" : "is-bad"}`}
@@ -754,6 +792,7 @@ function Editor({
   t: ReturnType<typeof useI18n>["t"];
 }) {
   const dirty = dirtyContent !== null;
+  const [showDiff, setShowDiff] = useState(false);
   return (
     <div className="ngx-editor">
       <div className="ngx-editor__head">
@@ -803,6 +842,15 @@ function Editor({
           )}
           <button
             type="button"
+            className={`btn is-compact ${showDiff ? "is-primary" : "is-ghost"}`}
+            onClick={() => setShowDiff((v) => !v)}
+            disabled={!dirty}
+            title={t("Preview diff against the on-disk version")}
+          >
+            <DiffIcon size={10} /> {t("Diff")}
+          </button>
+          <button
+            type="button"
             className="btn is-primary is-compact"
             disabled={!dirty || saveBusy}
             onClick={() => void onSave()}
@@ -813,6 +861,10 @@ function Editor({
           </button>
         </div>
       </div>
+
+      {showDiff && dirty && (
+        <DiffPreview oldText={file.content} newText={dirtyContent ?? ""} />
+      )}
 
       {file.parse.errors.length > 0 && (
         <div className="status-note status-note--error mono">

@@ -248,6 +248,11 @@ export type SavedSshConnection = {
   /** Explicit sidebar group label. Missing / empty means the
    *  connection lives in the implicit "default" bucket. */
   group?: string | null;
+  /** Optional environment tag — used for visual cues in lists / bus
+   *  view to make prod hosts unmistakable from staging or local
+   *  ones. Stored verbatim (`prod` / `staging` / `dev` / `local` /
+   *  any free-form string); the chip styling matches by name. */
+  envTag?: string | null;
   /** Database credentials remembered for this SSH profile.
    *  Passwords are NOT included — only a `hasPassword` flag;
    *  resolve via `dbCredResolve` at connect time. */
@@ -617,6 +622,15 @@ export type PostgresBrowserState = {
   foreignKeys: DbForeignKeyView[];
   preview: DataPreview | null;
   pool: PostgresPoolView;
+  /** User-defined enum types in the active schema. Drives the
+   *  result grid's `<datalist>` autocomplete when editing a
+   *  column whose pretty type matches one of these names. */
+  enums: PostgresEnumView[];
+};
+
+export type PostgresEnumView = {
+  name: string;
+  values: string[];
 };
 
 // ── Docker ──────────────────────────────────────────────────────

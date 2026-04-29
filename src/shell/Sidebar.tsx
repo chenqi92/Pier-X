@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   ArrowUp,
   ChevronRight,
+  Download,
   FileText,
   Folder,
   FolderPlus,
@@ -21,8 +22,9 @@ import {
   Star,
   Terminal,
   Trash2,
+  Upload,
 } from "lucide-react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type {
   DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
@@ -60,6 +62,9 @@ type Props = {
   onFileSelect?: (entry: FileEntry) => void;
   selectedFilePath?: string;
   workspaceRoot?: string;
+  /** Open the broadcast dialog with these saved-connection indices
+   *  pre-selected (resolved to tab ids by the App layer). */
+  onBroadcastToIndices?: (indices: number[]) => void;
 };
 
 type ServiceChip = {
@@ -450,7 +455,7 @@ function shortPathLabel(path: string, homeDir: string): string {
   return normalized;
 }
 
-export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, onFileSelect, selectedFilePath, workspaceRoot }: Props) {
+export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, onFileSelect, selectedFilePath, workspaceRoot, onBroadcastToIndices }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<0 | 1>(0);
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -1189,6 +1194,103 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
           onRemove={(index) => { void remove(index).catch(reportError); }}
           onNew={onNewConnection}
           onRefresh={() => { void refreshConnections(); }}
+          onBroadcastToIndices={onBroadcastToIndices}
+          onExport={async () => {
+            try {
+              const picked = await saveDialog({
+                title: t("Export SSH connections"),
+                defaultPath: "pier-x-ssh-connections.json",
+                filters: [{ name: "JSON", extensions: ["json"] }],
+              });
+              if (typeof picked !== "string") return;
+              // sshConnectionsList already strips passwords / keychain
+              // ids on the way to the frontend; what we get here is
+              // safe to share verbatim. envTag / group / databases (a
+              // metadata-only projection) all flow through.
+              const blob = JSON.stringify(
+                {
+                  _meta: {
+                    exportedAt: new Date().toISOString(),
+                    note:
+                      "Passwords are NOT exported. Re-enter on import for password-auth entries.",
+                  },
+                  connections,
+                },
+                null,
+                2,
+              );
+              await cmd.localWriteTextFile(picked, blob);
+              setNotice(
+                t("Exported {n} SSH connection(s).", { n: connections.length }),
+              );
+            } catch (e) {
+              setNotice(e instanceof Error ? e.message : String(e));
+            }
+          }}
+          onImport={async () => {
+            try {
+              const picked = await openDialog({
+                title: t("Import SSH connections"),
+                multiple: false,
+                filters: [{ name: "JSON", extensions: ["json"] }],
+              });
+              if (!picked || typeof picked !== "string") return;
+              const raw = await cmd.localReadTextFile(picked);
+              const parsed = JSON.parse(raw);
+              const incoming = Array.isArray(parsed?.connections)
+                ? parsed.connections
+                : Array.isArray(parsed)
+                  ? parsed
+                  : null;
+              if (!incoming) {
+                setNotice(t("File doesn't look like an SSH connection list."));
+                return;
+              }
+              // De-dup by (host, port, user) so re-importing the same
+              // file doesn't double up the sidebar.
+              const have = new Set(
+                connections.map((c) => `${c.user}@${c.host}:${c.port}`),
+              );
+              let added = 0;
+              let skipped = 0;
+              for (const c of incoming as SavedSshConnection[]) {
+                const key = `${c.user}@${c.host}:${c.port}`;
+                if (have.has(key)) {
+                  skipped += 1;
+                  continue;
+                }
+                try {
+                  await useConnectionStore.getState().save({
+                    name: c.name,
+                    host: c.host,
+                    port: c.port,
+                    user: c.user,
+                    authKind: c.authKind,
+                    // Imported entries lose their password: keychain
+                    // ids are local-only and DirectPassword fallbacks
+                    // were never exported. Password-auth connections
+                    // will re-prompt at first use.
+                    password: "",
+                    keyPath: c.keyPath ?? "",
+                    group: c.group ?? null,
+                    envTag: c.envTag ?? null,
+                  });
+                  have.add(key);
+                  added += 1;
+                } catch {
+                  skipped += 1;
+                }
+              }
+              setNotice(
+                t("Imported {added} new ({skipped} skipped).", {
+                  added,
+                  skipped,
+                }),
+              );
+            } catch (e) {
+              setNotice(e instanceof Error ? e.message : String(e));
+            }
+          }}
           onReorder={async (order, groups) => {
             try {
               await useConnectionStore.getState().reorder(order, groups);
@@ -1233,6 +1335,9 @@ function ServersPane({
   onRefresh,
   onReorder,
   onRenameGroup,
+  onExport,
+  onImport,
+  onBroadcastToIndices,
 }: {
   connections: SavedSshConnection[];
   serverSearch: string;
@@ -1244,6 +1349,9 @@ function ServersPane({
   onRefresh: () => void;
   onReorder: (order: number[], groups: Array<string | null>) => Promise<void>;
   onRenameGroup: (from: string, to: string | null) => Promise<void>;
+  onExport: () => void;
+  onImport: () => void;
+  onBroadcastToIndices?: (indices: number[]) => void;
 }) {
   const totalCount = connections.length;
   const { t } = useI18n();
@@ -1382,6 +1490,47 @@ function ServersPane({
     event.preventDefault();
     const items: ContextMenuItem[] = [];
     if (!pending) {
+      // Connect-all: spawn one SSH tab per host in this group. Useful
+      // for "open the whole prod fleet at once" workflows. We grab the
+      // group's row indices off the latest groups snapshot rather than
+      // scanning `connections` ourselves so the menu reflects the
+      // displayed (possibly filtered) view.
+      const grp = groups.find((g) => g.key === key);
+      const rowCount = grp?.servers.length ?? 0;
+      items.push({
+        label: t("Open all ({n})", { n: rowCount }),
+        disabled: rowCount === 0,
+        action: () => {
+          if (!grp) return;
+          for (const row of grp.servers) onConnect(row.index);
+        },
+      });
+      items.push({
+        label: t("Probe all ({n})", { n: rowCount }),
+        disabled: rowCount === 0,
+        action: () => {
+          if (!grp) return;
+          // Run a single batched probe over the group's indices.
+          // Failures are silent here — the Hosts dashboard / health
+          // pulse on the sidebar pick up the freshly-stored result
+          // on next render without a toast in the user's face.
+          const indices = grp.servers.map((s) => s.index);
+          void cmd
+            .hostHealthProbe({ indices, timeoutMs: 3000 })
+            .catch(() => {});
+        },
+      });
+      if (onBroadcastToIndices) {
+        items.push({
+          label: t("Broadcast to group ({n})", { n: rowCount }),
+          disabled: rowCount === 0,
+          action: () => {
+            if (!grp) return;
+            onBroadcastToIndices(grp.servers.map((s) => s.index));
+          },
+        });
+      }
+      items.push({ divider: true });
       items.push({
         label: t("Rename group"),
         action: () => setRenamingGroup(key),
@@ -1464,6 +1613,23 @@ function ServersPane({
             <span className="seg mono" style={{ fontSize: "var(--size-micro)" }}>{totalCount}</span>
           </span>
         </div>
+        <button
+          className="mini-btn"
+          onClick={onImport}
+          title={t("Import SSH connections from a JSON file")}
+          type="button"
+        >
+          <Upload />
+        </button>
+        <button
+          className="mini-btn"
+          onClick={onExport}
+          title={t("Export SSH connections to a JSON file (passwords stripped)")}
+          type="button"
+          disabled={connections.length === 0}
+        >
+          <Download />
+        </button>
         <button className="mini-btn" onClick={onRefresh} title={t("Refresh")} type="button"><RefreshCw /></button>
       </div>
 

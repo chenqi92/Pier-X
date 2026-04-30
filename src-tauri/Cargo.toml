@@ -1,6 +1,6 @@
 [package]
 name = "pierx"
-version = "0.1.0"
+version = "0.2.0"
 description = "Pier-X — cross-platform terminal / Git / SSH / database management tool (Tauri runtime)"
 authors = ["chenqi"]
 license = "MIT"

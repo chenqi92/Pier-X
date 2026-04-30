@@ -75,7 +75,7 @@ jobs:
           fi
 
           prerelease="false"
-          case "$tag" in v0.*) prerelease="true" ;; esac
+          case "$tag" in *-rc.*|*-beta*|*-alpha*) prerelease="true" ;; esac
 
           prev_tag="$(git tag --list 'v*' --sort=-v:refname | head -n 1 || true)"
           if [ -n "$prev_tag" ]; then

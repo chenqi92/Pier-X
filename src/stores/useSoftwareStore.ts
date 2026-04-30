@@ -140,6 +140,12 @@ type SoftwareStoreState = {
   /** Mark a row as "cancel in flight" so the UI can disable the cancel
    *  button between the click and the resulting `cancelled` event. */
   setCancelling: (key: Key, packageId: string, cancelling: boolean) => void;
+  /** Drop the activity entry for `packageId` so the row stops showing
+   *  the install log / error / repo-warning advisory blocks. Called
+   *  from the row's dismiss button after a finished install — never
+   *  while busy (the UI hides the dismiss button mid-flight to keep
+   *  the user from accidentally tearing down a live progress feed). */
+  dismissActivity: (key: Key, packageId: string) => void;
   invalidate: (key: Key) => void;
 };
 
@@ -298,6 +304,27 @@ export const useSoftwareStore = create<SoftwareStoreState>((set, get) => ({
               [packageId]: { ...a, cancelling },
             },
           },
+        },
+      };
+    }),
+
+  dismissActivity: (key, packageId) =>
+    set((s) => {
+      const prev = s.snapshots[key];
+      if (!prev) return s;
+      if (!(packageId in prev.activity)) return s;
+      const a = prev.activity[packageId];
+      // Refuse to dismiss a still-running activity — the row's
+      // dismiss button is hidden in that state, but a stale double-
+      // click race could still slip through. Keeping the entry
+      // around prevents the live progress feed from going dark.
+      if (a && a.busy) return s;
+      const nextActivity = { ...prev.activity };
+      delete nextActivity[packageId];
+      return {
+        snapshots: {
+          ...s.snapshots,
+          [key]: { ...prev, activity: nextActivity },
         },
       };
     }),

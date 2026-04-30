@@ -558,6 +558,33 @@
 .field-input.is-mono,
 .field-select.is-mono { font-family: var(--mono); }
 
+/* Native <option> dropdown items don't inherit the trigger's CSS —
+ * browsers render the popup in a separate layer, so we have to
+ * paint each option explicitly. Without this, the dropdown shows
+ * the OS default (typically near-white background + dark text)
+ * which is unreadable against any custom theme. Applies globally
+ * to every `<select>` in the app — touching one rule here fixes
+ * .lg-sel-native, .field-select, .git-select, .dlg-select,
+ * .settings__select, the pager size picker, software/firewall
+ * rule selects, etc. all at once. */
+select option {
+  background-color: var(--panel);
+  color: var(--ink);
+}
+/* `--accent-dim` (opaque) instead of `--accent-subtle` (8% alpha) —
+ * native option popups don't composite alpha well on top of their
+ * own opaque background, so an 8%-tinted blue is invisible on the
+ * dark panel. The dim variant lands somewhere readable in both
+ * themes. */
+select option:checked,
+select option:hover {
+  background-color: var(--accent-dim);
+  color: var(--ink);
+}
+select option:disabled {
+  color: var(--dim);
+}
+
 /* ─── Toggle switch ──────────────────────────────────────── */
 .switch {
   width: 32px;

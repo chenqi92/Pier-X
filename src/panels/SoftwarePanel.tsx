@@ -1979,6 +1979,11 @@ function SoftwarePanelBody({ tab }: Props) {
         onViewLogs={() => setLogTarget(descriptor)}
         onCopyCommand={(action) => void copyInstallCommand(descriptor, action)}
         onCancel={() => void cancelRow(descriptor.id)}
+        onDismissActivity={() => {
+          if (swKey) {
+            useSoftwareStore.getState().dismissActivity(swKey, descriptor.id);
+          }
+        }}
         onVendorPick={() => setVendorTarget(descriptor)}
         onAction={(action) => void runInstall(descriptor, action)}
         onCdToPath={(p) => void sendCdToTerminal(p)}
@@ -3149,6 +3154,7 @@ function SoftwareRow({
   onViewLogs,
   onCopyCommand,
   onCancel,
+  onDismissActivity,
   onVendorPick,
   onCdToPath,
   onCleanupRepo,
@@ -3236,6 +3242,11 @@ function SoftwareRow({
   onCopyCommand: (action: "install" | "update") => void;
   /** Trigger backend cancel for the row's in-flight activity. */
   onCancel: () => void;
+  /** Dismiss the row's persisted activity (install log + error +
+   *  repo warnings) after a finished run. The row's button is only
+   *  rendered when the activity is no longer busy, so this never
+   *  fires mid-install. */
+  onDismissActivity: () => void;
   /** Open the vendor-script confirm dialog. Only invoked from the
    *  install-channel chooser when the descriptor exposes a
    *  `vendorScript`. */
@@ -3786,7 +3797,21 @@ function SoftwareRow({
           activity.log.length > 0 ||
           activity.error ||
           activity.repoWarnings.length > 0) && (
-          <>
+          <div className="sw-row__activity">
+            {!activity.busy && (
+              <button
+                type="button"
+                className="sw-row__activity-dismiss"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDismissActivity();
+                }}
+                title={t("Dismiss this install report")}
+                aria-label={t("Dismiss this install report")}
+              >
+                <X size={11} />
+              </button>
+            )}
             {bundlePausedHere && (
               <div className="sw-row__paused mono">
                 <span className="sw-row__paused-pill">{t("PAUSED")}</span>
@@ -3850,7 +3875,7 @@ function SoftwareRow({
                 {activity.log.join("\n")}
               </pre>
             )}
-          </>
+          </div>
         )}
       {expanded && (
         <SoftwareRowDetails

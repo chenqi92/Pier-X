@@ -71,7 +71,15 @@ html, body {
 
 /* 2. Content islands: selectable text is the default here.
  *    Inheritance carries `text` down to every descendant unless
- *    a more specific chrome rule (below) reclaims a child. */
+ *    a more specific chrome rule (below) reclaims a child.
+ *
+ *    `pre` and `code` are blanket-selectable everywhere — they're
+ *    semantically "preformatted output" (logs, diffs, error
+ *    payloads, command snippets) and the whole point is that the
+ *    user can copy them. Same idea for `.status-note` (the
+ *    error/warning banner family — users need to copy the error
+ *    string to paste into a search or stack overflow), and for
+ *    the install-log / sw-logs / row-error blocks specifically. */
 .ux-selectable,
 .terminal-screen,
 .log-viewer,
@@ -84,6 +92,12 @@ html, body {
 .git-diff-code,
 .preview-list,
 .dk-inspect-pre,
+.install-log,
+.sw-logs__pre,
+.sw-row__error,
+.sw-row__warn,
+.status-note,
+pre, code,
 input, textarea, select, [contenteditable="true"] {
   user-select: text;
   -webkit-user-select: text;
@@ -6530,7 +6544,12 @@ button,
 .sw-panel__header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* `flex-wrap: wrap` so the 9-button toolbar gracefully degrades
+   * to two rows on narrow panels instead of overflowing the
+   * container or pushing the title off-screen. The `row-gap` keeps
+   * the wrapped rows from kissing each other vertically. */
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
   gap: var(--sp-2);
 }
 .sw-panel__title {
@@ -6569,9 +6588,67 @@ button,
 }
 .sw-row__head {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  /* Five explicit columns to match the five fixed children in DOM
+   * order: expand-btn, status, name, version, actions. The 1fr
+   * lives on the **name** column so the package name stays
+   * left-aligned and pushes the version + action buttons to the
+   * right edge — IDEA-/DataGrip-style row layout. The previous
+   * 4-column grid put the 1fr on the status column, which
+   * collapsed status's slack and forced the name onto the right
+   * side; the 5th child (actions) auto-wrapped to row 2 col 1,
+   * giving a 2-row "name top-right, buttons bottom-left" layout
+   * that's hard to scan. */
+  grid-template-columns: auto auto 1fr auto auto;
   align-items: center;
   gap: var(--sp-2);
+}
+/* Truncate over-long package names instead of wrapping the row
+ * onto two lines — the action buttons stay anchored to the right
+ * regardless of name length. */
+.sw-row__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Container for the row's activity report (paused pill / error
+ * banner / repo-warning advisory / install-log pre). Positioned
+ * relative so the X dismiss button can absolute-anchor to the
+ * top-right corner. The flex column re-creates the same vertical
+ * gap the inline siblings used to have. */
+.sw-row__activity {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+/* X button at the top-right of the activity block. Only rendered
+ * once the install/update finishes (busy=false), so users can clear
+ * a stale "网络不可达" banner without going through "Refresh". The
+ * +sp-1 inset matches the .sw-row's own padding so the X visually
+ * lines up with the row's top edge. */
+.sw-row__activity-dismiss {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  /* z-index keeps the button above the install-log <pre> which has
+   * its own background fill and would otherwise occlude the icon. */
+  z-index: 1;
+}
+.sw-row__activity-dismiss:hover {
+  background: var(--surface-2);
+  color: var(--ink);
 }
 .sw-row__status {
   display: inline-flex;

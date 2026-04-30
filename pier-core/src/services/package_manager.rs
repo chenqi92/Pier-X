@@ -2380,11 +2380,35 @@ pub async fn compose_apply(
     let tmpl = compose_template_by_id(template_id).ok_or_else(|| {
         SshError::InvalidConfig(format!("unknown compose template: {template_id}"))
     })?;
+    compose_apply_inline(session, tmpl.id, tmpl.yaml).await
+}
+
+/// Same as [`compose_apply`] but takes the YAML directly — used by the
+/// user-uploaded template path where the catalog ID isn't part of the
+/// built-in `COMPOSE_TEMPLATES` table.
+pub async fn compose_apply_inline(
+    session: &SshSession,
+    id: &str,
+    yaml: &str,
+) -> Result<PostgresActionReport> {
+    if id.is_empty() {
+        return Err(SshError::InvalidConfig(
+            "compose_apply_inline: empty id".to_string(),
+        ));
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(SshError::InvalidConfig(format!(
+            "compose_apply_inline: id must be [a-zA-Z0-9_-]: {id:?}"
+        )));
+    }
     let env = probe_host_env(session).await;
     let prefix = if env.is_root { "" } else { "sudo -n " };
     // Use a heredoc so we don't have to escape $ / quotes inside
     // the YAML. The marker is constant so the heredoc body is
-    // verbatim from the const literal.
+    // verbatim from the supplied yaml.
     let heredoc = "PIERX_COMPOSE_EOF";
     let inner = format!(
         "set -e; \
@@ -2393,8 +2417,6 @@ pub async fn compose_apply(
          cat > \"$dir/docker-compose.yml\" <<'{heredoc}'\n{yaml}{heredoc}\n; \
          cd \"$dir\"; \
          docker compose up -d 2>&1",
-        id = tmpl.id,
-        yaml = tmpl.yaml,
     );
     let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
     let (exit_code, stdout) = session.exec_command(&command).await?;
@@ -2424,14 +2446,26 @@ pub async fn compose_apply(
 
 /// Tear down a previously-applied template via `docker compose
 /// down`. Doesn't delete the YAML file — re-run `compose_apply`
-/// or rm the directory manually to fully remove.
+/// or rm the directory manually to fully remove. Accepts any
+/// stack id matching `[a-zA-Z0-9_-]+` so user-uploaded templates
+/// can be torn down the same way as built-ins.
 pub async fn compose_down(
     session: &SshSession,
     template_id: &str,
 ) -> Result<PostgresActionReport> {
-    let tmpl = compose_template_by_id(template_id).ok_or_else(|| {
-        SshError::InvalidConfig(format!("unknown compose template: {template_id}"))
-    })?;
+    if template_id.is_empty() {
+        return Err(SshError::InvalidConfig(
+            "compose_down: empty template_id".to_string(),
+        ));
+    }
+    if !template_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(SshError::InvalidConfig(format!(
+            "compose_down: id must be [a-zA-Z0-9_-]: {template_id:?}"
+        )));
+    }
     let env = probe_host_env(session).await;
     let prefix = if env.is_root { "" } else { "sudo -n " };
     let inner = format!(
@@ -2440,7 +2474,7 @@ pub async fn compose_down(
          [ -e \"$dir/docker-compose.yml\" ] || {{ echo 'stack not found'; exit 1; }}; \
          cd \"$dir\"; \
          docker compose down 2>&1",
-        id = tmpl.id,
+        id = template_id,
     );
     let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
     let (exit_code, stdout) = session.exec_command(&command).await?;
@@ -2474,6 +2508,15 @@ pub fn compose_apply_blocking(
     template_id: &str,
 ) -> Result<PostgresActionReport> {
     crate::ssh::runtime::shared().block_on(compose_apply(session, template_id))
+}
+
+/// Blocking wrapper for [`compose_apply_inline`].
+pub fn compose_apply_inline_blocking(
+    session: &SshSession,
+    id: &str,
+    yaml: &str,
+) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared().block_on(compose_apply_inline(session, id, yaml))
 }
 
 /// Blocking wrapper for [`compose_down`].

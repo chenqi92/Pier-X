@@ -69,4 +69,12 @@ pub enum SshError {
     /// under normal use.
     #[error("ssh session is no longer alive")]
     Dead,
+
+    /// A long-running transfer was aborted by the user via the
+    /// frontend's cancel command. The destination file is left in
+    /// its partial state — re-running the transfer with the same
+    /// transfer-id picks up where this one stopped (the auto-resume
+    /// machinery in `sftp.rs` reads the destination size on retry).
+    #[error("transfer cancelled")]
+    Cancelled,
 }

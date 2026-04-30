@@ -2,11 +2,14 @@ import {
   ChevronDown,
   ExternalLink,
   FolderTree,
+  Pin,
   Play,
+  Plus,
   RefreshCw,
   Server,
   Square,
   Terminal as TerminalIcon,
+  X,
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -19,6 +22,7 @@ import {
   findPreset,
   isLogLikeFilename,
   LOG_SYSTEM_PRESETS,
+  logSourceSignature,
   MODES,
 } from "../lib/logSource";
 import type { LogEventView, LogSource, LogSourceMode, SftpEntryView, TabState } from "../lib/types";
@@ -148,6 +152,34 @@ function LogViewerPanelBody({ tab }: Props) {
 
   function patchSource(patch: Partial<LogSource>) {
     updateTab(tab.id, { logSource: { ...source, ...patch } });
+  }
+
+  // Pinned alternate sources — rendered as a side rail above the
+  // tail. Each pin is a one-click swap into `logSource`. The active
+  // pin is whichever entry has the same signature as `logSource`.
+  const pins: LogSource[] = tab.logSourcePins ?? [];
+  const activePinSig = logSourceSignature(source);
+  const activePinIdx = pins.findIndex((p) => logSourceSignature(p) === activePinSig);
+  const PIN_CAP = 8;
+
+  function pinCurrentSource() {
+    if (pins.some((p) => logSourceSignature(p) === activePinSig)) return;
+    const next = [...pins, { ...source }].slice(0, PIN_CAP);
+    updateTab(tab.id, { logSourcePins: next });
+  }
+
+  function unpinSource(idx: number) {
+    const next = pins.filter((_, i) => i !== idx);
+    updateTab(tab.id, { logSourcePins: next });
+  }
+
+  function activatePin(p: LogSource) {
+    if (logSourceSignature(p) === activePinSig) return;
+    // Stop the running stream — it's tied to the previous source's
+    // command. The user clicks Start to resume on the new source so
+    // we don't surprise them with an auto-restart.
+    if (streamId) void stopStream();
+    updateTab(tab.id, { logSource: { ...p } });
   }
 
   function setMode(mode: LogSourceMode) {
@@ -437,6 +469,59 @@ function LogViewerPanelBody({ tab }: Props) {
             {streaming ? t("Stop") : busy ? t("Starting...") : t("Start")}
           </button>
         </div>
+
+        {/* Multi-source rail — pinned alternates the user can swap
+            between with one click. Hidden while empty unless the
+            current source is unpinned (then we render the lone
+            "+ Pin" button so the rail discoverably exists). */}
+        {(pins.length > 0 || canStart) && (
+          <div className="lg-pinrail">
+            {pins.map((p, i) => {
+              const active = i === activePinIdx;
+              const Icon = MODE_ICONS[p.mode];
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  className={"lg-pin" + (active ? " on" : "")}
+                  onClick={() => activatePin(p)}
+                  title={describeLogSource(p)}
+                >
+                  <Icon size={10} />
+                  <span className="lg-pin-label">{describeLogSource(p)}</span>
+                  <span
+                    className="lg-pin-x"
+                    role="button"
+                    aria-label={t("Unpin")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      unpinSource(i);
+                    }}
+                  >
+                    <X size={9} />
+                  </span>
+                </button>
+              );
+            })}
+            {activePinIdx === -1 && canStart && (
+              <button
+                type="button"
+                className="lg-pin lg-pin--add"
+                onClick={pinCurrentSource}
+                disabled={pins.length >= PIN_CAP}
+                title={
+                  pins.length >= PIN_CAP
+                    ? t("Pin limit reached ({n}).", { n: PIN_CAP })
+                    : t("Pin this source for one-click recall")
+                }
+              >
+                <Pin size={10} />
+                <span>{t("Pin current")}</span>
+                <Plus size={9} />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Backfill row — one-shot historical fetch over the chosen
             window. Disabled when the source can't sensibly back-fill

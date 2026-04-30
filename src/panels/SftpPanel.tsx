@@ -1805,6 +1805,25 @@ function SftpPanelBody({ tab }: Props) {
                   {isActive && pct != null && (
                     <span className="ftp-queue-pct ftp-queue-pct--active mono">{pct}%</span>
                   )}
+                  {isActive && (
+                    <button
+                      type="button"
+                      className="ftp-queue-cancel"
+                      onClick={() => {
+                        // Backend will fire a final `done: true` event
+                        // with `error: "transfer cancelled"`, flipping
+                        // the row to its failed visual state. Errors
+                        // from the cancel command itself are swallowed
+                        // — the worst case is the transfer finished
+                        // milliseconds before the click.
+                        void cmd.sftpCancelTransfer(item.id).catch(() => {});
+                      }}
+                      title={t("Cancel this transfer")}
+                      aria-label={t("Cancel transfer")}
+                    >
+                      <X size={11} />
+                    </button>
+                  )}
                   {isDone && (
                     <span className="ftp-queue-pct mono">
                       <Check size={11} />

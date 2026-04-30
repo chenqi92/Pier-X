@@ -57,6 +57,7 @@ pub mod runtime;
 pub mod service_detector;
 pub mod session;
 pub mod sftp;
+pub mod sftp_parallel;
 pub mod tunnel;
 
 pub use channel::SshChannelPty;

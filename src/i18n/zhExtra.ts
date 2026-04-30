@@ -743,6 +743,7 @@ export const zhExtra: Record<string, string> = {
   // SFTP — context menu & extended actions
   "Open": "打开",
   "Edit": "编辑",
+  "Render": "渲染",
   "Download…": "下载…",
   "Rename…": "重命名…",
   "Duplicate": "复制",
@@ -1587,6 +1588,96 @@ export const zhExtra: Record<string, string> = {
   "Save → validate → reload (with auto-restore on fail)":
     "保存 → 校验 → 重载（失败自动回滚）",
   "Saving…": "保存中…",
+  IfModule: "IfModule",
+  "List and edit <IfModule> conditional blocks":
+    "列出并编辑 <IfModule> 条件块",
+  "Server activity (pg_stat_activity)": "服务器活动（pg_stat_activity）",
+  "Show server activity (pg_stat_activity) — slow queries, idle-in-tx, locks":
+    "查看服务器活动（pg_stat_activity）—— 慢查询、空闲事务、锁",
+  "Server activity (SHOW PROCESSLIST)": "服务器活动（SHOW PROCESSLIST）",
+  "Show server activity (SHOW PROCESSLIST) — slow queries, idle sessions":
+    "查看服务器活动（SHOW PROCESSLIST）—— 慢查询、空闲会话",
+  "Hide Sleep / Binlog Dump backends": "隐藏 Sleep / Binlog Dump 后端",
+  "Sessions running ≥ 5s": "运行 ≥ 5 秒的会话",
+  "Long-running": "长时间运行",
+  "Force-kill connection {id}? The session will drop and any open transaction is rolled back.":
+    "强制终止连接 {id}？会话将断开，正在进行的事务会被回滚。",
+  "KILL QUERY {id} — interrupts the running statement":
+    "KILL QUERY {id} —— 中断正在运行的语句",
+  "KILL {id} — drops the entire session connection":
+    "KILL {id} —— 关闭整个会话连接",
+  Activity: "活动",
+  Active: "活动中",
+  "Idle-Tx": "空闲事务",
+  "Idle in transaction — long ones are usually a leak":
+    "空闲事务 —— 长时间空闲通常意味着泄漏",
+  "Auto-refresh 5s": "自动刷新 5 秒",
+  "{n} backends": "{n} 个后端",
+  "(no matching backends)": "（没有匹配的后端）",
+  "Force-terminate backend {pid}? The connection will drop and any open transaction is rolled back.":
+    "强制终止后端 {pid}？连接将断开，正在进行的事务会被回滚。",
+  "pg_cancel_backend({pid}) — interrupts the running statement":
+    "pg_cancel_backend({pid}) —— 中断正在运行的语句",
+  "pg_terminate_backend({pid}) — drops the entire connection":
+    "pg_terminate_backend({pid}) —— 关闭整个连接",
+  "in-tx": "事务中",
+  Terminate: "终止",
+  "Upload custom template": "上传自定义模板",
+  "Save your own docker-compose.yml as a reusable template":
+    "把你自己的 docker-compose.yml 保存为可复用的模板",
+  "Display name": "显示名称",
+  "Ports (optional)": "端口（可选）",
+  "(optional one-line summary)": "（可选的一行说明）",
+  "(uses id)": "（使用 ID）",
+  "Load from file…": "从文件加载…",
+  "Save template": "保存模板",
+  "Template id and YAML are both required.": "模板 ID 和 YAML 都必填。",
+  "Template id must use only letters, digits, dash and underscore.":
+    "模板 ID 仅可包含字母、数字、连字符和下划线。",
+  "Saved template \"{id}\".": "已保存模板 “{id}”。",
+  "User-uploaded template": "用户上传的模板",
+  "Remove this user template from the catalog. Does not affect any running stacks.":
+    "从目录中移除该用户模板。不影响已运行的栈。",
+  "Delete user template \"{id}\"? The on-host stack is not affected.":
+    "删除用户模板 “{id}”？不会影响主机上已运行的栈。",
+  "Deleted user template \"{id}\".": "已删除用户模板 “{id}”。",
+  "Deleting…": "删除中…",
+  Matchers: "匹配器",
+  "List and edit named (@xxx) matchers per site or snippet":
+    "按站点或片段列出并编辑命名（@xxx）匹配器",
+  "New named matcher": "新增命名匹配器",
+  "(no site or snippet blocks in this file)": "（此文件中没有站点或片段块）",
+  "(no named matchers in this scope)": "（此作用域内没有命名匹配器）",
+  "{n} conditions (block form)": "{n} 个条件（块形式）",
+  "References within this scope": "本作用域内引用次数",
+  "× {n}": "× {n}",
+  "Delete — {n} references will dangle": "删除 —— 将有 {n} 处引用悬空",
+  "Delete this matcher": "删除该匹配器",
+  "{n} references": "{n} 处引用",
+  "New <IfModule>": "新增 <IfModule>",
+  "Append an empty <IfModule> wrapper at top-level":
+    "在顶层追加一个空的 <IfModule> 包裹",
+  "(no <IfModule> blocks in this file)": "（此文件中没有 <IfModule> 块）",
+  "Negate the test (run body when module is NOT loaded)":
+    "对条件取反（仅当模块未加载时执行块内指令）",
+  "{n} directives": "{n} 条指令",
+  "Remove the <IfModule> wrapper, keeping its body in the parent block":
+    "移除 <IfModule> 包裹，将其内容保留在父块中",
+  Unwrap: "解包",
+  "Unwrap?": "解包？",
+  "(unsaved — edits commit to buffer)": "（未保存 —— 修改会更新缓冲）",
+  "Open in your OS default editor; saves auto-push back through validate + reload":
+    "在系统默认编辑器中打开；保存会自动通过 校验 + 重载 推回服务器",
+  "Save or discard the unsaved buffer before opening this file in an external editor.":
+    "在用外部编辑器打开此文件前，请先保存或丢弃未提交的修改。",
+  "Saving from external editor…": "正在从外部编辑器保存…",
+  "Validate failed — config restored.": "校验失败 —— 配置已回滚。",
+  "Saved · validate ok · reloaded": "已保存 · 校验通过 · 已重载",
+  "Saved · validate ok · reload skipped": "已保存 · 校验通过 · 未重载",
+  "Save failed: {msg}": "保存失败：{msg}",
+  "Editing externally — saves auto-sync": "正在外部编辑 —— 保存会自动同步",
+  "Stop external-edit watcher and clean up the temp file":
+    "停止外部编辑监听并清理临时文件",
   "Main": "主配置",
   "Includes": "包含文件",
   "Sites": "站点",
@@ -1990,6 +2081,10 @@ export const zhExtra: Record<string, string> = {
   "Endpoints": "终结点",
   "Failures": "失败记录",
   "{n} stored": "已存储 {n} 条",
+  "{n} failures": "{n} 次失败",
+  "Pin current": "钉住当前",
+  "Pin this source for one-click recall": "钉住此来源以便一键调用",
+  "Pin limit reached ({n}).": "已达上限 ({n})。",
   "Refreshing…": "刷新中…",
   "No webhook failures recorded.": "尚无失败记录。",
   "attempt {n}: {err}": "第 {n} 次尝试：{err}",
@@ -2389,6 +2484,9 @@ export const zhExtra: Record<string, string> = {
   "Sat": "周六",
   "Last run: {when}": "上次运行：{when}",
   "Bundle not found": "Bundle 未找到",
+
+  // Bundle ETA
+  "≈ {eta} left": "≈ 还需 {eta}",
 
   // Bundle dry-run
   "Dry run": "干跑预览",

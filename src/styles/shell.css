@@ -4384,6 +4384,53 @@ button,
   border-bottom: 1px solid var(--line);
   background: var(--panel-2);
 }
+.lg-pinrail {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--size-micro);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+  overflow-x: auto;
+}
+.lg-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--sp-1-5);
+  height: 22px;
+  color: var(--ink-2);
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+.lg-pin:hover { background: var(--panel); color: var(--ink); }
+.lg-pin.on {
+  background: var(--accent-subtle);
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+.lg-pin-label {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lg-pin-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+}
+.lg-pin-x:hover { background: var(--neg-dim); color: var(--neg); }
+.lg-pin--add { color: var(--muted); }
+.lg-pin--add:hover { color: var(--accent); }
 .lg-pick {
   display: flex;
   align-items: center;
@@ -5789,6 +5836,27 @@ button,
   justify-content: flex-end;
 }
 .ftp-queue-pct--active { color: var(--accent); }
+/* Inline X button on active transfer rows — same footprint as the
+ * percentage pill so the row layout doesn't shift between states.
+ * Color stays muted until hover so the button reads as secondary
+ * to the percentage. */
+.ftp-queue-cancel {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ftp-queue-cancel:hover {
+  background: var(--neg-dim);
+  color: var(--neg);
+}
 .ftp-queue-item.done .ftp-queue-name {
   color: var(--muted);
   text-decoration: line-through;
@@ -7177,6 +7245,59 @@ button,
   overflow-y: auto;
   padding-right: var(--sp-1);
 }
+.sw-compose__upload {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.sw-compose__upload-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.sw-compose__upload-row {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.sw-compose__upload-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-0-5);
+  flex: 1;
+  min-width: 12ch;
+}
+.sw-compose__upload-field span {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.sw-compose__upload-field input,
+.sw-compose__upload-field textarea {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+}
+.sw-compose__upload-yaml textarea {
+  resize: vertical;
+  min-height: 12ex;
+  font-family: var(--mono);
+}
+.sw-compose__upload-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.sw-compose__upload-spacer {
+  flex: 1;
+}
 .sw-compose__card {
   display: flex;
   flex-direction: column;
@@ -7186,14 +7307,28 @@ button,
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
 }
+.sw-compose__card--user {
+  border-color: var(--accent-subtle);
+}
 .sw-compose__card-head {
   display: flex;
   align-items: baseline;
   gap: var(--sp-2);
 }
 .sw-compose__card-label { color: var(--ink); font-weight: 500; }
+.sw-compose__card-badge {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-xs);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: var(--size-micro);
+}
 .sw-compose__card-ports { color: var(--muted); font-size: var(--size-micro); }
 .sw-compose__card-desc { color: var(--muted); font-size: var(--ui-fs-sm); }
+.sw-compose__delete {
+  margin-left: auto;
+  color: var(--neg);
+}
 .sw-compose__card-actions {
   display: flex;
   gap: var(--sp-2);
@@ -7645,6 +7780,57 @@ button,
   display: inline-flex;
   gap: var(--sp-1);
   justify-content: flex-end;
+}
+.sw-webhooks__failure-group {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.sw-webhooks__failure-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1-5) var(--sp-2);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+.sw-webhooks__failure-group-head:hover {
+  background: var(--panel);
+}
+.sw-webhooks__failure-group-url {
+  flex: 1;
+  font-size: var(--size-micro);
+  color: var(--ink-2);
+  word-break: break-all;
+}
+.sw-webhooks__failure-group-count {
+  background: var(--neg-dim);
+  color: var(--neg);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--sp-1-5);
+  font-size: var(--size-micro);
+}
+.sw-webhooks__failure-group-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-1-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1-5);
+}
+.sw-webhooks__failure-group-list .sw-webhooks__failure {
+  background: var(--panel);
 }
 
 /* PostgreSQL quick-config dialog — three independent forms in
@@ -10254,6 +10440,332 @@ button,
   margin-left: auto;
   color: var(--muted);
   font-size: var(--size-micro);
+}
+
+/* External-editor banner: lives between the toolbar and editor body
+ * while the OS editor session is alive. Status colors mirror the
+ * existing status-note palette so users read them at a glance. */
+.ws-raw__extedit {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--size-micro);
+}
+.ws-raw__extedit--uploading {
+  background: var(--info-dim);
+}
+.ws-raw__extedit--uploaded {
+  background: var(--pos-dim);
+}
+.ws-raw__extedit--error {
+  background: var(--neg-dim);
+}
+.ws-raw__extedit-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.ws-raw__extedit-label {
+  color: var(--ink);
+  font-weight: 500;
+}
+.ws-raw__extedit-time {
+  color: var(--muted);
+}
+.ws-raw__extedit-path {
+  color: var(--dim);
+  margin-left: auto;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Postgres / MySQL server activity dialog ─────────────────── */
+
+.pg-activity {
+  width: 920px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.pg-activity__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.pg-activity__filter {
+  display: flex;
+  gap: var(--sp-1);
+}
+.pg-activity__auto {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--size-micro);
+  color: var(--ink-2);
+}
+.pg-activity__count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.pg-activity__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-2) var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.pg-activity__row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.pg-activity__row--warn {
+  border-color: var(--warn-dim);
+  background: var(--warn-dim);
+}
+.pg-activity__row--alert {
+  border-color: var(--neg-dim);
+  background: var(--neg-dim);
+}
+.pg-activity__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  font-size: var(--size-micro);
+}
+.pg-activity__pid {
+  font-weight: 600;
+  color: var(--ink);
+}
+.pg-activity__state {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-xs);
+  background: var(--panel-2);
+  color: var(--ink-2);
+}
+.pg-activity__state--active {
+  background: var(--info-dim);
+  color: var(--info);
+}
+.pg-activity__user,
+.pg-activity__addr,
+.pg-activity__app {
+  color: var(--muted);
+}
+.pg-activity__dur {
+  color: var(--ink-2);
+}
+.pg-activity__dur--warn {
+  color: var(--warn);
+}
+.pg-activity__dur--alert {
+  color: var(--neg);
+  font-weight: 600;
+}
+.pg-activity__wait {
+  color: var(--dim);
+}
+.pg-activity__spacer {
+  flex: 1;
+}
+.pg-activity__sql {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--panel);
+  border-radius: var(--radius-xs);
+  color: var(--ink-2);
+  font-size: var(--size-micro);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 14ex;
+  overflow: auto;
+}
+
+/* ── Caddy named-matcher editor ──────────────────────────────── */
+
+.caddy-mat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  overflow: auto;
+  flex: 1;
+}
+.caddy-mat__scopes {
+  display: flex;
+  gap: var(--sp-1);
+  flex-wrap: wrap;
+}
+.caddy-mat__add {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.caddy-mat__add-label {
+  color: var(--ink-2);
+  font-size: var(--size-micro);
+}
+.caddy-mat__at {
+  color: var(--accent);
+  font-weight: 600;
+}
+.caddy-mat__name-input {
+  flex: 0 1 14ch;
+  min-width: 8ch;
+}
+.caddy-mat__value-input {
+  flex: 1;
+  min-width: 12ch;
+}
+.caddy-mat__card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  padding: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.caddy-mat__card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.caddy-mat__blockform {
+  flex: 1;
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.caddy-mat__usage {
+  color: var(--dim);
+  font-size: var(--size-micro);
+  margin-left: auto;
+}
+.caddy-mat__confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.caddy-mat__warn {
+  color: var(--neg);
+  font-size: var(--size-micro);
+}
+.caddy-mat__block-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: var(--sp-3);
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.caddy-mat__block-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Apache <IfModule> conditional editor ────────────────────── */
+
+.apache-ifm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  overflow: auto;
+  flex: 1;
+}
+.apache-ifm__add {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.apache-ifm__add input {
+  flex: 1;
+  min-width: 0;
+}
+.apache-ifm__add-label {
+  color: var(--ink-2);
+  font-size: var(--size-micro);
+}
+.apache-ifm__card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  padding: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.apache-ifm__card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.apache-ifm__name {
+  flex: 0 1 24ch;
+  min-width: 12ch;
+}
+.apache-ifm__neg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.apache-ifm__parent {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.apache-ifm__count {
+  color: var(--dim);
+  font-size: var(--size-micro);
+  margin-left: auto;
+}
+.apache-ifm__confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.apache-ifm__preview {
+  color: var(--muted);
+  font-size: var(--size-micro);
+  padding-left: var(--sp-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.apache-ifm__preview-more {
+  color: var(--dim);
 }
 
 /* ── Caddy structured tree view ──────────────────────────────── */

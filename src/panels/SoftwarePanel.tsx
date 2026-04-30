@@ -8,6 +8,7 @@ import {
   Clock,
   Copy,
   Download,
+  FilePlus2,
   FileText,
   Info,
   Loader,
@@ -142,6 +143,23 @@ function matchesSearch(row: SoftwareDescriptor, query: string): boolean {
     (row.category ?? "").toLowerCase().includes(q) ||
     (row.notes ?? "").toLowerCase().includes(q)
   );
+}
+
+/** Compact "2m 30s" / "45s" / "1h 12m" formatting for the bundle ETA
+ *  chip. Anything < 1s shows as "0s" so the chip doesn't read "—" on
+ *  the very first refresh after a sub-second package landed. */
+function formatDurationShort(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0s";
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = totalSec % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remMin = minutes % 60;
+  return remMin > 0 ? `${hours}h ${remMin}m` : `${hours}h`;
 }
 
 export default function SoftwarePanel(props: Props) {
@@ -306,6 +324,9 @@ function SoftwarePanelBody({ tab }: Props) {
     /** `"installing"` for runBundle, `"uninstalling"` for the
      *  reverse path. Drives banner copy. */
     mode: "installing" | "uninstalling";
+    /** Wall-clock ms when the bundle started — used to compute the
+     *  ETA "≈ 2m 30s left" hint in the bundle card. */
+    startedAt: number;
   } | null>(null);
   /** Pause / skip / abort flags for the in-flight bundle. Refs
    *  rather than state because the loop reads them on each
@@ -1052,6 +1073,7 @@ function SoftwarePanelBody({ tab }: Props) {
       packageId: null,
       nextPackageId: null,
       mode: "installing",
+      startedAt: Date.now(),
     });
     bundlePauseRef.current = false;
     bundleSkipRef.current = false;
@@ -1223,6 +1245,7 @@ function SoftwarePanelBody({ tab }: Props) {
       packageId: null,
       nextPackageId: null,
       mode: "uninstalling",
+      startedAt: Date.now(),
     });
     bundlePauseRef.current = false;
     bundleSkipRef.current = false;
@@ -1439,6 +1462,7 @@ function SoftwarePanelBody({ tab }: Props) {
       packageId: null,
       nextPackageId: null,
       mode: "uninstalling",
+      startedAt: Date.now(),
     });
     bundlePauseRef.current = false;
     bundleSkipRef.current = false;
@@ -2179,6 +2203,33 @@ function SoftwarePanelBody({ tab }: Props) {
                           })}
                         </span>
                       )}
+                      {(() => {
+                        // ETA: average per-package wall-clock × packages
+                        // remaining. Only show after at least one
+                        // package finished (current ≥ 1) so the
+                        // estimate has real signal — otherwise the
+                        // first ~30s the chip would just say "∞".
+                        if (
+                          !bundleProgress ||
+                          bundlePaused ||
+                          bundleProgress.current < 1 ||
+                          bundleProgress.current >= bundleProgress.total
+                        ) {
+                          return null;
+                        }
+                        const elapsed = Date.now() - bundleProgress.startedAt;
+                        const avg = elapsed / bundleProgress.current;
+                        const remaining =
+                          bundleProgress.total - bundleProgress.current;
+                        const etaMs = avg * remaining;
+                        return (
+                          <span className="muted">
+                            {" "}· {t("≈ {eta} left", {
+                              eta: formatDurationShort(etaMs),
+                            })}
+                          </span>
+                        );
+                      })()}
                       {bundlePaused && bundleProgress?.nextPackageId && (
                         <span className="sw-panel__bundle-next mono">
                           {t("Next: {pkg}", {
@@ -4696,6 +4747,116 @@ function ComposeTemplatesDialog({
   const [k8sLiftBindMounts, setK8sLiftBindMounts] = useState(false);
   const [k8sBusyId, setK8sBusyId] = useState<string | null>(null);
 
+  // ── User-uploaded templates (C15) ─────────────────────────────
+  // Inline form state so the dialog can stay self-contained — no
+  // separate "Upload" modal to wire through. The form collapses to
+  // a single button when `uploadOpen` is false.
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadId, setUploadId] = useState("");
+  const [uploadName, setUploadName] = useState("");
+  const [uploadDesc, setUploadDesc] = useState("");
+  const [uploadYaml, setUploadYaml] = useState("");
+  const [uploadPorts, setUploadPorts] = useState("");
+  const [uploadBusy, setUploadBusy] = useState(false);
+
+  const reloadTemplates = () =>
+    cmd.softwareComposeTemplates().then(setTemplates).catch(() => setTemplates([]));
+
+  const submitUpload = async () => {
+    if (uploadBusy) return;
+    const idTrim = uploadId.trim();
+    const yamlTrim = uploadYaml.trim();
+    if (!idTrim || !yamlTrim) {
+      setMessage(t("Template id and YAML are both required."));
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(idTrim)) {
+      setMessage(
+        t("Template id must use only letters, digits, dash and underscore."),
+      );
+      return;
+    }
+    const ports = uploadPorts
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => Number(s))
+      .filter((n) => Number.isFinite(n) && n > 0 && n < 65536);
+    setUploadBusy(true);
+    setMessage("");
+    try {
+      await cmd.softwareComposeSaveUserTemplate({
+        id: idTrim,
+        displayName: uploadName.trim() || idTrim,
+        description: uploadDesc.trim(),
+        yaml: yamlTrim,
+        publishedPorts: ports,
+      });
+      await reloadTemplates();
+      setUploadOpen(false);
+      setUploadId("");
+      setUploadName("");
+      setUploadDesc("");
+      setUploadYaml("");
+      setUploadPorts("");
+      setMessage(t("Saved template \"{id}\".", { id: idTrim }));
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUploadBusy(false);
+    }
+  };
+
+  const loadYamlFromFile = async () => {
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const picked = await dialog.open({
+        multiple: false,
+        filters: [{ name: "YAML", extensions: ["yaml", "yml"] }],
+      });
+      if (typeof picked !== "string") return;
+      const text = await cmd.localReadTextFile(picked);
+      setUploadYaml(text);
+      // Suggest an id from the filename if the user hasn't typed one.
+      if (!uploadId.trim()) {
+        const base = picked
+          .replace(/\\/g, "/")
+          .split("/")
+          .pop()
+          ?.replace(/\.(ya?ml)$/i, "")
+          ?? "";
+        const sanitized = base.replace(/[^a-zA-Z0-9_-]/g, "-");
+        if (sanitized) setUploadId(sanitized);
+      }
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const deleteUserTemplate = async (id: string) => {
+    if (busy) return;
+    if (
+      !window.confirm(
+        t("Delete user template \"{id}\"? The on-host stack is not affected.", {
+          id,
+        }),
+      )
+    ) {
+      return;
+    }
+    setBusy(`delete:${id}`);
+    setMessage("");
+    try {
+      await cmd.softwareComposeDeleteUserTemplate(id);
+      await reloadTemplates();
+      setMessage(t("Deleted user template \"{id}\".", { id }));
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   useEffect(() => {
     if (!target) return;
     setMessage("");
@@ -4849,17 +5010,122 @@ function ComposeTemplatesDialog({
       onClose={onClose}
     >
       <div className="sw-compose">
+        <div className="sw-compose__upload">
+          {!uploadOpen ? (
+            <button
+              type="button"
+              className="btn is-ghost is-compact"
+              onClick={() => setUploadOpen(true)}
+              title={t(
+                "Save your own docker-compose.yml as a reusable template",
+              )}
+            >
+              <FilePlus2 size={11} /> {t("Upload custom template")}
+            </button>
+          ) : (
+            <div className="sw-compose__upload-form mono">
+              <div className="sw-compose__upload-row">
+                <label className="sw-compose__upload-field">
+                  <span>{t("ID")}</span>
+                  <input
+                    type="text"
+                    value={uploadId}
+                    onChange={(e) => setUploadId(e.target.value)}
+                    spellCheck={false}
+                    placeholder="my-stack"
+                  />
+                </label>
+                <label className="sw-compose__upload-field">
+                  <span>{t("Display name")}</span>
+                  <input
+                    type="text"
+                    value={uploadName}
+                    onChange={(e) => setUploadName(e.target.value)}
+                    placeholder={uploadId || t("(uses id)")}
+                  />
+                </label>
+                <label className="sw-compose__upload-field">
+                  <span>{t("Ports (optional)")}</span>
+                  <input
+                    type="text"
+                    value={uploadPorts}
+                    onChange={(e) => setUploadPorts(e.target.value)}
+                    spellCheck={false}
+                    placeholder="80, 443"
+                  />
+                </label>
+              </div>
+              <label className="sw-compose__upload-field">
+                <span>{t("Description")}</span>
+                <input
+                  type="text"
+                  value={uploadDesc}
+                  onChange={(e) => setUploadDesc(e.target.value)}
+                  placeholder={t("(optional one-line summary)")}
+                />
+              </label>
+              <label className="sw-compose__upload-field sw-compose__upload-yaml">
+                <span>{t("docker-compose.yml")}</span>
+                <textarea
+                  value={uploadYaml}
+                  onChange={(e) => setUploadYaml(e.target.value)}
+                  spellCheck={false}
+                  placeholder={"version: \"3.9\"\nservices:\n  app:\n    image: nginx\n"}
+                  rows={10}
+                />
+              </label>
+              <div className="sw-compose__upload-actions">
+                <button
+                  type="button"
+                  className="btn is-ghost is-compact"
+                  onClick={() => void loadYamlFromFile()}
+                  disabled={uploadBusy}
+                >
+                  {t("Load from file…")}
+                </button>
+                <span className="sw-compose__upload-spacer" />
+                <button
+                  type="button"
+                  className="btn is-ghost is-compact"
+                  onClick={() => setUploadOpen(false)}
+                  disabled={uploadBusy}
+                >
+                  {t("Cancel")}
+                </button>
+                <button
+                  type="button"
+                  className="btn is-primary is-compact"
+                  onClick={() => void submitUpload()}
+                  disabled={uploadBusy || !uploadId.trim() || !uploadYaml.trim()}
+                >
+                  {uploadBusy ? t("Saving…") : t("Save template")}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
         <div className="sw-compose__list">
           {templates.map((tpl) => {
             const applyBusy = busy === `apply:${tpl.id}`;
             const downBusy = busy === `down:${tpl.id}`;
             const previewing = previewId === tpl.id;
             return (
-              <div key={tpl.id} className="sw-compose__card">
+              <div
+                key={tpl.id}
+                className={`sw-compose__card ${tpl.userDefined ? "sw-compose__card--user" : ""}`}
+              >
                 <div className="sw-compose__card-head">
                   <span className="sw-compose__card-label">
                     {tpl.displayName}
                   </span>
+                  {tpl.userDefined && (
+                    <span
+                      className="sw-compose__card-badge mono"
+                      title={t("User-uploaded template")}
+                    >
+                      {t("Custom")}
+                    </span>
+                  )}
                   {tpl.publishedPorts.length > 0 && (
                     <span className="sw-compose__card-ports mono">
                       :{tpl.publishedPorts.join(" :")}
@@ -4915,6 +5181,19 @@ function ComposeTemplatesDialog({
                   >
                     {applyBusy ? t("Applying...") : t("Apply")}
                   </button>
+                  {tpl.userDefined && (
+                    <button
+                      type="button"
+                      className="btn is-ghost is-compact sw-compose__delete"
+                      onClick={() => void deleteUserTemplate(tpl.id)}
+                      disabled={!!busy}
+                      title={t(
+                        "Remove this user template from the catalog. Does not affect any running stacks.",
+                      )}
+                    >
+                      {busy === `delete:${tpl.id}` ? t("Deleting…") : t("Delete")}
+                    </button>
+                  )}
                 </div>
                 {previewing && (
                   <pre className="sw-compose__yaml mono">{tpl.yaml}</pre>
@@ -6157,6 +6436,7 @@ function WebhooksDialog({
     id: string;
     report: cmd.WebhookFireReport;
   } | null>(null);
+  const [collapsedUrls, setCollapsedUrls] = useState<Set<string>>(new Set());
 
   async function refreshFailures() {
     setFailureBusy(true);
@@ -6682,8 +6962,28 @@ function WebhooksDialog({
                 {t("No webhook failures recorded.")}
               </div>
             ) : (
-              <ul className="sw-webhooks__failure-list">
-                {failures.map((f) => {
+              (() => {
+                // Group by URL, preserve list order via the most-recent
+                // failure in each group so newly-failed groups bubble up.
+                const groupMap = new Map<string, cmd.WebhookFailureRecord[]>();
+                for (const f of failures) {
+                  const arr = groupMap.get(f.url);
+                  if (arr) arr.push(f);
+                  else groupMap.set(f.url, [f]);
+                }
+                const groups = Array.from(groupMap.entries()).map(
+                  ([url, records]) => ({
+                    url,
+                    records,
+                    latest: Math.max(...records.map((r) => r.failedAt)),
+                  }),
+                );
+                groups.sort((a, b) => b.latest - a.latest);
+
+                const renderRecord = (
+                  f: cmd.WebhookFailureRecord,
+                  showUrlRow: boolean,
+                ) => {
                   const date = new Date(f.failedAt * 1000);
                   return (
                     <li key={f.id} className="sw-webhooks__failure">
@@ -6701,14 +7001,16 @@ function WebhooksDialog({
                           {date.toLocaleString()}
                         </span>
                       </div>
-                      <div className="sw-webhooks__failure-url mono">
-                        {f.label && (
-                          <span className="sw-webhooks__failure-label">
-                            {f.label}
-                          </span>
-                        )}
-                        <span>{f.url}</span>
-                      </div>
+                      {showUrlRow && (
+                        <div className="sw-webhooks__failure-url mono">
+                          {f.label && (
+                            <span className="sw-webhooks__failure-label">
+                              {f.label}
+                            </span>
+                          )}
+                          <span>{f.url}</span>
+                        </div>
+                      )}
                       <div className="status-note status-note--error mono">
                         {t("attempt {n}: {err}", {
                           n: f.attempts,
@@ -6747,8 +7049,66 @@ function WebhooksDialog({
                       </div>
                     </li>
                   );
-                })}
-              </ul>
+                };
+
+                return (
+                  <ul className="sw-webhooks__failure-list">
+                    {groups.map((g) => {
+                      if (g.records.length === 1) {
+                        return renderRecord(g.records[0], true);
+                      }
+                      const collapsed = collapsedUrls.has(g.url);
+                      const sample = g.records[0];
+                      const latestDate = new Date(g.latest * 1000);
+                      return (
+                        <li
+                          key={g.url}
+                          className="sw-webhooks__failure-group"
+                        >
+                          <button
+                            type="button"
+                            className="sw-webhooks__failure-group-head"
+                            onClick={() => {
+                              setCollapsedUrls((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(g.url)) next.delete(g.url);
+                                else next.add(g.url);
+                                return next;
+                              });
+                            }}
+                            aria-expanded={!collapsed}
+                          >
+                            {collapsed ? (
+                              <ChevronRight size={14} />
+                            ) : (
+                              <ChevronDown size={14} />
+                            )}
+                            {sample.label && (
+                              <span className="sw-webhooks__failure-label">
+                                {sample.label}
+                              </span>
+                            )}
+                            <span className="sw-webhooks__failure-group-url mono">
+                              {g.url}
+                            </span>
+                            <span className="sw-webhooks__failure-group-count mono">
+                              {t("{n} failures", { n: g.records.length })}
+                            </span>
+                            <span className="muted mono sw-webhooks__failure-when">
+                              {latestDate.toLocaleString()}
+                            </span>
+                          </button>
+                          {!collapsed && (
+                            <ul className="sw-webhooks__failure-group-list">
+                              {g.records.map((r) => renderRecord(r, false))}
+                            </ul>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                );
+              })()
             )}
           </div>
         ) : entries.length === 0 ? (

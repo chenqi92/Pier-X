@@ -16,6 +16,9 @@ const STORAGE_PREFIX = "pier-x:sql-history:";
 /** Sibling namespace for pinned/saved queries. Kept in a separate
  *  bucket so clearing history doesn't wipe favorites. */
 const FAVORITES_PREFIX = "pier-x:sql-favorites:";
+/** Open-tab buffer namespace — survives panel re-mount so the user
+ *  doesn't lose half-typed SQL when toggling between right-rail tools. */
+const TABS_PREFIX = "pier-x:sql-tabs:";
 /** Soft cap on favorites — far smaller than history because each
  *  entry is human-curated. */
 const MAX_FAVORITES = 100;
@@ -63,6 +66,54 @@ function writePersistedHistory(storageKey: string | undefined, history: SqlHisto
   }
 }
 
+type PersistedTabs = {
+  tabs: SqlTab[];
+  activeId: string;
+};
+
+function readPersistedTabs(storageKey: string | undefined): PersistedTabs | null {
+  if (!storageKey || typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(TABS_PREFIX + storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const obj = parsed as { tabs?: unknown; activeId?: unknown };
+    if (!Array.isArray(obj.tabs) || typeof obj.activeId !== "string") return null;
+    const tabs = obj.tabs.filter(
+      (t): t is SqlTab =>
+        !!t &&
+        typeof t === "object" &&
+        typeof (t as SqlTab).id === "string" &&
+        typeof (t as SqlTab).name === "string" &&
+        typeof (t as SqlTab).sql === "string",
+    );
+    if (tabs.length === 0) return null;
+    const activeId = tabs.some((t) => t.id === obj.activeId) ? obj.activeId : tabs[0].id;
+    return { tabs: tabs.slice(0, MAX_TABS), activeId };
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedTabs(
+  storageKey: string | undefined,
+  payload: PersistedTabs,
+) {
+  if (!storageKey || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      TABS_PREFIX + storageKey,
+      JSON.stringify({
+        tabs: payload.tabs.slice(0, MAX_TABS),
+        activeId: payload.activeId,
+      }),
+    );
+  } catch {
+    /* quota exceeded — drop silently */
+  }
+}
+
 function readPersistedFavorites(storageKey: string | undefined): SqlFavoriteEntry[] {
   if (!storageKey || typeof window === "undefined") return [];
   try {
@@ -106,10 +157,25 @@ export function useDbSqlTabs({
   const counter = useRef(1);
   const makeId = useCallback(() => `q${++counter.current}`, []);
 
-  const [tabs, setTabs] = useState<SqlTab[]>(() => [
-    { id: "q1", name: initialName, sql: initialSql, dirty: false },
-  ]);
-  const [activeId, setActiveId] = useState<string>("q1");
+  // Rehydrate tabs from localStorage when storageKey is provided —
+  // otherwise seed a single tab with the caller's initial SQL.
+  const persisted = useMemo(() => readPersistedTabs(storageKey), [storageKey]);
+  const [tabs, setTabs] = useState<SqlTab[]>(() => {
+    if (persisted) {
+      // Bump the id counter past the highest restored id so newly-
+      // created tabs don't collide with rehydrated ones.
+      for (const t of persisted.tabs) {
+        const m = /^q(\d+)$/.exec(t.id);
+        if (m) {
+          const n = Number(m[1]);
+          if (Number.isFinite(n) && n > counter.current) counter.current = n;
+        }
+      }
+      return persisted.tabs;
+    }
+    return [{ id: "q1", name: initialName, sql: initialSql, dirty: false }];
+  });
+  const [activeId, setActiveId] = useState<string>(() => persisted?.activeId ?? "q1");
   const [history, setHistory] = useState<SqlHistoryEntry[]>(() =>
     readPersistedHistory(storageKey),
   );
@@ -127,6 +193,9 @@ export function useDbSqlTabs({
   useEffect(() => {
     writePersistedFavorites(storageKey, favorites);
   }, [storageKey, favorites]);
+  useEffect(() => {
+    writePersistedTabs(storageKey, { tabs, activeId });
+  }, [storageKey, tabs, activeId]);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeId) ?? tabs[0],

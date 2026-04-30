@@ -716,6 +716,50 @@ export const mysqlExecute = (params: {
   sql: string;
 }) => invoke<QueryExecutionResult>("mysql_execute", params);
 
+/** One row of `information_schema.processlist` (the
+ *  `SHOW FULL PROCESSLIST` data). */
+export type MysqlProcessRow = {
+  id: number;
+  user: string | null;
+  host: string | null;
+  db: string | null;
+  command: string | null;
+  /** Time spent in the current state, in seconds. */
+  timeSeconds: number;
+  state: string | null;
+  /** SQL when `command = 'Query'`; null otherwise. */
+  info: string | null;
+};
+
+/** Snapshot of MySQL's processlist (excluding the connecting session). */
+export const mysqlListProcesses = (params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database?: string | null;
+}) => invoke<MysqlProcessRow[]>("mysql_list_processes", params);
+
+/** `KILL QUERY <id>` — interrupt the running statement. */
+export const mysqlKillQuery = (params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database?: string | null;
+  id: number;
+}) => invoke<void>("mysql_kill_query", params);
+
+/** `KILL <id>` — drop the entire session. */
+export const mysqlKillConnection = (params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database?: string | null;
+  id: number;
+}) => invoke<void>("mysql_kill_connection", params);
+
 // ── SQLite ──────────────────────────────────────────────────────
 
 export const sqliteBrowse = (path: string, table?: string | null) =>
@@ -824,6 +868,55 @@ export const postgresExecute = (params: {
   database?: string | null;
   sql: string;
 }) => invoke<QueryExecutionResult>("postgres_execute", params);
+
+/** One row of `pg_stat_activity` as returned by
+ *  {@link postgresListActivity}. Camel-cased to mirror the
+ *  serde-camelCase backend struct. */
+export type PgActivityRow = {
+  pid: number;
+  usename: string | null;
+  datname: string | null;
+  clientAddr: string | null;
+  applicationName: string | null;
+  state: string | null;
+  /** Milliseconds since `query_start`. Null for idle backends. */
+  queryDurationMs: number | null;
+  /** Milliseconds since the last `state` transition. */
+  stateDurationMs: number | null;
+  waitEventType: string | null;
+  waitEvent: string | null;
+  query: string | null;
+};
+
+/** Snapshot of `pg_stat_activity` (excluding the caller's own backend
+ *  and non-client backends like autovacuum). */
+export const postgresListActivity = (params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database?: string | null;
+}) => invoke<PgActivityRow[]>("postgres_list_activity", params);
+
+/** `pg_cancel_backend(pid)` — abort the running query on `pid`. */
+export const postgresCancelQuery = (params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database?: string | null;
+  pid: number;
+}) => invoke<boolean>("postgres_cancel_query", params);
+
+/** `pg_terminate_backend(pid)` — drop the entire backend connection. */
+export const postgresTerminateBackend = (params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database?: string | null;
+  pid: number;
+}) => invoke<boolean>("postgres_terminate_backend", params);
 
 // ── Docker ──────────────────────────────────────────────────────
 
@@ -1732,10 +1825,28 @@ export type ComposeTemplate = {
   description: string;
   yaml: string;
   publishedPorts: number[];
+  /** True for user-uploaded templates loaded from
+   *  `<app_config_dir>/compose-user-templates.json`; false for the
+   *  built-in catalog. The dialog uses this to gate Delete and to
+   *  badge user rows. */
+  userDefined?: boolean;
 };
 
 export const softwareComposeTemplates = () =>
   invoke<ComposeTemplate[]>("software_compose_templates");
+
+/** Persist a user-uploaded compose template. Replaces by id. */
+export const softwareComposeSaveUserTemplate = (params: {
+  id: string;
+  displayName: string;
+  description: string;
+  yaml: string;
+  publishedPorts?: number[];
+}) => invoke<void>("software_compose_save_user_template", params);
+
+/** Delete one user-uploaded template by id. Idempotent. */
+export const softwareComposeDeleteUserTemplate = (id: string) =>
+  invoke<void>("software_compose_delete_user_template", { id });
 
 export const softwareComposeApply = (
   params: SshParams & { templateId: string },
@@ -2637,24 +2748,42 @@ export type SftpProgressEvent = {
  *  subscribe without hard-coding the literal. */
 export const SFTP_PROGRESS_EVENT = "sftp:progress";
 
-/** Recursively upload a local directory to a remote path. Aggregate
- *  byte progress is emitted under the same `sftp:progress` channel. */
+/** Recursively upload a local directory to a remote path. Splits
+ *  files across N concurrent SFTP channels (default 4). Aggregate
+ *  byte progress is emitted under the same `sftp:progress` channel.
+ *  Per-file auto-resume + same-size skip apply on each worker, so
+ *  re-running an interrupted transfer picks up where it left off.
+ *  Pass `concurrency: 1` to force the legacy single-channel mode. */
 export const sftpUploadTree = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   localPath: string;
   remotePath: string;
   savedConnectionIndex?: number | null;
   transferId?: string | null;
+  concurrency?: number | null;
 }) => invoke<void>("sftp_upload_tree", params);
 
-/** Recursively download a remote directory to a local path. */
+/** Recursively download a remote directory to a local path. Same
+ *  parallel-channel + auto-resume behavior as {@link sftpUploadTree}. */
 export const sftpDownloadTree = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   remotePath: string;
   localPath: string;
   savedConnectionIndex?: number | null;
   transferId?: string | null;
+  concurrency?: number | null;
 }) => invoke<void>("sftp_download_tree", params);
+
+/** Cancel an in-flight SFTP transfer by id. Idempotent — calling
+ *  with an unknown id (already finished, never registered, or wrong
+ *  id from a typo) is a no-op. The chunk-level cancel check fires
+ *  between 64 KiB writes, so a 1 GB transfer aborts within
+ *  milliseconds rather than running to completion. The destination
+ *  file is left in its partial state — re-running the transfer
+ *  with the same source/destination resumes via the auto-resume
+ *  machinery in `sftp.rs`. */
+export const sftpCancelTransfer = (transferId: string) =>
+  invoke<void>("sftp_cancel_transfer", { transferId });
 
 /** Copy a single file from one remote host to another by streaming
  *  through a local temp file. Progress events fire under
@@ -2723,6 +2852,50 @@ export type SftpExternalEditEvent = {
 
 /** Event channel for {@link SftpExternalEditEvent}. */
 export const SFTP_EXTERNAL_EDIT_EVENT = "sftp:external-edit";
+
+/** Result of {@link webServerOpenExternal} — same shape as
+ *  {@link SftpExternalEditOpen}; kept distinct so the event-channel
+ *  pairing stays obvious at the call site. */
+export type WebServerExternalEditOpen = {
+  watcherId: string;
+  localPath: string;
+};
+
+/** Mirror a remote web-server config (apache/nginx/caddy) to a
+ *  local temp path, hand off to the OS editor, and start a watcher
+ *  that auto-pushes any local saves back through the
+ *  backup→write→validate→restore-on-fail→reload pipeline. */
+export const webServerOpenExternal = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  savedConnectionIndex?: number | null;
+  kind: WebServerKind;
+  path: string;
+}) => invoke<WebServerExternalEditOpen>("web_server_open_external", params);
+
+/** Tear down the watcher started by {@link webServerOpenExternal}. */
+export const webServerExternalEditStop = (watcherId: string) =>
+  invoke<void>("web_server_external_edit_stop", { watcherId });
+
+/** Payload of the `web-server:external-edit` event. Adds
+ *  validate/reload/restore signals over the SFTP variant — every
+ *  saved-back round trip runs the validate→reload pipeline, so
+ *  the dialog can show whether the remote actually accepted the
+ *  edit (vs. the upload landed but configtest rejected it and
+ *  the previous backup got restored). */
+export type WebServerExternalEditEvent = {
+  watcherId: string;
+  kind: "uploading" | "uploaded" | "error" | "stopped";
+  bytes: number | null;
+  modified: number | null;
+  error: string | null;
+  validateOk: boolean | null;
+  validateOutput: string | null;
+  reloaded: boolean | null;
+  restored: boolean | null;
+};
+
+/** Event channel for {@link WebServerExternalEditEvent}. */
+export const WEB_SERVER_EXTERNAL_EDIT_EVENT = "web-server:external-edit";
 
 // ── Log Stream ──────────────────────────────────────────────────
 

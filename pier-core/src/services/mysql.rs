@@ -245,6 +245,29 @@ pub struct ForeignKey {
     pub on_delete: String,
 }
 
+/// One row of `information_schema.processlist` (the
+/// `SHOW FULL PROCESSLIST` data). Mirrors the PG activity panel's
+/// shape so the frontend can share a similar table layout.
+#[allow(missing_docs)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MysqlProcessRow {
+    /// Connection id (the `KILL <id>` argument).
+    pub id: u64,
+    pub user: Option<String>,
+    pub host: Option<String>,
+    pub db: Option<String>,
+    /// Command type: `Query`, `Sleep`, `Connect`, `Binlog Dump`, etc.
+    pub command: Option<String>,
+    /// Time the thread has spent in its current state, in seconds.
+    pub time_seconds: i64,
+    /// Free-form state token from the server (`Sending data`,
+    /// `Locked`, `executing`, …).
+    pub state: Option<String>,
+    /// The full SQL when `command = 'Query'`; otherwise NULL.
+    pub info: Option<String>,
+}
+
 /// Full result of a single executed statement.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QueryResult {
@@ -389,6 +412,81 @@ impl MysqlClient {
     /// Blocking wrapper for [`Self::list_databases`].
     pub fn list_databases_blocking(&self) -> Result<Vec<String>> {
         crate::ssh::runtime::shared().block_on(self.list_databases())
+    }
+
+    /// `SHOW FULL PROCESSLIST` via `information_schema.processlist` so
+    /// we can sort and filter server-side. Excludes the connecting
+    /// session itself (`CONNECTION_ID()`) so refreshing doesn't
+    /// always show the panel's own query at the top. Sorted by `time`
+    /// descending so the longest-running session lands first.
+    pub async fn list_processes(&self) -> Result<Vec<MysqlProcessRow>> {
+        let mut conn = self.pool.get_conn().await?;
+        let sql = "SELECT \
+                ID, USER, HOST, DB, COMMAND, TIME, STATE, INFO \
+             FROM information_schema.processlist \
+             WHERE ID <> CONNECTION_ID() \
+             ORDER BY TIME DESC, ID";
+        let raw: Vec<(
+            u64,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            i64,
+            Option<String>,
+            Option<String>,
+        )> = sql.fetch(&mut conn).await?;
+        drop(conn);
+        Ok(raw
+            .into_iter()
+            .map(|(id, user, host, db, command, time, state, info)| {
+                MysqlProcessRow {
+                    id,
+                    user,
+                    host,
+                    db,
+                    command,
+                    time_seconds: time,
+                    state,
+                    info,
+                }
+            })
+            .collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_processes`].
+    pub fn list_processes_blocking(&self) -> Result<Vec<MysqlProcessRow>> {
+        crate::ssh::runtime::shared().block_on(self.list_processes())
+    }
+
+    /// `KILL QUERY <id>` — interrupts the running statement on the
+    /// target session without dropping the connection. Equivalent of
+    /// PG's `pg_cancel_backend`. Caller refreshes after to confirm.
+    pub async fn kill_query(&self, id: u64) -> Result<()> {
+        let mut conn = self.pool.get_conn().await?;
+        let sql = format!("KILL QUERY {id}");
+        sql.ignore(&mut conn).await?;
+        Ok(())
+    }
+
+    /// Blocking wrapper for [`Self::kill_query`].
+    pub fn kill_query_blocking(&self, id: u64) -> Result<()> {
+        crate::ssh::runtime::shared().block_on(self.kill_query(id))
+    }
+
+    /// `KILL <id>` (without `QUERY`) — drops the entire session
+    /// connection. Heavier hammer; equivalent of PG's
+    /// `pg_terminate_backend`.
+    pub async fn kill_connection(&self, id: u64) -> Result<()> {
+        let mut conn = self.pool.get_conn().await?;
+        let sql = format!("KILL {id}");
+        sql.ignore(&mut conn).await?;
+        Ok(())
+    }
+
+    /// Blocking wrapper for [`Self::kill_connection`].
+    pub fn kill_connection_blocking(&self, id: u64) -> Result<()> {
+        crate::ssh::runtime::shared().block_on(self.kill_connection(id))
     }
 
     /// `SHOW TABLES FROM <db>`. Returns tables in the server's

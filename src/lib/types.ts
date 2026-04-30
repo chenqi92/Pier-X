@@ -626,6 +626,9 @@ export type PostgresBrowserState = {
    *  result grid's `<datalist>` autocomplete when editing a
    *  column whose pretty type matches one of these names. */
   enums: PostgresEnumView[];
+  /** Wall-clock for the preview SELECT only — feeds the grid
+   *  toolbar's "{ms} ms" chip. 0 when no preview ran. */
+  browseElapsedMs: number;
 };
 
 export type PostgresEnumView = {
@@ -1077,6 +1080,12 @@ export type TabState = {
   sqliteActiveCredentialId: string | null;
   logCommand: string;
   logSource: LogSource;
+  /** User-pinned alternate log sources for this tab, rendered as a
+   *  side rail above the inline tail. Clicking a pin swaps it into
+   *  `logSource` so the existing single-source pipeline keeps working
+   *  unchanged. The active source is identified by signature equality
+   *  with `logSource`. Bounded to keep the rail readable. */
+  logSourcePins: LogSource[];
   markdownPath: string;
   startupCommand: string;
   /** Registry mirror prefix for `docker pull`, e.g.

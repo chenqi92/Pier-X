@@ -66,6 +66,27 @@ function RedisPanelBody({ tab }: Props) {
   // a flat list with the toolbar toggle.
   const [treeMode, setTreeMode] = useState(true);
   const [command, setCommand] = useState("PING");
+  // CLI command history — Up/Down recall, persisted in localStorage so
+  // it survives panel re-mounts. Newest entry first; consecutive
+  // duplicates collapse. Cap at 50 to bound storage.
+  const CLI_HISTORY_KEY = "pier-x:redis-cli-history-v1";
+  const CLI_HISTORY_CAP = 50;
+  const [cliHistory, setCliHistory] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(CLI_HISTORY_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed)
+        ? parsed.filter((s): s is string => typeof s === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  // -1 means "not navigating" — Up sets it to 0 (most recent),
+  // each subsequent Up bumps it deeper into history.
+  const [cliHistoryIdx, setCliHistoryIdx] = useState(-1);
+  const [cliDraft, setCliDraft] = useState<string | null>(null);
   const [state, setState] = useState<RedisBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadMoreBusy, setLoadMoreBusy] = useState(false);
@@ -557,9 +578,29 @@ function RedisPanelBody({ tab }: Props) {
     }
   }
 
+  function pushCliHistory(entry: string) {
+    const trimmed = entry.trim();
+    if (!trimmed) return;
+    setCliHistory((prev) => {
+      // Drop a leading duplicate so Up doesn't paginate through copies.
+      const next =
+        prev[0] === trimmed ? prev.slice() : [trimmed, ...prev];
+      const capped = next.slice(0, CLI_HISTORY_CAP);
+      try {
+        localStorage.setItem(CLI_HISTORY_KEY, JSON.stringify(capped));
+      } catch {
+        /* ignore quota errors */
+      }
+      return capped;
+    });
+    setCliHistoryIdx(-1);
+    setCliDraft(null);
+  }
+
   async function runCommand() {
     setCmdBusy(true);
     setCmdError("");
+    pushCliHistory(command);
     try {
       const target = await ensureConnectionTarget();
       const r = await cmd.redisExecute({
@@ -986,9 +1027,47 @@ function RedisPanelBody({ tab }: Props) {
               className="rds-input"
               style={{ flex: 1, width: "auto" }}
               value={command}
-              onChange={(e) => setCommand(e.currentTarget.value)}
+              onChange={(e) => {
+                setCommand(e.currentTarget.value);
+                // Manual edits exit history-recall mode so the next
+                // Up starts from the freshly-typed draft, not from
+                // wherever the cursor was in the recall stack.
+                if (cliHistoryIdx !== -1) {
+                  setCliHistoryIdx(-1);
+                  setCliDraft(null);
+                }
+              }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void runCommand();
+                if (e.key === "Enter") {
+                  void runCommand();
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  if (cliHistory.length === 0) return;
+                  e.preventDefault();
+                  const nextIdx = Math.min(
+                    cliHistoryIdx + 1,
+                    cliHistory.length - 1,
+                  );
+                  if (cliHistoryIdx === -1) setCliDraft(command);
+                  setCliHistoryIdx(nextIdx);
+                  setCommand(cliHistory[nextIdx]);
+                  return;
+                }
+                if (e.key === "ArrowDown") {
+                  if (cliHistoryIdx === -1) return;
+                  e.preventDefault();
+                  const nextIdx = cliHistoryIdx - 1;
+                  if (nextIdx < 0) {
+                    setCliHistoryIdx(-1);
+                    setCommand(cliDraft ?? "");
+                    setCliDraft(null);
+                  } else {
+                    setCliHistoryIdx(nextIdx);
+                    setCommand(cliHistory[nextIdx]);
+                  }
+                  return;
+                }
               }}
               placeholder="PING"
             />

@@ -6,12 +6,14 @@ use pier_core::markdown;
 use pier_core::services::docker;
 use pier_core::services::firewall;
 use pier_core::services::git::{CommitInfo, GitClient, StashEntry, UnpushedCommit};
-use pier_core::services::mysql::{self as mysql_service, MysqlClient, MysqlConfig};
+use pier_core::services::mysql::{
+    self as mysql_service, MysqlClient, MysqlConfig, MysqlProcessRow,
+};
 use pier_core::services::apache;
 use pier_core::services::caddy;
 use pier_core::services::nginx;
 use pier_core::services::web_server;
-use pier_core::services::postgres::{PostgresClient, PostgresConfig};
+use pier_core::services::postgres::{PgActivityRow, PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
 use pier_core::services::package_manager;
 use pier_core::services::package_mirror;
@@ -21,6 +23,10 @@ use pier_core::services::sqlite_remote;
 use pier_core::ssh::config::{DbCredential, DbCredentialSource, DbKind};
 use pier_core::ssh::db_detect::{self, DbDetectionReport, DetectedDbInstance};
 use pier_core::ssh::service_detector;
+use pier_core::ssh::sftp_parallel::{
+    download_chunked_parallel_blocking, download_tree_parallel_blocking,
+    upload_chunked_parallel_blocking, upload_tree_parallel_blocking, ParallelOpts,
+};
 use pier_core::ssh::{
     AuthMethod, ExecStream, HostKeyVerifier, SftpClient, SshConfig, SshSession, Tunnel,
 };
@@ -129,6 +135,17 @@ struct AppState {
     /// it down without races. Entries are removed on stop; the
     /// watcher thread also exits when the token is cancelled.
     external_editors: Mutex<HashMap<String, ExternalEditWatcher>>,
+    /// In-flight SFTP transfer cancellation tokens, keyed by the
+    /// same `transferId` the frontend already supplies for progress
+    /// events. `sftp_cancel_transfer` looks the id up here and
+    /// fires the token; the per-chunk cancel check inside
+    /// `upload_from_with_progress_cancel` /
+    /// `download_to_with_progress_cancel` (and the parallel-tree
+    /// variants) returns `Cancelled` mid-stream. Tokens are
+    /// inserted at the top of each transfer command and removed in
+    /// every exit path (success, error, cancel) so a stale id
+    /// never lingers across reconnects.
+    transfer_cancels: Mutex<HashMap<String, CancellationToken>>,
 }
 
 /// Bookkeeping for one in-flight "edit remote file with the OS
@@ -159,7 +176,31 @@ impl Default for AppState {
             ssh_cred_cache: SshCredCache::default(),
             software_cancel: Mutex::new(HashMap::new()),
             external_editors: Mutex::new(HashMap::new()),
+            transfer_cancels: Mutex::new(HashMap::new()),
         }
+    }
+}
+
+/// Allocate or replace the cancellation token for `transfer_id`.
+/// Returns the fresh token. If a stale token existed (e.g. from a
+/// previous transfer with the same id that didn't clean up cleanly)
+/// it is silently dropped — the previous transfer is no longer
+/// running so its token has no effect anyway.
+fn register_transfer_cancel(state: &AppState, transfer_id: &str) -> CancellationToken {
+    let token = CancellationToken::new();
+    if let Ok(mut map) = state.transfer_cancels.lock() {
+        map.insert(transfer_id.to_string(), token.clone());
+    }
+    token
+}
+
+/// Remove the cancellation token for `transfer_id`. Idempotent —
+/// called from every exit path of the transfer commands so a
+/// concurrent `sftp_cancel_transfer` after completion is a no-op
+/// instead of cancelling the next transfer that recycles the id.
+fn unregister_transfer_cancel(state: &AppState, transfer_id: &str) {
+    if let Ok(mut map) = state.transfer_cancels.lock() {
+        map.remove(transfer_id);
     }
 }
 
@@ -725,6 +766,10 @@ struct PostgresBrowserState {
     /// (`format_type`) matches one of these names, giving the
     /// user a dropdown of valid values when editing.
     enums: Vec<PostgresEnumView>,
+    /// Wall-clock for the preview `SELECT * FROM <table>` only.
+    /// Mirrors the MySQL / SQLite states — feeds the grid toolbar's
+    /// "{ms} ms" chip. Zero when no preview ran.
+    browse_elapsed_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -4225,6 +4270,74 @@ fn mysql_execute(
         .map_err(|error| error.to_string())
 }
 
+/// Snapshot of `information_schema.processlist`. Each call opens a
+/// fresh connection so the panel can refresh without holding spare
+/// backend slots — same model as the PG activity command.
+#[tauri::command]
+fn mysql_list_processes(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+) -> Result<Vec<MysqlProcessRow>, String> {
+    let client = MysqlClient::connect_blocking(MysqlConfig {
+        host: host.trim().to_string(),
+        port: normalize_mysql_port(port),
+        user: user.trim().to_string(),
+        password,
+        database: database.filter(|v| !v.trim().is_empty()),
+    })
+    .map_err(|e| e.to_string())?;
+    client.list_processes_blocking().map_err(|e| e.to_string())
+}
+
+/// `KILL QUERY <id>` over a fresh connection. Interrupts the running
+/// statement on the target session without dropping the connection.
+#[tauri::command]
+fn mysql_kill_query(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    id: u64,
+) -> Result<(), String> {
+    let client = MysqlClient::connect_blocking(MysqlConfig {
+        host: host.trim().to_string(),
+        port: normalize_mysql_port(port),
+        user: user.trim().to_string(),
+        password,
+        database: database.filter(|v| !v.trim().is_empty()),
+    })
+    .map_err(|e| e.to_string())?;
+    client.kill_query_blocking(id).map_err(|e| e.to_string())
+}
+
+/// `KILL <id>` (drop the entire session). Heavier hammer than
+/// [`mysql_kill_query`] — requires explicit confirmation in the UI.
+#[tauri::command]
+fn mysql_kill_connection(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    id: u64,
+) -> Result<(), String> {
+    let client = MysqlClient::connect_blocking(MysqlConfig {
+        host: host.trim().to_string(),
+        port: normalize_mysql_port(port),
+        user: user.trim().to_string(),
+        password,
+        database: database.filter(|v| !v.trim().is_empty()),
+    })
+    .map_err(|e| e.to_string())?;
+    client
+        .kill_connection_blocking(id)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn sqlite_execute(path: String, sql: String) -> Result<QueryExecutionResult, String> {
     let resolved_path = path.trim();
@@ -4711,7 +4824,7 @@ fn postgres_browse(
             })
             .collect()
     };
-    let preview = if database_name.is_empty() || table_name.is_empty() {
+    let preview_query = if database_name.is_empty() || table_name.is_empty() {
         None
     } else {
         let escaped_schema = schema_name.replace('"', "\"\"");
@@ -4721,8 +4834,12 @@ fn postgres_browse(
                 "SELECT * FROM \"{escaped_schema}\".\"{escaped_table}\" LIMIT 24"
             ))
             .ok()
-            .map(map_postgres_preview)
     };
+    let browse_elapsed_ms = preview_query
+        .as_ref()
+        .map(|q| q.elapsed_ms)
+        .unwrap_or(0);
+    let preview = preview_query.map(map_postgres_preview);
     // Index + FK lookups for the active table — failsoft to empty
     // when the catalog tables aren't readable for the role.
     let (indexes, foreign_keys) = if database_name.is_empty() || table_name.is_empty() {
@@ -4791,6 +4908,7 @@ fn postgres_browse(
         preview,
         pool: PostgresPoolView { active, total },
         enums,
+        browse_elapsed_ms,
     })
 }
 
@@ -4814,6 +4932,77 @@ fn postgres_execute(
 
     let result = client.execute_blocking(&sql).map_err(|e| e.to_string())?;
     Ok(map_postgres_query_result(result))
+}
+
+/// Snapshot of `pg_stat_activity`. Each call opens a fresh connection
+/// so the panel can refresh without holding extra backends open
+/// between polls. Errors propagate as strings the panel surfaces in a
+/// status note.
+#[tauri::command]
+fn postgres_list_activity(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+) -> Result<Vec<PgActivityRow>, String> {
+    let client = PostgresClient::connect_blocking(PostgresConfig {
+        host: host.trim().to_string(),
+        port: normalize_postgres_port(port),
+        user: user.trim().to_string(),
+        password,
+        database: database.filter(|v| !v.trim().is_empty()),
+    })
+    .map_err(|e| e.to_string())?;
+    client.list_activity_blocking().map_err(|e| e.to_string())
+}
+
+/// `pg_cancel_backend(pid)` over a fresh connection. Returns the
+/// boolean PG hands back — `true` means the signal was delivered
+/// (PG won't tell us whether the query actually stopped, only that
+/// the SIGINT was queued). Caller refreshes after to see the effect.
+#[tauri::command]
+fn postgres_cancel_query(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    pid: i32,
+) -> Result<bool, String> {
+    let client = PostgresClient::connect_blocking(PostgresConfig {
+        host: host.trim().to_string(),
+        port: normalize_postgres_port(port),
+        user: user.trim().to_string(),
+        password,
+        database: database.filter(|v| !v.trim().is_empty()),
+    })
+    .map_err(|e| e.to_string())?;
+    client.cancel_query_blocking(pid).map_err(|e| e.to_string())
+}
+
+/// `pg_terminate_backend(pid)`. Heavier hammer than cancel — drops the
+/// whole backend connection. Frontend should confirm before invoking.
+#[tauri::command]
+fn postgres_terminate_backend(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    pid: i32,
+) -> Result<bool, String> {
+    let client = PostgresClient::connect_blocking(PostgresConfig {
+        host: host.trim().to_string(),
+        port: normalize_postgres_port(port),
+        user: user.trim().to_string(),
+        password,
+        database: database.filter(|v| !v.trim().is_empty()),
+    })
+    .map_err(|e| e.to_string())?;
+    client
+        .terminate_backend_blocking(pid)
+        .map_err(|e| e.to_string())
 }
 
 /// Dedicated DB connectivity probe. Opens the kind-specific client,
@@ -7874,11 +8063,77 @@ struct ComposeTemplateView {
     description: String,
     yaml: String,
     published_ports: Vec<u16>,
+    /// True for user-uploaded templates loaded from the on-disk
+    /// store; false for the built-in catalog. The dialog uses this
+    /// to gate the Delete affordance and to badge the row.
+    user_defined: bool,
+}
+
+/// One entry in the user-template store. Mirrors
+/// `package_manager::ComposeTemplate` but owned (no `&'static str`)
+/// because we serialize it to disk and accept user input. `published_ports`
+/// is best-effort — we ask the user but don't parse it from the YAML.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+struct UserComposeTemplate {
+    id: String,
+    display_name: String,
+    description: String,
+    yaml: String,
+    #[serde(default)]
+    published_ports: Vec<u16>,
+}
+
+fn compose_user_templates_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let dir = app.path().app_config_dir().ok()?;
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("compose-user-templates.json"))
+}
+
+fn load_compose_user_templates(app: &tauri::AppHandle) -> Vec<UserComposeTemplate> {
+    let Some(path) = compose_user_templates_path(app) else {
+        return Vec::new();
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<Vec<UserComposeTemplate>>(&bytes).unwrap_or_default()
+}
+
+fn save_compose_user_templates(
+    app: &tauri::AppHandle,
+    templates: &[UserComposeTemplate],
+) -> Result<(), String> {
+    let Some(path) = compose_user_templates_path(app) else {
+        return Err("compose user templates path unavailable".into());
+    };
+    let bytes = serde_json::to_vec_pretty(templates).map_err(|e| e.to_string())?;
+    std::fs::write(&path, bytes).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+/// Validate that an id is safe for the on-host stack directory and
+/// for our user-template store. Mirrors the rule baked into
+/// [`package_manager::compose_apply_inline`] so users see the same
+/// constraint up-front instead of at apply time.
+fn validate_compose_template_id(id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err("template id must not be empty".into());
+    }
+    if id.len() > 64 {
+        return Err("template id too long (max 64 chars)".into());
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("template id must be [a-zA-Z0-9_-]".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
-fn software_compose_templates() -> Vec<ComposeTemplateView> {
-    package_manager::compose_templates()
+fn software_compose_templates(app: tauri::AppHandle) -> Vec<ComposeTemplateView> {
+    let mut out: Vec<ComposeTemplateView> = package_manager::compose_templates()
         .iter()
         .map(|t| ComposeTemplateView {
             id: t.id.to_string(),
@@ -7886,8 +8141,90 @@ fn software_compose_templates() -> Vec<ComposeTemplateView> {
             description: t.description.to_string(),
             yaml: t.yaml.to_string(),
             published_ports: t.published_ports.to_vec(),
+            user_defined: false,
         })
-        .collect()
+        .collect();
+    for t in load_compose_user_templates(&app) {
+        // If a user template's id collides with a built-in, prefer
+        // the user-defined version — they explicitly customized it.
+        if let Some(slot) = out.iter_mut().find(|x| x.id == t.id) {
+            *slot = ComposeTemplateView {
+                id: t.id,
+                display_name: t.display_name,
+                description: t.description,
+                yaml: t.yaml,
+                published_ports: t.published_ports,
+                user_defined: true,
+            };
+        } else {
+            out.push(ComposeTemplateView {
+                id: t.id,
+                display_name: t.display_name,
+                description: t.description,
+                yaml: t.yaml,
+                published_ports: t.published_ports,
+                user_defined: true,
+            });
+        }
+    }
+    out
+}
+
+/// Save (or replace by id) one user-uploaded compose template. The
+/// dialog calls this after the user pastes / loads YAML; we persist
+/// to `<app_config_dir>/compose-user-templates.json` so the entry
+/// survives reloads and is shareable across panels.
+#[tauri::command]
+fn software_compose_save_user_template(
+    app: tauri::AppHandle,
+    id: String,
+    display_name: String,
+    description: String,
+    yaml: String,
+    published_ports: Option<Vec<u16>>,
+) -> Result<(), String> {
+    let id_trim = id.trim().to_string();
+    validate_compose_template_id(&id_trim)?;
+    if yaml.trim().is_empty() {
+        return Err("compose YAML must not be empty".into());
+    }
+    if yaml.len() > 256 * 1024 {
+        return Err("compose YAML too large (max 256 KB)".into());
+    }
+    let entry = UserComposeTemplate {
+        id: id_trim.clone(),
+        display_name: if display_name.trim().is_empty() {
+            id_trim
+        } else {
+            display_name.trim().to_string()
+        },
+        description: description.trim().to_string(),
+        yaml,
+        published_ports: published_ports.unwrap_or_default(),
+    };
+    let mut existing = load_compose_user_templates(&app);
+    if let Some(slot) = existing.iter_mut().find(|t| t.id == entry.id) {
+        *slot = entry;
+    } else {
+        existing.push(entry);
+    }
+    save_compose_user_templates(&app, &existing)
+}
+
+/// Delete a user-uploaded template by id. Idempotent — calling with
+/// an unknown id is a no-op. Built-in templates are never touched.
+#[tauri::command]
+fn software_compose_delete_user_template(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<(), String> {
+    let mut existing = load_compose_user_templates(&app);
+    let before = existing.len();
+    existing.retain(|t| t.id != id);
+    if existing.len() == before {
+        return Ok(());
+    }
+    save_compose_user_templates(&app, &existing)
 }
 
 #[tauri::command]
@@ -7902,14 +8239,30 @@ async fn software_compose_apply(
     saved_connection_index: Option<usize>,
     template_id: String,
 ) -> Result<PostgresActionReportView, String> {
+    let app_for_lookup = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
             &state, &host, port, &user, &auth_mode, &password, &key_path,
             saved_connection_index,
         )?;
-        let report = package_manager::compose_apply_blocking(&session, &template_id)
-            .map_err(|e| e.to_string())?;
+        // Apply path: built-ins go through `compose_apply_blocking`
+        // (which looks the YAML up in the static catalog); user-saved
+        // templates go through `compose_apply_inline_blocking` with
+        // the on-disk YAML.
+        let report = if package_manager::compose_template_by_id(&template_id).is_some() {
+            package_manager::compose_apply_blocking(&session, &template_id)
+                .map_err(|e| e.to_string())?
+        } else {
+            let user = load_compose_user_templates(&app_for_lookup)
+                .into_iter()
+                .find(|t| t.id == template_id)
+                .ok_or_else(|| format!("unknown compose template: {template_id}"))?;
+            package_manager::compose_apply_inline_blocking(
+                &session, &user.id, &user.yaml,
+            )
+            .map_err(|e| e.to_string())?
+        };
         Ok::<_, String>(pg_report_to_view(report))
     })
     .await
@@ -7922,6 +8275,7 @@ async fn software_compose_apply(
 /// could be a few hundred KB for user-generated templates.
 #[tauri::command]
 async fn software_compose_export_k8s(
+    app: tauri::AppHandle,
     template_id: String,
     namespace: Option<String>,
     ingress_host: Option<String>,
@@ -7929,9 +8283,21 @@ async fn software_compose_export_k8s(
     ingress_tls_secret: Option<String>,
     lift_bind_mounts: Option<bool>,
 ) -> Result<ComposeK8sExportView, String> {
+    let app_for_lookup = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let tmpl = package_manager::compose_template_by_id(&template_id)
-            .ok_or_else(|| format!("unknown compose template: {template_id}"))?;
+        // Resolve to YAML — built-ins win when an id is in both
+        // tables; same precedence as the apply path.
+        let yaml: String = if let Some(t) =
+            package_manager::compose_template_by_id(&template_id)
+        {
+            t.yaml.to_string()
+        } else {
+            load_compose_user_templates(&app_for_lookup)
+                .into_iter()
+                .find(|t| t.id == template_id)
+                .map(|t| t.yaml)
+                .ok_or_else(|| format!("unknown compose template: {template_id}"))?
+        };
         let ns = namespace.as_deref();
         let opts = pier_core::services::compose_k8s::IngressOptions {
             host: ingress_host.unwrap_or_default(),
@@ -7940,7 +8306,7 @@ async fn software_compose_export_k8s(
             lift_bind_mounts: lift_bind_mounts.unwrap_or(false),
         };
         let summary = pier_core::services::compose_k8s::convert_with_summary_and_options(
-            tmpl.yaml, ns, &opts,
+            &yaml, ns, &opts,
         )
         .map_err(|e| e)?;
         Ok::<_, String>(ComposeK8sExportView {
@@ -10802,6 +11168,27 @@ fn emit_sftp_progress(app: &tauri::AppHandle, evt: SftpProgressEvent) {
     let _ = app.emit(SFTP_PROGRESS_EVENT, evt);
 }
 
+/// Cancel an in-flight SFTP transfer by id. Idempotent — calling
+/// with an unknown id (already finished, never registered, or wrong
+/// id from a typo) is a no-op. The actual cancellation is
+/// fine-grained: the per-chunk loop in
+/// `upload_from_with_progress_cancel` /
+/// `download_to_with_progress_cancel` checks the token between
+/// 64 KiB chunks, so a 1 GB transfer aborts within milliseconds
+/// instead of running to completion.
+#[tauri::command]
+fn sftp_cancel_transfer(
+    state: tauri::State<'_, AppState>,
+    transfer_id: String,
+) -> Result<(), String> {
+    if let Ok(map) = state.transfer_cancels.lock() {
+        if let Some(token) = map.get(&transfer_id) {
+            token.cancel();
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn sftp_download(
     app: tauri::AppHandle,
@@ -10827,7 +11214,6 @@ fn sftp_download(
         &key_path,
         saved_connection_index,
     )?;
-    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
     let id = transfer_id.clone().unwrap_or_default();
 
@@ -10836,16 +11222,29 @@ fn sftp_download(
     // whole-file download. Same behaviour as before the progress
     // plumbing landed.
     if transfer_id.is_none() {
+        let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
         return sftp
             .download_to_blocking(&remote_path, &resolved_local)
             .map_err(|e| e.to_string());
     }
 
+    let cancel = register_transfer_cancel(&state, &id);
+
     let app_for_cb = app.clone();
     let id_for_cb = id.clone();
-    let result = sftp.download_to_with_progress_blocking(
+    // Single-file download uses the chunked-parallel entry point —
+    // it transparently falls back to single-channel auto-resume for
+    // tiny files or partial-state retries, but kicks into N-channel
+    // pwrite for fresh large-file downloads on high-RTT links.
+    let opts = ParallelOpts {
+        concurrency: pier_core::ssh::sftp_parallel::DEFAULT_PARALLEL_CONCURRENCY,
+    };
+    let result = download_chunked_parallel_blocking(
+        session,
         &remote_path,
         &resolved_local,
+        opts,
+        Some(cancel.clone()),
         move |bytes, total| {
             emit_sftp_progress(
                 &app_for_cb,
@@ -10859,6 +11258,8 @@ fn sftp_download(
             );
         },
     );
+
+    unregister_transfer_cancel(&state, &id);
 
     match result {
         Ok(bytes) => {
@@ -10916,21 +11317,29 @@ fn sftp_upload(
         &key_path,
         saved_connection_index,
     )?;
-    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
     let id = transfer_id.clone().unwrap_or_default();
 
     if transfer_id.is_none() {
+        let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
         return sftp
             .upload_from_blocking(&resolved_local, &remote_path)
             .map_err(|e| e.to_string());
     }
 
+    let cancel = register_transfer_cancel(&state, &id);
+
     let app_for_cb = app.clone();
     let id_for_cb = id.clone();
-    let result = sftp.upload_from_with_progress_blocking(
+    let opts = ParallelOpts {
+        concurrency: pier_core::ssh::sftp_parallel::DEFAULT_PARALLEL_CONCURRENCY,
+    };
+    let result = upload_chunked_parallel_blocking(
+        session,
         &resolved_local,
         &remote_path,
+        opts,
+        Some(cancel.clone()),
         move |bytes, total| {
             emit_sftp_progress(
                 &app_for_cb,
@@ -10944,6 +11353,8 @@ fn sftp_upload(
             );
         },
     );
+
+    unregister_transfer_cancel(&state, &id);
 
     match result {
         Ok(bytes) => {
@@ -10994,6 +11405,10 @@ fn sftp_upload_tree(
     remote_path: String,
     saved_connection_index: Option<usize>,
     transfer_id: Option<String>,
+    // `concurrency`: optional override of the parallel-channel count.
+    // Defaults to `DEFAULT_PARALLEL_CONCURRENCY`; pass 1 to force
+    // legacy single-channel behavior on servers that cap MaxSessions.
+    concurrency: Option<usize>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
         &state,
@@ -11005,27 +11420,46 @@ fn sftp_upload_tree(
         &key_path,
         saved_connection_index,
     )?;
-    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
     let id = transfer_id.clone().unwrap_or_default();
 
     let app_for_cb = app.clone();
     let id_for_cb = id.clone();
     let should_emit = !transfer_id.as_deref().unwrap_or("").is_empty();
-    let result = sftp.upload_tree_blocking(&resolved_local, &remote_path, move |bytes, total| {
-        if should_emit {
-            emit_sftp_progress(
-                &app_for_cb,
-                SftpProgressEvent {
-                    id: id_for_cb.clone(),
-                    bytes,
-                    total,
-                    done: false,
-                    error: None,
-                },
-            );
-        }
-    });
+    let opts = ParallelOpts {
+        concurrency: concurrency.unwrap_or(
+            pier_core::ssh::sftp_parallel::DEFAULT_PARALLEL_CONCURRENCY,
+        ),
+    };
+    let cancel = if should_emit {
+        Some(register_transfer_cancel(&state, &id))
+    } else {
+        None
+    };
+    let result = upload_tree_parallel_blocking(
+        session,
+        &resolved_local,
+        &remote_path,
+        opts,
+        cancel.clone(),
+        move |bytes, total| {
+            if should_emit {
+                emit_sftp_progress(
+                    &app_for_cb,
+                    SftpProgressEvent {
+                        id: id_for_cb.clone(),
+                        bytes,
+                        total,
+                        done: false,
+                        error: None,
+                    },
+                );
+            }
+        },
+    );
+    if should_emit {
+        unregister_transfer_cancel(&state, &id);
+    }
 
     match result {
         Ok(bytes) => {
@@ -11262,6 +11696,7 @@ fn sftp_download_tree(
     local_path: String,
     saved_connection_index: Option<usize>,
     transfer_id: Option<String>,
+    concurrency: Option<usize>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
         &state,
@@ -11273,27 +11708,46 @@ fn sftp_download_tree(
         &key_path,
         saved_connection_index,
     )?;
-    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
     let resolved_local = expand_local_path(&local_path);
     let id = transfer_id.clone().unwrap_or_default();
 
     let app_for_cb = app.clone();
     let id_for_cb = id.clone();
     let should_emit = !transfer_id.as_deref().unwrap_or("").is_empty();
-    let result = sftp.download_tree_blocking(&remote_path, &resolved_local, move |bytes, total| {
-        if should_emit {
-            emit_sftp_progress(
-                &app_for_cb,
-                SftpProgressEvent {
-                    id: id_for_cb.clone(),
-                    bytes,
-                    total,
-                    done: false,
-                    error: None,
-                },
-            );
-        }
-    });
+    let opts = ParallelOpts {
+        concurrency: concurrency.unwrap_or(
+            pier_core::ssh::sftp_parallel::DEFAULT_PARALLEL_CONCURRENCY,
+        ),
+    };
+    let cancel = if should_emit {
+        Some(register_transfer_cancel(&state, &id))
+    } else {
+        None
+    };
+    let result = download_tree_parallel_blocking(
+        session,
+        &remote_path,
+        &resolved_local,
+        opts,
+        cancel.clone(),
+        move |bytes, total| {
+            if should_emit {
+                emit_sftp_progress(
+                    &app_for_cb,
+                    SftpProgressEvent {
+                        id: id_for_cb.clone(),
+                        bytes,
+                        total,
+                        done: false,
+                        error: None,
+                    },
+                );
+            }
+        },
+    );
+    if should_emit {
+        unregister_transfer_cancel(&state, &id);
+    }
 
     match result {
         Ok(bytes) => {
@@ -11654,6 +12108,397 @@ fn sftp_open_external(
 /// id is a no-op.
 #[tauri::command]
 fn sftp_external_edit_stop(
+    state: tauri::State<'_, AppState>,
+    watcher_id: String,
+) -> Result<(), String> {
+    let handle = {
+        let mut map = state
+            .external_editors
+            .lock()
+            .map_err(|_| "external editors state poisoned".to_string())?;
+        map.remove(&watcher_id)
+    };
+    let Some(h) = handle else { return Ok(()); };
+    h.stop_token.cancel();
+    if h.cleanup_temp_dir {
+        if let Some(dir) = h.local_path.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+    Ok(())
+}
+
+// ── Web Server external editor ──────────────────────────────────
+
+/// Smaller ceiling than SFTP — config files are tiny and a 256MB
+/// httpd.conf would already be a sign of trouble we shouldn't paper
+/// over by spawning a desktop editor on it.
+const WEB_SERVER_EXTERNAL_EDIT_MAX: u64 = 32 * 1024 * 1024;
+const WEB_SERVER_EXTERNAL_EDIT_EVENT: &str = "web-server:external-edit";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct WebServerExternalEditEvent {
+    watcher_id: String,
+    /// `"uploading"` → `"uploaded"` | `"error"` per save round, then
+    /// `"stopped"` once on shutdown.
+    kind: String,
+    bytes: Option<u64>,
+    modified: Option<u64>,
+    error: Option<String>,
+    /// Mirror of `WebServerSaveResult.validate.ok` — present on
+    /// `uploaded`/`error` events that came from a save round.
+    validate_ok: Option<bool>,
+    validate_output: Option<String>,
+    reloaded: Option<bool>,
+    restored: Option<bool>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct WebServerExternalEditOpen {
+    watcher_id: String,
+    local_path: String,
+}
+
+fn emit_web_server_external_edit_event(
+    app: &tauri::AppHandle,
+    evt: WebServerExternalEditEvent,
+) {
+    use tauri::Emitter;
+    let _ = app.emit(WEB_SERVER_EXTERNAL_EDIT_EVENT, evt);
+}
+
+/// Connection params snapshot the watcher carries so each save round
+/// can re-resolve the SSH session through [`get_or_open_ssh_session`]
+/// instead of reusing a possibly-stale `Arc<SshSession>` captured at
+/// open time. Cheap to clone — all fields are owned strings the
+/// frontend already passed in. The cached cred store fills in any
+/// gaps the same way the original command did.
+struct WebServerExternalEditConn {
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn web_server_external_edit_watch_loop(
+    app: tauri::AppHandle,
+    watcher_id: String,
+    local_path: PathBuf,
+    remote_path: String,
+    conn: WebServerExternalEditConn,
+    server_kind: web_server::WebServerKind,
+    stop_token: CancellationToken,
+    mut last_mtime: Option<SystemTime>,
+    mut last_size: u64,
+) {
+    let mut pending_change_since: Option<Instant> = None;
+
+    while !stop_token.is_cancelled() {
+        std::thread::sleep(EXTERNAL_EDIT_POLL);
+
+        let meta = match std::fs::metadata(&local_path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let cur_mtime = meta.modified().ok();
+        let cur_size = meta.len();
+
+        if cur_mtime != last_mtime || cur_size != last_size {
+            pending_change_since = Some(Instant::now());
+            last_mtime = cur_mtime;
+            last_size = cur_size;
+            continue;
+        }
+
+        let Some(changed_at) = pending_change_since else {
+            continue;
+        };
+        if changed_at.elapsed() < EXTERNAL_EDIT_DEBOUNCE {
+            continue;
+        }
+        pending_change_since = None;
+
+        emit_web_server_external_edit_event(
+            &app,
+            WebServerExternalEditEvent {
+                watcher_id: watcher_id.clone(),
+                kind: "uploading".into(),
+                bytes: None,
+                modified: None,
+                error: None,
+                validate_ok: None,
+                validate_output: None,
+                reloaded: None,
+                restored: None,
+            },
+        );
+
+        let read_res = std::fs::read_to_string(&local_path);
+        match read_res {
+            Err(e) => emit_web_server_external_edit_event(
+                &app,
+                WebServerExternalEditEvent {
+                    watcher_id: watcher_id.clone(),
+                    kind: "error".into(),
+                    bytes: None,
+                    modified: None,
+                    error: Some(format!("read local: {e}")),
+                    validate_ok: None,
+                    validate_output: None,
+                    reloaded: None,
+                    restored: None,
+                },
+            ),
+            Ok(content) => {
+                let bytes_len = content.len() as u64;
+                // Re-resolve the SSH session every round. If the
+                // cached one is healthy this is a hashmap lookup;
+                // if it broke since the last save (network blip,
+                // server-side timeout, peer reset) we transparently
+                // reconnect rather than keep failing against a dead
+                // socket forever.
+                let state: tauri::State<'_, AppState> = app.state();
+                let session = match get_or_open_ssh_session(
+                    &state,
+                    &conn.host,
+                    conn.port,
+                    &conn.user,
+                    &conn.auth_mode,
+                    &conn.password,
+                    &conn.key_path,
+                    conn.saved_connection_index,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        emit_web_server_external_edit_event(
+                            &app,
+                            WebServerExternalEditEvent {
+                                watcher_id: watcher_id.clone(),
+                                kind: "error".into(),
+                                bytes: None,
+                                modified: None,
+                                error: Some(format!("ssh: {e}")),
+                                validate_ok: None,
+                                validate_output: None,
+                                reloaded: None,
+                                restored: None,
+                            },
+                        );
+                        continue;
+                    }
+                };
+                let save_res = web_server::save_file_validate_reload_blocking(
+                    &session,
+                    server_kind,
+                    &remote_path,
+                    &content,
+                );
+                match save_res {
+                    Err(e) => emit_web_server_external_edit_event(
+                        &app,
+                        WebServerExternalEditEvent {
+                            watcher_id: watcher_id.clone(),
+                            kind: "error".into(),
+                            bytes: None,
+                            modified: None,
+                            error: Some(format!("save: {e}")),
+                            validate_ok: None,
+                            validate_output: None,
+                            reloaded: None,
+                            restored: None,
+                        },
+                    ),
+                    Ok(result) => {
+                        let validate_ok = result.validate.ok;
+                        let kind_str = if validate_ok { "uploaded" } else { "error" };
+                        emit_web_server_external_edit_event(
+                            &app,
+                            WebServerExternalEditEvent {
+                                watcher_id: watcher_id.clone(),
+                                kind: kind_str.into(),
+                                bytes: if validate_ok { Some(bytes_len) } else { None },
+                                modified: SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .ok()
+                                    .map(|d| d.as_secs()),
+                                error: if validate_ok {
+                                    None
+                                } else {
+                                    Some(format!(
+                                        "validate failed{}",
+                                        if result.restored {
+                                            " (config restored)"
+                                        } else {
+                                            ""
+                                        }
+                                    ))
+                                },
+                                validate_ok: Some(validate_ok),
+                                validate_output: Some(result.validate.output.clone()),
+                                reloaded: Some(result.reloaded),
+                                restored: Some(result.restored),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    emit_web_server_external_edit_event(
+        &app,
+        WebServerExternalEditEvent {
+            watcher_id,
+            kind: "stopped".into(),
+            bytes: None,
+            modified: None,
+            error: None,
+            validate_ok: None,
+            validate_output: None,
+            reloaded: None,
+            restored: None,
+        },
+    );
+}
+
+/// Mirror a remote web-server config to a local temp path, hand it
+/// off to the OS default editor, and start a watcher thread that
+/// auto-saves any local edits back through
+/// `save_file_validate_reload_blocking` (backup → write → validate
+/// → restore-on-fail → reload). Returns a watcher id the frontend
+/// passes to [`web_server_external_edit_stop`] when done.
+#[tauri::command]
+fn web_server_open_external(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    kind: web_server::WebServerKind,
+    path: String,
+) -> Result<WebServerExternalEditOpen, String> {
+    let session = get_or_open_ssh_session(
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+    )?;
+
+    let initial =
+        web_server::read_file_blocking(&session, kind, &path).map_err(|e| e.to_string())?;
+    if initial.len() as u64 > WEB_SERVER_EXTERNAL_EDIT_MAX {
+        return Err(format!(
+            "File is {} MB; external-editor limit is {} MB",
+            initial.len() / (1024 * 1024),
+            WEB_SERVER_EXTERNAL_EDIT_MAX / (1024 * 1024),
+        ));
+    }
+
+    let watcher_id = format!(
+        "wsext-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let temp_root = std::env::temp_dir()
+        .join("pierx-webserver-edit")
+        .join(&watcher_id);
+    std::fs::create_dir_all(&temp_root).map_err(|e| format!("create temp dir: {e}"))?;
+
+    let basename = path.rsplit('/').next().unwrap_or("file");
+    let local_path = temp_root.join(sanitize_temp_basename(basename));
+
+    std::fs::write(&local_path, initial.as_bytes())
+        .map_err(|e| format!("write temp file: {e}"))?;
+
+    let post_meta =
+        std::fs::metadata(&local_path).map_err(|e| format!("stat temp file: {e}"))?;
+    let last_mtime = post_meta.modified().ok();
+    let last_size = post_meta.len();
+
+    open_with_default_app(&local_path).map_err(|e| format!("opener failed: {e}"))?;
+
+    let stop_token = CancellationToken::new();
+    {
+        let mut map = state
+            .external_editors
+            .lock()
+            .map_err(|_| "external editors state poisoned".to_string())?;
+        map.insert(
+            watcher_id.clone(),
+            ExternalEditWatcher {
+                stop_token: stop_token.clone(),
+                local_path: local_path.clone(),
+                cleanup_temp_dir: true,
+            },
+        );
+    }
+
+    // Snapshot the connection params so the watcher can re-resolve
+    // the session each save round — see `WebServerExternalEditConn`.
+    // Note: we capture the originals (not the credential-cache
+    // resolved values) because `get_or_open_ssh_session` re-runs the
+    // same fill-from-cache logic on every call, so subsequent
+    // password rotations / new key paths land via the cache without
+    // needing a fresh open_external call.
+    let conn = WebServerExternalEditConn {
+        host: host.clone(),
+        port,
+        user: user.clone(),
+        auth_mode: auth_mode.clone(),
+        password: password.clone(),
+        key_path: key_path.clone(),
+        saved_connection_index,
+    };
+    let app_for_thread = app.clone();
+    let watcher_id_for_thread = watcher_id.clone();
+    let local_for_thread = local_path.clone();
+    let remote_for_thread = path.clone();
+    let stop_for_thread = stop_token.clone();
+    std::thread::Builder::new()
+        .name(format!("ws-extedit-{watcher_id}"))
+        .spawn(move || {
+            web_server_external_edit_watch_loop(
+                app_for_thread,
+                watcher_id_for_thread,
+                local_for_thread,
+                remote_for_thread,
+                conn,
+                kind,
+                stop_for_thread,
+                last_mtime,
+                last_size,
+            );
+        })
+        .map_err(|e| format!("spawn watcher: {e}"))?;
+
+    Ok(WebServerExternalEditOpen {
+        watcher_id,
+        local_path: local_path.to_string_lossy().into_owned(),
+    })
+}
+
+/// Tear down a web-server external-editor session. Idempotent —
+/// shares the same watcher map / temp-dir cleanup logic as the
+/// SFTP variant.
+#[tauri::command]
+fn web_server_external_edit_stop(
     state: tauri::State<'_, AppState>,
     watcher_id: String,
 ) -> Result<(), String> {
@@ -12477,6 +13322,9 @@ pub fn run() {
             git_conflict_mark_resolved,
             mysql_browse,
             mysql_execute,
+            mysql_list_processes,
+            mysql_kill_query,
+            mysql_kill_connection,
             sqlite_browse,
             sqlite_execute,
             sqlite_execute_script,
@@ -12522,6 +13370,9 @@ pub fn run() {
             completion_library_install_pack_from_path,
             completion_library_remove_pack,
             postgres_browse,
+            postgres_list_activity,
+            postgres_cancel_query,
+            postgres_terminate_backend,
             postgres_execute,
             db_test_connection,
             ssh_key_list,
@@ -12592,6 +13443,8 @@ pub fn run() {
             redis_set_password_remote,
             redis_open_remote_remote,
             software_compose_templates,
+            software_compose_save_user_template,
+            software_compose_delete_user_template,
             software_compose_apply,
             software_compose_export_k8s,
             software_compose_down,
@@ -12647,6 +13500,9 @@ pub fn run() {
             sftp_download_tree,
             sftp_open_external,
             sftp_external_edit_stop,
+            sftp_cancel_transfer,
+            web_server_open_external,
+            web_server_external_edit_stop,
             log_stream_start,
             log_stream_drain,
             log_stream_stop,

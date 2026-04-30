@@ -9,6 +9,7 @@ import DismissibleNote from "../components/DismissibleNote";
 import InlineInstallCta from "../components/InlineInstallCta";
 import DbConnectSplash from "../components/db/DbConnectSplash";
 import DbConnectedShell, { type DbConnectedTab } from "../components/db/DbConnectedShell";
+import MysqlProcessListDialog from "../components/db/MysqlProcessListDialog";
 import DbCreateDbDialog from "../components/db/DbCreateDbDialog";
 import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
 import DbConfigView, { type DbConfigRow } from "../components/db/DbConfigView";
@@ -47,6 +48,12 @@ import { formatSqlText } from "../components/db/sqlFormat";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { writeClipboardText } from "../lib/clipboard";
+import {
+  formatBytes as formatDbBytes,
+  formatLastSeen,
+  getDbConnCache,
+  setDbConnCache,
+} from "../lib/dbConnCache";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToCsv, queryResultToTsv } from "../lib/commands";
 import type {
@@ -149,6 +156,7 @@ function MySqlPanelBody({ tab }: Props) {
   const [notice, setNotice] = useState("");
 
   const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
+  const [processlistOpen, setProcesslistOpen] = useState(false);
 
   // SQL editor tabs + run history. History persists per-engine
   // via localStorage so a panel reload (or switching tabs and
@@ -211,6 +219,16 @@ function MySqlPanelBody({ tab }: Props) {
       setPageOffset(s.pageOffset);
       if (s.databaseName !== tab.mysqlDatabase) {
         updateTab(tab.id, { mysqlDatabase: s.databaseName });
+      }
+      if (tab.mysqlActiveCredentialId) {
+        const sizeBytes = s.tableSummaries.reduce(
+          (acc, ts) => acc + (ts.dataBytes ?? 0) + (ts.indexBytes ?? 0),
+          0,
+        );
+        setDbConnCache("mysql", tab.mysqlActiveCredentialId, {
+          connectMs: s.browseElapsedMs,
+          sizeBytes: sizeBytes > 0 ? sizeBytes : undefined,
+        });
       }
     } catch (e) {
       setError(formatError(e));
@@ -451,7 +469,15 @@ function MySqlPanelBody({ tab }: Props) {
   const viaLabel = flow.sshTarget ? `${flow.sshTarget.user}@${flow.sshTarget.host}` : t("direct · localhost");
   const viaKind: DbSplashRowData["via"]["kind"] = flow.hasSsh ? "tunnel" : "direct";
 
-  const savedRows: DbSplashRowData[] = flow.savedForKind.map((cred) => ({
+  const savedRows: DbSplashRowData[] = flow.savedForKind.map((cred) => {
+    const cache = getDbConnCache("mysql", cred.id);
+    const statsBits: string[] = [];
+    if (cred.database) statsBits.push(cred.database);
+    if (cache) {
+      statsBits.push(`${cache.connectMs} ms`);
+      if (cache.sizeBytes) statsBits.push(formatDbBytes(cache.sizeBytes));
+    }
+    return {
     id: cred.id,
     name: cred.label || cred.id,
     env: inferEnv(cred.label),
@@ -460,14 +486,17 @@ function MySqlPanelBody({ tab }: Props) {
     via: { kind: viaKind, label: viaLabel },
     user: cred.user,
     authHint: cred.hasPassword ? t("keyring") : undefined,
-    stats: cred.database ? <span>{cred.database}</span> : <span className="sep">—</span>,
-    lastUsed: null,
+    stats: statsBits.length > 0
+      ? <span>{statsBits.join(" · ")}</span>
+      : <span className="sep">—</span>,
+    lastUsed: cache ? formatLastSeen(cache.lastConnectedAt) : null,
     status: "unknown",
     tintVar: "var(--svc-mysql)",
     connectLabel: t("Connect"),
     onConnect: () => flow.activateCredential(cred.id),
     pending: flow.activating === cred.id,
-  }));
+    };
+  });
 
   const detectedRows: DbSplashRowData[] = flow.detectedForKind.map((det) => ({
     id: det.signature,
@@ -1107,6 +1136,16 @@ function MySqlPanelBody({ tab }: Props) {
           onClose={() => void flow.closeTunnel()}
         />
       )}
+      <button
+        type="button"
+        className="btn is-ghost is-compact"
+        onClick={() => setProcesslistOpen(true)}
+        title={t(
+          "Show server activity (SHOW PROCESSLIST) — slow queries, idle sessions",
+        )}
+      >
+        {t("Activity")}
+      </button>
     </>
   );
 
@@ -1390,6 +1429,17 @@ function MySqlPanelBody({ tab }: Props) {
           setCreateDbOpen(false);
           setNotice(t("Created database \"{name}\".", { name }));
           await browse();
+        }}
+      />
+      <MysqlProcessListDialog
+        open={processlistOpen}
+        onClose={() => setProcesslistOpen(false)}
+        connection={{
+          host: tab.mysqlTunnelPort ? "127.0.0.1" : tab.mysqlHost,
+          port: tab.mysqlTunnelPort ?? tab.mysqlPort,
+          user: tab.mysqlUser,
+          password: tab.mysqlPassword,
+          database: tab.mysqlDatabase || null,
         }}
       />
     </>

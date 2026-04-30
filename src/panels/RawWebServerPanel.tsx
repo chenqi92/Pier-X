@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Code2,
   Diff,
+  ExternalLink,
   FilePlus2,
   FileText,
   Network,
@@ -16,11 +17,15 @@ import {
   ToggleRight,
   Undo2,
   Redo2,
+  X,
 } from "lucide-react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import DiffPreview from "../components/DiffPreview";
 import ApacheFeatureCatalog from "./ApacheFeatureCatalog";
+import ApacheIfModuleEditor from "./ApacheIfModuleEditor";
 import ApacheTreeView from "./ApacheTreeView";
 import CaddyFeatureCatalog from "./CaddyFeatureCatalog";
+import CaddyMatcherEditor from "./CaddyMatcherEditor";
 import CaddyTreeView from "./CaddyTreeView";
 import NewWebServerSite from "./NewWebServerSite";
 import type { ApacheNode, CaddyNode } from "../lib/commands";
@@ -32,7 +37,9 @@ import type {
   WebServerLayout,
   WebServerSaveResult,
   WebServerActionResult,
+  WebServerExternalEditEvent,
 } from "../lib/commands";
+import { WEB_SERVER_EXTERNAL_EDIT_EVENT } from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 
@@ -98,15 +105,177 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
   const [redoStack, setRedoStack] = useState<string[]>([]);
   const UNDO_CAP = 50;
   // "raw" textarea | "tree" read-only structured view | "features"
-  // toggle catalog (caddy only). Features mode parses the dirty
-  // buffer, accepts AST mutations from the catalog, and renders back
-  // through `caddy_render` to update the buffer.
-  const [mode, setMode] = useState<"raw" | "tree" | "features">("raw");
+  // toggle catalog (caddy + apache) | "ifmodule" Apache <IfModule>
+  // conditional editor. Modes that operate on the AST share the
+  // same parse-on-entry / re-render-on-apply flow keyed by `mode`.
+  const [mode, setMode] = useState<
+    "raw" | "tree" | "features" | "ifmodule" | "matchers"
+  >("raw");
   const [featuresAst, setFeaturesAst] = useState<
     CaddyNode[] | ApacheNode[] | null
   >(null);
   const [featuresParseError, setFeaturesParseError] = useState("");
   const [featuresApplying, setFeaturesApplying] = useState(false);
+
+  // Hand-off to the OS default editor. While `externalEdit` is non-null
+  // the panel shows a status banner and disables the inline editor —
+  // every save in the external app re-runs the backup→write→validate→
+  // restore-on-fail→reload pipeline on the backend, so in-panel edits
+  // would silently lose to the external file's next save.
+  type ExternalEditState = {
+    watcherId: string;
+    localPath: string;
+    remotePath: string;
+    status: "opened" | "uploading" | "uploaded" | "error";
+    lastError?: string;
+    lastSyncedAt?: number;
+    validateOk?: boolean;
+    reloaded?: boolean;
+    restored?: boolean;
+  };
+  const [externalEdit, setExternalEdit] = useState<ExternalEditState | null>(
+    null,
+  );
+  const externalEditRef = useRef<ExternalEditState | null>(null);
+  externalEditRef.current = externalEdit;
+  const [openExternalBusy, setOpenExternalBusy] = useState(false);
+
+  const handleOpenExternal = async () => {
+    if (!activePath || openExternalBusy || externalEdit) return;
+    if (isDirty) {
+      setActionError(
+        t(
+          "Save or discard the unsaved buffer before opening this file in an external editor.",
+        ),
+      );
+      return;
+    }
+    setOpenExternalBusy(true);
+    setActionError("");
+    try {
+      const result = await cmd.webServerOpenExternal({
+        ...sshParams,
+        kind,
+        path: activePath,
+      });
+      setExternalEdit({
+        watcherId: result.watcherId,
+        localPath: result.localPath,
+        remotePath: activePath,
+        status: "opened",
+      });
+    } catch (e) {
+      setActionError(formatError(e));
+    } finally {
+      setOpenExternalBusy(false);
+    }
+  };
+
+  const stopExternalEdit = async () => {
+    const cur = externalEditRef.current;
+    if (!cur) return;
+    setExternalEdit(null);
+    try {
+      await cmd.webServerExternalEditStop(cur.watcherId);
+    } catch {
+      /* best-effort — backend is idempotent */
+    }
+  };
+
+  // Subscribe to backend events while a watcher is alive. Filters by
+  // watcherId so multiple panels (or two open files) don't cross-talk.
+  useEffect(() => {
+    const watcherId = externalEdit?.watcherId;
+    if (!watcherId) return;
+    let alive = true;
+    let unlisten: UnlistenFn | null = null;
+    void listen<WebServerExternalEditEvent>(
+      WEB_SERVER_EXTERNAL_EDIT_EVENT,
+      (evt) => {
+        const payload = evt.payload;
+        if (!payload || payload.watcherId !== watcherId) return;
+        setExternalEdit((cur) => {
+          if (!cur || cur.watcherId !== watcherId) return cur;
+          switch (payload.kind) {
+            case "uploading":
+              return { ...cur, status: "uploading", lastError: undefined };
+            case "uploaded":
+              return {
+                ...cur,
+                status: "uploaded",
+                lastSyncedAt:
+                  payload.modified ?? Math.floor(Date.now() / 1000),
+                lastError: undefined,
+                validateOk: payload.validateOk ?? undefined,
+                reloaded: payload.reloaded ?? undefined,
+                restored: payload.restored ?? undefined,
+              };
+            case "error":
+              return {
+                ...cur,
+                status: "error",
+                lastError: payload.error ?? "",
+                validateOk: payload.validateOk ?? undefined,
+                reloaded: payload.reloaded ?? undefined,
+                restored: payload.restored ?? undefined,
+              };
+            case "stopped":
+              return null;
+            default:
+              return cur;
+          }
+        });
+        // After a successful save, refresh the in-panel buffer so the
+        // textarea matches what the external editor wrote — the user
+        // can stop the session and keep editing in the panel without
+        // a stale baseline.
+        if (payload.kind === "uploaded" && payload.validateOk) {
+          void cmd
+            .webServerReadFile({
+              ...sshParams,
+              kind,
+              path: externalEditRef.current?.remotePath ?? activePath ?? "",
+            })
+            .then((text) => {
+              setContent(text);
+              setDirty(null);
+            })
+            .catch(() => {});
+        }
+      },
+    ).then((dispose) => {
+      if (!alive) {
+        dispose();
+      } else {
+        unlisten = dispose;
+      }
+    });
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalEdit?.watcherId]);
+
+  // Wind down the watcher if the user navigates to a different file
+  // or unmounts the panel — leaving an orphaned watcher would keep
+  // overwriting the now-inactive remote file with stale local edits.
+  useEffect(() => {
+    return () => {
+      const cur = externalEditRef.current;
+      if (!cur) return;
+      void cmd.webServerExternalEditStop(cur.watcherId).catch(() => {});
+    };
+  }, []);
+  useEffect(() => {
+    const cur = externalEditRef.current;
+    if (!cur) return;
+    if (cur.remotePath !== activePath) {
+      void cmd.webServerExternalEditStop(cur.watcherId).catch(() => {});
+      setExternalEdit(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePath]);
 
   const refreshLayout = async () => {
     if (layoutBusy) return;
@@ -202,11 +371,17 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
   // it), re-parse so the catalog reflects the current state. The
   // parser used depends on `kind`.
   useEffect(() => {
-    if (mode !== "features") {
+    const astMode =
+      mode === "features" || mode === "ifmodule" || mode === "matchers";
+    if (!astMode) {
       setFeaturesAst(null);
       setFeaturesParseError("");
       return;
     }
+    // ifmodule mode is apache-only; matchers is caddy-only; features
+    // works for both apache + caddy.
+    if (mode === "ifmodule" && kind !== "apache") return;
+    if (mode === "matchers" && kind !== "caddy") return;
     if (kind !== "caddy" && kind !== "apache") return;
     let cancelled = false;
     const parseFn =
@@ -287,6 +462,30 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
     setUndoStack([]);
     setRedoStack([]);
   }, [activePath]);
+
+  // Ctrl/Cmd+Z to undo, Ctrl/Cmd+Shift+Z (or Ctrl+Y) to redo. Skips
+  // when focus is inside a text input / textarea so the native
+  // textarea undo keeps working — same boundary the comment at
+  // line 93 calls out. The AST-stack stays orthogonal to typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      if (e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if ((e.key === "z" && e.shiftKey) || e.key === "y") {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [undoStack, redoStack, editorValue]);
 
   const runValidate = async () => {
     if (validateBusy) return;
@@ -512,6 +711,34 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
             >
               <Network size={11} /> {t("Tree")}
             </button>
+            {kind === "apache" && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === "ifmodule"}
+                className={`ws-raw__mode-btn ${mode === "ifmodule" ? "is-active" : ""}`}
+                onClick={() => setMode("ifmodule")}
+                title={t(
+                  "List and edit <IfModule> conditional blocks",
+                )}
+              >
+                <ShieldCheck size={11} /> {t("IfModule")}
+              </button>
+            )}
+            {kind === "caddy" && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === "matchers"}
+                className={`ws-raw__mode-btn ${mode === "matchers" ? "is-active" : ""}`}
+                onClick={() => setMode("matchers")}
+                title={t(
+                  "List and edit named (@xxx) matchers per site or snippet",
+                )}
+              >
+                <ShieldCheck size={11} /> {t("Matchers")}
+              </button>
+            )}
             <button
               type="button"
               role="tab"
@@ -603,10 +830,34 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
           type="button"
           className="btn btn--primary"
           onClick={() => void handleSave()}
-          disabled={!isDirty || saveBusy || batchBusy || !activePath}
+          disabled={
+            !isDirty ||
+            saveBusy ||
+            batchBusy ||
+            !activePath ||
+            !!externalEdit
+          }
           title={t("Save → validate → reload (with auto-restore on fail)")}
         >
           <Save size={11} /> {saveBusy ? t("Saving…") : t("Save")}
+        </button>
+        <button
+          type="button"
+          className="btn btn--ghost"
+          onClick={() => void handleOpenExternal()}
+          disabled={
+            !activePath ||
+            openExternalBusy ||
+            !!externalEdit ||
+            saveBusy ||
+            batchBusy
+          }
+          title={t(
+            "Open in your OS default editor; saves auto-push back through validate + reload",
+          )}
+        >
+          <ExternalLink size={11} />{" "}
+          {openExternalBusy ? t("Opening…") : t("Open externally")}
         </button>
         {allDirtyPaths.length > 1 && (
           <button
@@ -625,6 +876,49 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
           </button>
         )}
       </div>
+
+      {externalEdit && (
+        <div
+          className={`ws-raw__extedit ws-raw__extedit--${externalEdit.status}`}
+        >
+          <div className="ws-raw__extedit-line">
+            <ExternalLink size={11} />
+            <span className="ws-raw__extedit-label">
+              {externalEdit.status === "uploading"
+                ? t("Saving from external editor…")
+                : externalEdit.status === "uploaded"
+                  ? externalEdit.validateOk === false
+                    ? t("Validate failed — config restored.")
+                    : externalEdit.reloaded
+                      ? t("Saved · validate ok · reloaded")
+                      : t("Saved · validate ok · reload skipped")
+                  : externalEdit.status === "error"
+                    ? t("Save failed: {msg}", {
+                        msg: externalEdit.lastError ?? "",
+                      })
+                    : t("Editing externally — saves auto-sync")}
+            </span>
+            {externalEdit.lastSyncedAt && (
+              <span className="ws-raw__extedit-time mono">
+                {new Date(
+                  externalEdit.lastSyncedAt * 1000,
+                ).toLocaleTimeString()}
+              </span>
+            )}
+            <span className="ws-raw__extedit-path mono" title={externalEdit.localPath}>
+              {externalEdit.localPath}
+            </span>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => void stopExternalEdit()}
+              title={t("Stop external-edit watcher and clean up the temp file")}
+            >
+              <X size={11} /> {t("Stop")}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="ws-raw__body">
         <FileTree
@@ -704,6 +998,66 @@ export default function RawWebServerPanel({ kind, sshParams }: Props) {
                   onChange={(next) => void handleFeatureChange(next)}
                 />
               ))}
+          </div>
+        ) : kind === "apache" &&
+          mode === "ifmodule" &&
+          activePath &&
+          !openBusy &&
+          !openError ? (
+          <div className="ws-raw__editor">
+            <div className="ws-raw__editor-head mono">
+              <span>{activePath}</span>
+              <span className="ws-raw__mode-hint">
+                {featuresApplying
+                  ? t("Applying…")
+                  : isDirty
+                    ? t("(unsaved — edits commit to buffer)")
+                    : ""}
+              </span>
+            </div>
+            {featuresParseError && (
+              <div className="status-note mono status-note--error">
+                {featuresParseError}
+              </div>
+            )}
+            {featuresAst && (
+              <ApacheIfModuleEditor
+                nodes={featuresAst as ApacheNode[]}
+                onChange={(next) =>
+                  void handleFeatureChange(next as ApacheNode[])
+                }
+              />
+            )}
+          </div>
+        ) : kind === "caddy" &&
+          mode === "matchers" &&
+          activePath &&
+          !openBusy &&
+          !openError ? (
+          <div className="ws-raw__editor">
+            <div className="ws-raw__editor-head mono">
+              <span>{activePath}</span>
+              <span className="ws-raw__mode-hint">
+                {featuresApplying
+                  ? t("Applying…")
+                  : isDirty
+                    ? t("(unsaved — edits commit to buffer)")
+                    : ""}
+              </span>
+            </div>
+            {featuresParseError && (
+              <div className="status-note mono status-note--error">
+                {featuresParseError}
+              </div>
+            )}
+            {featuresAst && (
+              <CaddyMatcherEditor
+                nodes={featuresAst as CaddyNode[]}
+                onChange={(next) =>
+                  void handleFeatureChange(next as CaddyNode[])
+                }
+              />
+            )}
           </div>
         ) : (
           <Editor

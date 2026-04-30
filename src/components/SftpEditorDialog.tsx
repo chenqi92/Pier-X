@@ -82,6 +82,7 @@ import {
   languageFromFilename,
   languageLabel,
 } from "../lib/sftpEditor";
+import { isMarkdownFilename, renderMarkdown } from "../lib/markdown";
 
 /** Addressing the editor needs to call `sftp_read_text` /
  *  `sftp_write_text`. Mirrors the spread used by SftpPanel so
@@ -114,7 +115,7 @@ type Props = {
   ownerLabel?: string;
 };
 
-type Mode = "view" | "edit";
+type Mode = "view" | "edit" | "render";
 
 /** Above this byte count we skip the CodeMirror language extension —
  *  syntax highlighting on multi-MB files turns the initial mount
@@ -523,10 +524,24 @@ export default function SftpEditorDialog({
     const v = viewRef.current;
     if (!v) return;
     v.dispatch({
-      effects: readOnlyComp.reconfigure(EditorState.readOnly.of(mode === "view")),
+      effects: readOnlyComp.reconfigure(
+        EditorState.readOnly.of(mode === "view" || mode === "render"),
+      ),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
+
+  const isMarkdown = useMemo(() => isMarkdownFilename(effectiveName), [effectiveName]);
+  const [renderedHtml, setRenderedHtml] = useState<string>("");
+  // When the user switches to Render mode, snapshot the editor doc and
+  // run the markdown→HTML pass once. Re-runs on every flip so an
+  // intermediate edit shows up in the rendered view too.
+  useEffect(() => {
+    if (mode !== "render") return;
+    const v = viewRef.current;
+    const text = v ? v.state.doc.toString() : baselineRef.current;
+    setRenderedHtml(renderMarkdown(text));
+  }, [mode, dirty]);
 
   saveRef.current = async () => {
     const view = viewRef.current;
@@ -854,6 +869,15 @@ export default function SftpEditorDialog({
             >
               <Edit size={10} /> {t("Edit")}
             </button>
+            {isMarkdown && (
+              <button
+                type="button"
+                className={"editor-mode" + (mode === "render" ? " on" : "")}
+                onClick={() => setMode("render")}
+              >
+                <FileText size={10} /> {t("Render")}
+              </button>
+            )}
           </div>
           <IconButton variant="mini" onClick={requestClose} title={t("Close")}>
             <X size={12} />
@@ -1082,7 +1106,21 @@ export default function SftpEditorDialog({
             <>
               {loading && <div className="editor-loading mono">{t("Loading…")}</div>}
               {error && !loading && <div className="editor-error">{error}</div>}
-              <div ref={hostRef} className="editor-host" onContextMenu={handleEditorContextMenu} />
+              <div
+                ref={hostRef}
+                className="editor-host"
+                onContextMenu={handleEditorContextMenu}
+                style={mode === "render" ? { display: "none" } : undefined}
+              />
+              {mode === "render" && (
+                <div
+                  className="editor-md-render"
+                  // The markdown source is escaped inside renderMarkdown
+                  // before composing tags; only links/headings/lists
+                  // ever reach the HTML — no raw user HTML is forwarded.
+                  dangerouslySetInnerHTML={{ __html: renderedHtml }}
+                />
+              )}
             </>
           )}
         </div>

@@ -190,6 +190,32 @@ pub struct ForeignKey {
 /// One row of query results. Same type as MySQL's.
 pub type ResultRow = Vec<Option<String>>;
 
+/// One row of `pg_stat_activity`. We surface the columns most useful
+/// for a "what's running right now" panel and skip the rest (xid, etc.)
+/// which are mostly internal-debug. Optional fields mirror PG's NULLs:
+/// idle backends won't have a `query_duration_ms`, autovacuum workers
+/// won't have a `usename`, etc.
+#[allow(missing_docs)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PgActivityRow {
+    pub pid: i32,
+    pub usename: Option<String>,
+    pub datname: Option<String>,
+    pub client_addr: Option<String>,
+    pub application_name: Option<String>,
+    pub state: Option<String>,
+    /// Time spent on the current statement, in milliseconds.
+    pub query_duration_ms: Option<i64>,
+    /// Time since the last `state` transition, in milliseconds. For
+    /// idle-in-transaction sessions this is how long the txn has been
+    /// holding locks.
+    pub state_duration_ms: Option<i64>,
+    pub wait_event_type: Option<String>,
+    pub wait_event: Option<String>,
+    pub query: Option<String>,
+}
+
 /// Full query result. Same shape as [`super::mysql::QueryResult`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QueryResult {
@@ -410,6 +436,106 @@ impl PostgresClient {
     /// Blocking wrapper for [`Self::pool_status`].
     pub fn pool_status_blocking(&self) -> Result<(u32, u32)> {
         crate::ssh::runtime::shared().block_on(self.pool_status())
+    }
+
+    /// Fetch a snapshot of `pg_stat_activity` filtered to non-self,
+    /// non-idle rows the caller can see. The connecting role's RBAC
+    /// determines what shows up — superusers see everything, low-priv
+    /// roles see only their own backends. Sorted longest-running first
+    /// so the slow-query view lands on the worst offender immediately.
+    pub async fn list_activity(&self) -> Result<Vec<PgActivityRow>> {
+        // EXTRACT(EPOCH FROM …) returns f64 seconds; cast to bigint
+        // milliseconds in SQL so the driver hands us a plain i64 and
+        // we don't carry float-precision noise across the wire.
+        let sql = "SELECT \
+                pid, \
+                usename::text AS usename, \
+                datname::text AS datname, \
+                COALESCE(host(client_addr), client_hostname)::text AS client_addr, \
+                application_name::text AS application_name, \
+                state::text AS state, \
+                CASE WHEN query_start IS NULL THEN NULL \
+                     ELSE (EXTRACT(EPOCH FROM (now() - query_start)) * 1000)::bigint \
+                END AS query_duration_ms, \
+                CASE WHEN state_change IS NULL THEN NULL \
+                     ELSE (EXTRACT(EPOCH FROM (now() - state_change)) * 1000)::bigint \
+                END AS state_duration_ms, \
+                wait_event_type::text AS wait_event_type, \
+                wait_event::text AS wait_event, \
+                query::text AS query \
+             FROM pg_stat_activity \
+             WHERE pid <> pg_backend_pid() \
+               AND backend_type = 'client backend' \
+             ORDER BY query_start NULLS LAST, pid";
+        let pg_rows = self.client.query(sql, &[]).await?;
+        let mut out = Vec::with_capacity(pg_rows.len());
+        for r in pg_rows {
+            out.push(PgActivityRow {
+                pid: r.get::<_, i32>("pid"),
+                usename: r.try_get::<_, Option<String>>("usename").unwrap_or(None),
+                datname: r.try_get::<_, Option<String>>("datname").unwrap_or(None),
+                client_addr: r
+                    .try_get::<_, Option<String>>("client_addr")
+                    .unwrap_or(None),
+                application_name: r
+                    .try_get::<_, Option<String>>("application_name")
+                    .unwrap_or(None),
+                state: r.try_get::<_, Option<String>>("state").unwrap_or(None),
+                query_duration_ms: r
+                    .try_get::<_, Option<i64>>("query_duration_ms")
+                    .unwrap_or(None),
+                state_duration_ms: r
+                    .try_get::<_, Option<i64>>("state_duration_ms")
+                    .unwrap_or(None),
+                wait_event_type: r
+                    .try_get::<_, Option<String>>("wait_event_type")
+                    .unwrap_or(None),
+                wait_event: r
+                    .try_get::<_, Option<String>>("wait_event")
+                    .unwrap_or(None),
+                query: r.try_get::<_, Option<String>>("query").unwrap_or(None),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Blocking wrapper for [`Self::list_activity`].
+    pub fn list_activity_blocking(&self) -> Result<Vec<PgActivityRow>> {
+        crate::ssh::runtime::shared().block_on(self.list_activity())
+    }
+
+    /// `pg_cancel_backend(pid)` — politely asks PG to abort the running
+    /// query on `pid` (sends SIGINT). The connection itself stays open;
+    /// only the in-flight statement is interrupted. Returns the boolean
+    /// result that PG hands back (`true` if the signal was sent).
+    pub async fn cancel_query(&self, pid: i32) -> Result<bool> {
+        let row = self
+            .client
+            .query_one("SELECT pg_cancel_backend($1) AS ok", &[&pid])
+            .await?;
+        Ok(row.try_get::<_, bool>("ok").unwrap_or(false))
+    }
+
+    /// Blocking wrapper for [`Self::cancel_query`].
+    pub fn cancel_query_blocking(&self, pid: i32) -> Result<bool> {
+        crate::ssh::runtime::shared().block_on(self.cancel_query(pid))
+    }
+
+    /// `pg_terminate_backend(pid)` — forcefully closes the backend's
+    /// connection (sends SIGTERM). Heavier hammer than [`Self::cancel_query`];
+    /// callers should prefer cancel first and only escalate if the query
+    /// is genuinely stuck.
+    pub async fn terminate_backend(&self, pid: i32) -> Result<bool> {
+        let row = self
+            .client
+            .query_one("SELECT pg_terminate_backend($1) AS ok", &[&pid])
+            .await?;
+        Ok(row.try_get::<_, bool>("ok").unwrap_or(false))
+    }
+
+    /// Blocking wrapper for [`Self::terminate_backend`].
+    pub fn terminate_backend_blocking(&self, pid: i32) -> Result<bool> {
+        crate::ssh::runtime::shared().block_on(self.terminate_backend(pid))
     }
 
     /// List tables in the given schema (default `public`).

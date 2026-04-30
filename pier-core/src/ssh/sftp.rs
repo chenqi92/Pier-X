@@ -40,6 +40,7 @@ use std::sync::Arc;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::FileAttributes;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use super::error::{Result, SshError};
 use super::runtime;
@@ -285,25 +286,57 @@ impl SftpClient {
         runtime::shared().block_on(self.upload_from(local, remote))
     }
 
-    /// Chunked download with a byte-level progress callback.
-    /// The callback fires once with `(0, total)` at the start and
-    /// after every chunk with `(bytes_written, total)`. Reads 64 KiB
-    /// at a time — russh-sftp's `SSH_FXP_READ` payload limit is
-    /// 255 KiB so we stay well under, and 64 KiB gives progress
-    /// events fine-grained enough for a smooth UI bar.
-    ///
-    /// Use this instead of [`Self::download_to`] when you need
-    /// progress; the old whole-file path stays for simple cases.
+    /// Thin wrapper over [`Self::download_to_with_progress_cancel`]
+    /// for callers that don't need mid-transfer cancellation. See
+    /// the cancellable variant for the full semantics.
     pub async fn download_to_with_progress<F>(
         &self,
         remote: &str,
         local: &Path,
-        mut on_progress: F,
+        on_progress: F,
     ) -> Result<u64>
     where
         F: FnMut(u64, u64) + Send,
     {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        self.download_to_with_progress_cancel(remote, local, on_progress, None)
+            .await
+    }
+
+    /// Chunked download with a byte-level progress callback and
+    /// optional mid-transfer cancellation. The callback fires once
+    /// at the start and after every chunk with `(bytes_written,
+    /// total)`. Reads 64 KiB at a time — russh-sftp's
+    /// `SSH_FXP_READ` payload limit is 255 KiB so we stay well
+    /// under, and 64 KiB gives progress events fine-grained enough
+    /// for a smooth UI bar.
+    ///
+    /// Auto-resume: if a local file already exists at `local` and
+    /// is a strict prefix of the remote (i.e. `0 < local_size <
+    /// remote_size`), we open the existing local file in append
+    /// mode and stream only the remaining bytes from the remote —
+    /// the rsync `--append` model. This makes a re-issued download
+    /// after a network blip cheap. If the local file is the same
+    /// size as remote we treat it as "already complete" and report
+    /// total without transferring; if it's larger we truncate and
+    /// start over (the safe choice — local got fatter than source).
+    ///
+    /// Cancellation: if `cancel` is `Some` and fires between
+    /// chunks, the function returns [`SshError::Cancelled`]
+    /// immediately without finishing the file. The destination
+    /// file is left in its partial state — auto-resume on retry
+    /// picks up where we stopped.
+    pub async fn download_to_with_progress_cancel<F>(
+        &self,
+        remote: &str,
+        local: &Path,
+        mut on_progress: F,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64, u64) + Send,
+    {
+        use std::io::SeekFrom;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
         let mut remote_file = self
             .inner
@@ -316,7 +349,30 @@ impl SftpClient {
             .map_err(sftp_error)?
             .size
             .unwrap_or(0);
-        on_progress(0, total);
+
+        // Probe local for the resume offset. Any error (file
+        // missing, perm) collapses to "no resume" — we'll truncate.
+        let local_size = match tokio::fs::metadata(local).await {
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        };
+        let resume_offset = if local_size > 0 && local_size < total {
+            local_size
+        } else {
+            0
+        };
+
+        // Already complete — caller asked us to download a file we
+        // already have at the right size. Skip the transfer entirely
+        // and report a complete progress event so the UI bar lands
+        // at 100% without flickering through 0.
+        if local_size == total && total > 0 {
+            on_progress(total, total);
+            let _ = remote_file.shutdown().await;
+            return Ok(total);
+        }
+
+        on_progress(resume_offset, total);
 
         // Make sure the parent directory exists so this mirrors
         // tokio::fs::write's "create missing path" behaviour for
@@ -326,10 +382,40 @@ impl SftpClient {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
         }
-        let mut local_file = tokio::fs::File::create(local).await.map_err(SshError::Io)?;
+        let mut local_file = if resume_offset > 0 {
+            // Open existing file for write WITHOUT truncate so we
+            // can seek into it and append the tail bytes.
+            tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(local)
+                .await
+                .map_err(SshError::Io)?
+        } else {
+            tokio::fs::File::create(local).await.map_err(SshError::Io)?
+        };
+        if resume_offset > 0 {
+            remote_file
+                .seek(SeekFrom::Start(resume_offset))
+                .await
+                .map_err(SshError::Io)?;
+            local_file
+                .seek(SeekFrom::Start(resume_offset))
+                .await
+                .map_err(SshError::Io)?;
+        }
         let mut buf = vec![0u8; 64 * 1024];
-        let mut transferred: u64 = 0;
+        let mut transferred: u64 = resume_offset;
         loop {
+            // Cancellation is checked between chunks — fine-grained
+            // enough for a 64 KiB resolution while keeping the chunk
+            // loop branch-free in the common case.
+            if let Some(token) = cancel {
+                if token.is_cancelled() {
+                    let _ = local_file.flush().await;
+                    let _ = remote_file.shutdown().await;
+                    return Err(SshError::Cancelled);
+                }
+            }
             let n = remote_file.read(&mut buf).await.map_err(SshError::Io)?;
             if n == 0 {
                 break;
@@ -345,11 +431,17 @@ impl SftpClient {
         // Explicit shutdown closes the remote file handle; ignore
         // errors (some servers send a harmless "already closed").
         let _ = remote_file.shutdown().await;
-        log::info!(
-            "downloaded {remote} -> {local} ({} bytes)",
-            transferred,
-            local = local.display(),
-        );
+        if resume_offset > 0 {
+            log::info!(
+                "downloaded {remote} -> {local} (resumed at {resume_offset}/{total})",
+                local = local.display(),
+            );
+        } else {
+            log::info!(
+                "downloaded {remote} -> {local} ({transferred} bytes)",
+                local = local.display(),
+            );
+        }
         Ok(transferred)
     }
 
@@ -363,37 +455,135 @@ impl SftpClient {
     where
         F: FnMut(u64, u64) + Send,
     {
-        runtime::shared().block_on(self.download_to_with_progress(remote, local, on_progress))
+        self.download_to_with_progress_cancel_blocking(remote, local, on_progress, None)
     }
 
-    /// Chunked upload with a byte-level progress callback. Same
-    /// semantics as [`Self::download_to_with_progress`] but in the
-    /// opposite direction: the local file's size is the `total`,
-    /// and the callback fires after each 64 KiB chunk is written.
-    pub async fn upload_from_with_progress<F>(
+    /// Sync wrapper for [`Self::download_to_with_progress_cancel`].
+    pub fn download_to_with_progress_cancel_blocking<F>(
         &self,
-        local: &Path,
         remote: &str,
-        mut on_progress: F,
+        local: &Path,
+        on_progress: F,
+        cancel: Option<&CancellationToken>,
     ) -> Result<u64>
     where
         F: FnMut(u64, u64) + Send,
     {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        runtime::shared().block_on(self.download_to_with_progress_cancel(
+            remote,
+            local,
+            on_progress,
+            cancel,
+        ))
+    }
+
+    /// Thin wrapper over [`Self::upload_from_with_progress_cancel`]
+    /// for callers that don't need mid-transfer cancellation.
+    pub async fn upload_from_with_progress<F>(
+        &self,
+        local: &Path,
+        remote: &str,
+        on_progress: F,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64, u64) + Send,
+    {
+        self.upload_from_with_progress_cancel(local, remote, on_progress, None)
+            .await
+    }
+
+    /// Chunked upload with a byte-level progress callback and
+    /// optional mid-transfer cancellation. Same auto-resume
+    /// semantics as [`Self::download_to_with_progress_cancel`]
+    /// but in the opposite direction: the local file's size is
+    /// the `total`, and we resume when the remote already holds
+    /// a strict prefix of the local content. The callback fires
+    /// after each 64 KiB chunk is written; cancel is checked
+    /// between chunks.
+    pub async fn upload_from_with_progress_cancel<F>(
+        &self,
+        local: &Path,
+        remote: &str,
+        mut on_progress: F,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64, u64) + Send,
+    {
+        use russh_sftp::protocol::OpenFlags;
+        use std::io::SeekFrom;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
         let meta = tokio::fs::metadata(local).await.map_err(SshError::Io)?;
         let total = meta.len();
-        on_progress(0, total);
+
+        // Probe the destination so we can decide whether to resume
+        // or truncate-overwrite. Any error (NoSuchFile, perm) →
+        // remote_size=0 which falls through to the truncate path
+        // exactly like the pre-resume implementation.
+        let remote_size = match self.inner.metadata(remote.to_string()).await {
+            Ok(m) => m.size.unwrap_or(0),
+            Err(_) => 0,
+        };
+        let resume_offset = if remote_size > 0 && remote_size < total {
+            remote_size
+        } else {
+            0
+        };
+
+        // Already complete — same behavior as the download path:
+        // skip the transfer and report a single completion event.
+        if remote_size == total && total > 0 {
+            on_progress(total, total);
+            return Ok(total);
+        }
+
+        on_progress(resume_offset, total);
 
         let mut local_file = tokio::fs::File::open(local).await.map_err(SshError::Io)?;
-        let mut remote_file = self
-            .inner
-            .create(remote.to_string())
-            .await
-            .map_err(sftp_error)?;
+        let mut remote_file = if resume_offset > 0 {
+            // WRITE | CREATE without TRUNCATE keeps the existing
+            // bytes intact so seek + write tail extends the file.
+            self.inner
+                .open_with_flags(
+                    remote.to_string(),
+                    OpenFlags::WRITE | OpenFlags::CREATE,
+                )
+                .await
+                .map_err(sftp_error)?
+        } else {
+            // create() = WRITE | CREATE | TRUNCATE — start fresh.
+            self.inner
+                .create(remote.to_string())
+                .await
+                .map_err(sftp_error)?
+        };
+
+        if resume_offset > 0 {
+            local_file
+                .seek(SeekFrom::Start(resume_offset))
+                .await
+                .map_err(SshError::Io)?;
+            remote_file
+                .seek(SeekFrom::Start(resume_offset))
+                .await
+                .map_err(SshError::Io)?;
+        }
+
         let mut buf = vec![0u8; 64 * 1024];
-        let mut transferred: u64 = 0;
+        let mut transferred: u64 = resume_offset;
         loop {
+            // Cancel between chunks. On hit we still flush+shutdown
+            // the remote handle so the bytes already written aren't
+            // dangling in russh's send buffer — important for resume
+            // on retry which reads the remote file's current size.
+            if let Some(token) = cancel {
+                if token.is_cancelled() {
+                    let _ = remote_file.flush().await;
+                    let _ = remote_file.shutdown().await;
+                    return Err(SshError::Cancelled);
+                }
+            }
             let n = local_file.read(&mut buf).await.map_err(SshError::Io)?;
             if n == 0 {
                 break;
@@ -407,11 +597,17 @@ impl SftpClient {
         }
         remote_file.flush().await.map_err(SshError::Io)?;
         let _ = remote_file.shutdown().await;
-        log::info!(
-            "uploaded {local} -> {remote} ({} bytes)",
-            transferred,
-            local = local.display(),
-        );
+        if resume_offset > 0 {
+            log::info!(
+                "uploaded {local} -> {remote} (resumed at {resume_offset}/{total})",
+                local = local.display(),
+            );
+        } else {
+            log::info!(
+                "uploaded {local} -> {remote} ({transferred} bytes)",
+                local = local.display(),
+            );
+        }
         Ok(transferred)
     }
 
@@ -425,7 +621,181 @@ impl SftpClient {
     where
         F: FnMut(u64, u64) + Send,
     {
-        runtime::shared().block_on(self.upload_from_with_progress(local, remote, on_progress))
+        self.upload_from_with_progress_cancel_blocking(local, remote, on_progress, None)
+    }
+
+    /// Sync wrapper for [`Self::upload_from_with_progress_cancel`].
+    pub fn upload_from_with_progress_cancel_blocking<F>(
+        &self,
+        local: &Path,
+        remote: &str,
+        on_progress: F,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64, u64) + Send,
+    {
+        runtime::shared().block_on(self.upload_from_with_progress_cancel(
+            local,
+            remote,
+            on_progress,
+            cancel,
+        ))
+    }
+
+    /// Write bytes from `local[start..end]` to `remote` at offset
+    /// `start`. The remote file must already exist (or be openable
+    /// with `WRITE | CREATE` — this function never truncates).
+    /// Used by the chunked-parallel single-file uploader: each
+    /// worker handles one disjoint byte range.
+    ///
+    /// `on_progress` reports bytes-so-far within this range
+    /// (monotonic from 0 up to `end - start`); the caller folds it
+    /// into a tree-level cumulative atomic.
+    pub async fn upload_range_with_progress_cancel<F>(
+        &self,
+        local: &Path,
+        remote: &str,
+        start: u64,
+        end: u64,
+        mut on_progress: F,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64) + Send,
+    {
+        use russh_sftp::protocol::OpenFlags;
+        use std::io::SeekFrom;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+
+        if start >= end {
+            return Ok(0);
+        }
+
+        let mut local_file = tokio::fs::File::open(local).await.map_err(SshError::Io)?;
+        local_file
+            .seek(SeekFrom::Start(start))
+            .await
+            .map_err(SshError::Io)?;
+
+        // WRITE | CREATE without TRUNCATE so workers don't fight
+        // each other — first one to call may create, the rest just
+        // open and seek to their assigned offset.
+        let mut remote_file = self
+            .inner
+            .open_with_flags(remote.to_string(), OpenFlags::WRITE | OpenFlags::CREATE)
+            .await
+            .map_err(sftp_error)?;
+        remote_file
+            .seek(SeekFrom::Start(start))
+            .await
+            .map_err(SshError::Io)?;
+
+        let range_len = end - start;
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut written: u64 = 0;
+        while written < range_len {
+            if let Some(token) = cancel {
+                if token.is_cancelled() {
+                    let _ = remote_file.flush().await;
+                    let _ = remote_file.shutdown().await;
+                    return Err(SshError::Cancelled);
+                }
+            }
+            let want = ((range_len - written) as usize).min(buf.len());
+            let n = local_file
+                .read(&mut buf[..want])
+                .await
+                .map_err(SshError::Io)?;
+            if n == 0 {
+                break;
+            }
+            remote_file
+                .write_all(&buf[..n])
+                .await
+                .map_err(SshError::Io)?;
+            written += n as u64;
+            on_progress(written);
+        }
+        remote_file.flush().await.map_err(SshError::Io)?;
+        let _ = remote_file.shutdown().await;
+        Ok(written)
+    }
+
+    /// Mirror of [`Self::upload_range_with_progress_cancel`] for
+    /// downloads — reads `remote[start..end]` and writes to `local`
+    /// at offset `start`. The local file must already exist with at
+    /// least `end` bytes capacity (caller pre-allocates via
+    /// `set_len`); we open with `WRITE` (no truncate) so all
+    /// workers can pwrite into disjoint regions.
+    pub async fn download_range_with_progress_cancel<F>(
+        &self,
+        remote: &str,
+        local: &Path,
+        start: u64,
+        end: u64,
+        mut on_progress: F,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64) + Send,
+    {
+        use std::io::SeekFrom;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+
+        if start >= end {
+            return Ok(0);
+        }
+
+        let mut remote_file = self
+            .inner
+            .open(remote.to_string())
+            .await
+            .map_err(sftp_error)?;
+        remote_file
+            .seek(SeekFrom::Start(start))
+            .await
+            .map_err(SshError::Io)?;
+
+        let mut local_file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(local)
+            .await
+            .map_err(SshError::Io)?;
+        local_file
+            .seek(SeekFrom::Start(start))
+            .await
+            .map_err(SshError::Io)?;
+
+        let range_len = end - start;
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut written: u64 = 0;
+        while written < range_len {
+            if let Some(token) = cancel {
+                if token.is_cancelled() {
+                    let _ = local_file.flush().await;
+                    let _ = remote_file.shutdown().await;
+                    return Err(SshError::Cancelled);
+                }
+            }
+            let want = ((range_len - written) as usize).min(buf.len());
+            let n = remote_file
+                .read(&mut buf[..want])
+                .await
+                .map_err(SshError::Io)?;
+            if n == 0 {
+                break;
+            }
+            local_file
+                .write_all(&buf[..n])
+                .await
+                .map_err(SshError::Io)?;
+            written += n as u64;
+            on_progress(written);
+        }
+        local_file.flush().await.map_err(SshError::Io)?;
+        let _ = remote_file.shutdown().await;
+        Ok(written)
     }
 
     /// Recursively upload `local_root` into `remote_root`, preserving
@@ -655,7 +1025,7 @@ impl SftpClient {
 /// we're iterating in this recursion step. `remote_root` is the
 /// destination path — remote paths are derived from the relative
 /// portion of each local path.
-fn collect_local_tree(
+pub(super) fn collect_local_tree(
     local_root: &Path,
     current: &Path,
     remote_root: &str,
@@ -694,7 +1064,7 @@ fn collect_local_tree(
 /// `remote_root` is the remote folder the user picked; `local_root`
 /// is the destination local directory. Local paths preserve the
 /// relative tree under `local_root`.
-async fn collect_remote_tree(
+pub(super) async fn collect_remote_tree(
     sftp: &SftpClient,
     remote_root: &str,
     local_root: &Path,

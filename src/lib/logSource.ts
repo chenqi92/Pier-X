@@ -199,6 +199,22 @@ export function describeLogSource(src: LogSource): string {
   }
 }
 
+/** Stable signature for de-duping pins. Two LogSources are "the same"
+ *  if their mode and the mode-specific selector strings match. We only
+ *  hash the fields that drive the underlying tail/exec command — extra
+ *  metadata (e.g. presence of a saved customDraft) is intentionally
+ *  excluded so the rail doesn't grow with near-duplicates. */
+export function logSourceSignature(src: LogSource): string {
+  switch (src.mode) {
+    case "file":
+      return `file:${src.filePath.trim()}`;
+    case "system":
+      return `system:${src.systemPresetId}:${src.systemArg.trim()}`;
+    case "custom":
+      return `custom:${src.customCommand.trim()}`;
+  }
+}
+
 export const MODES: { id: LogSourceMode; label: string }[] = [
   { id: "file", label: "File" },
   { id: "system", label: "System" },

@@ -35,6 +35,7 @@ import {
   type DbCredentialFieldAdapter,
 } from "../components/db/useDbCredentialFlow";
 import { useDbSqlTabs } from "../components/db/useDbSqlTabs";
+import PostgresActivityDialog from "../components/db/PostgresActivityDialog";
 import {
   ddlToSql,
   gridColumnsFromPostgres,
@@ -47,6 +48,12 @@ import { formatSqlText } from "../components/db/sqlFormat";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { writeClipboardText } from "../lib/clipboard";
+import {
+  formatBytes as formatDbBytes,
+  formatLastSeen,
+  getDbConnCache,
+  setDbConnCache,
+} from "../lib/dbConnCache";
 import * as cmd from "../lib/commands";
 import { isReadOnlySql, queryResultToCsv, queryResultToTsv } from "../lib/commands";
 import type {
@@ -142,6 +149,7 @@ function PostgresPanelBody({ tab }: Props) {
   const [notice, setNotice] = useState("");
 
   const [connectedTab, setConnectedTab] = useState<DbConnectedTab>("data");
+  const [activityOpen, setActivityOpen] = useState(false);
 
   const sqlTabs = useDbSqlTabs({
     initialSql: "SELECT version();",
@@ -182,6 +190,18 @@ function PostgresPanelBody({ tab }: Props) {
       setSchema(s.schemaName);
       if (s.databaseName !== tab.pgDatabase) {
         updateTab(tab.id, { pgDatabase: s.databaseName });
+      }
+      // Cache the roundtrip + size on the active credential so the
+      // splash can render a "23 ms · 4.2 MB" chip on next visit.
+      if (tab.pgActiveCredentialId) {
+        const sizeBytes = s.tableSummaries.reduce(
+          (acc, ts) => acc + (ts.dataBytes ?? 0) + (ts.indexBytes ?? 0),
+          0,
+        );
+        setDbConnCache("postgres", tab.pgActiveCredentialId, {
+          connectMs: s.browseElapsedMs,
+          sizeBytes: sizeBytes > 0 ? sizeBytes : undefined,
+        });
       }
     } catch (e) {
       setError(formatError(e));
@@ -417,23 +437,34 @@ function PostgresPanelBody({ tab }: Props) {
   const viaLabel = flow.sshTarget ? `${flow.sshTarget.user}@${flow.sshTarget.host}` : t("direct · localhost");
   const viaKind: DbSplashRowData["via"]["kind"] = flow.hasSsh ? "tunnel" : "direct";
 
-  const savedRows: DbSplashRowData[] = flow.savedForKind.map((cred) => ({
-    id: cred.id,
-    name: cred.label || cred.id,
-    env: inferEnv(cred.label),
-    engine: t("PostgreSQL"),
-    addr: `${cred.host}:${cred.port}`,
-    via: { kind: viaKind, label: viaLabel },
-    user: cred.user,
-    authHint: cred.hasPassword ? t("keyring") : undefined,
-    stats: cred.database ? <span>{cred.database}</span> : <span className="sep">—</span>,
-    lastUsed: null,
-    status: "unknown",
-    tintVar: "var(--svc-postgres)",
-    connectLabel: t("Connect"),
-    onConnect: () => flow.activateCredential(cred.id),
-    pending: flow.activating === cred.id,
-  }));
+  const savedRows: DbSplashRowData[] = flow.savedForKind.map((cred) => {
+    const cache = getDbConnCache("postgres", cred.id);
+    const statsBits: string[] = [];
+    if (cred.database) statsBits.push(cred.database);
+    if (cache) {
+      statsBits.push(`${cache.connectMs} ms`);
+      if (cache.sizeBytes) statsBits.push(formatDbBytes(cache.sizeBytes));
+    }
+    return {
+      id: cred.id,
+      name: cred.label || cred.id,
+      env: inferEnv(cred.label),
+      engine: t("PostgreSQL"),
+      addr: `${cred.host}:${cred.port}`,
+      via: { kind: viaKind, label: viaLabel },
+      user: cred.user,
+      authHint: cred.hasPassword ? t("keyring") : undefined,
+      stats: statsBits.length > 0
+        ? <span>{statsBits.join(" · ")}</span>
+        : <span className="sep">—</span>,
+      lastUsed: cache ? formatLastSeen(cache.lastConnectedAt) : null,
+      status: "unknown",
+      tintVar: "var(--svc-postgres)",
+      connectLabel: t("Connect"),
+      onConnect: () => flow.activateCredential(cred.id),
+      pending: flow.activating === cred.id,
+    };
+  });
 
   const detectedRows: DbSplashRowData[] = flow.detectedForKind.map((det) => ({
     id: det.signature,
@@ -962,6 +993,19 @@ function PostgresPanelBody({ tab }: Props) {
 
   const resultToolbar = (
     <>
+      {state.tableName && state.browseElapsedMs > 0 && (
+        <span
+          className="mono"
+          style={{
+            fontSize: "var(--size-small)",
+            color: "var(--muted)",
+            padding: "0 var(--sp-1-5)",
+          }}
+          title={t("Wall-clock for the preview SELECT")}
+        >
+          {state.browseElapsedMs} ms
+        </span>
+      )}
       {queryResult && (
         <>
           <button
@@ -1000,6 +1044,16 @@ function PostgresPanelBody({ tab }: Props) {
           onClose={() => void flow.closeTunnel()}
         />
       )}
+      <button
+        type="button"
+        className="btn is-ghost is-compact"
+        onClick={() => setActivityOpen(true)}
+        title={t(
+          "Show server activity (pg_stat_activity) — slow queries, idle-in-tx, locks",
+        )}
+      >
+        {t("Activity")}
+      </button>
     </>
   );
 
@@ -1278,6 +1332,17 @@ function PostgresPanelBody({ tab }: Props) {
           setCreateDbOpen(false);
           setNotice(t("Created database \"{name}\".", { name }));
           await browse();
+        }}
+      />
+      <PostgresActivityDialog
+        open={activityOpen}
+        onClose={() => setActivityOpen(false)}
+        connection={{
+          host: tab.pgTunnelPort ? "127.0.0.1" : tab.pgHost,
+          port: tab.pgTunnelPort ?? tab.pgPort,
+          user: tab.pgUser,
+          password: tab.pgPassword,
+          database: tab.pgDatabase || null,
         }}
       />
     </>

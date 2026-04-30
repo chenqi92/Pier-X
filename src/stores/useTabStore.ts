@@ -226,6 +226,7 @@ function makeDefaultTab(
     sqliteActiveCredentialId: partial.sqliteActiveCredentialId ?? null,
     logCommand: partial.logCommand ?? "",
     logSource: partial.logSource ?? { ...DEFAULT_LOG_SOURCE },
+    logSourcePins: partial.logSourcePins ?? [],
     markdownPath: partial.markdownPath ?? "",
     startupCommand: partial.startupCommand ?? "",
     dockerRegistryMirror: partial.dockerRegistryMirror ?? "",

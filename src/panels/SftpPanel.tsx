@@ -478,8 +478,19 @@ function SftpPanelBody({ tab }: Props) {
       setRenamingPath(null);
       setRenameDraft("");
     } catch (e) {
-      setState(null);
+      // Keep the last successful listing on screen — wiping `state`
+      // here would strand the user on a "Browse" empty view, break
+      // the back/up buttons (they require `state`), and leave the
+      // breadcrumb showing a path we never actually entered. The
+      // error banner below is enough to tell them what went wrong.
       setError(formatError(e));
+      // Snap the path input back to the real current location so
+      // the breadcrumb / pathbar don't keep showing the failed
+      // target after the user exits edit mode.
+      if (state?.currentPath) {
+        setPath(state.currentPath);
+        setPathDraft(state.currentPath);
+      }
     } finally {
       setBusy(false);
     }

@@ -14,6 +14,7 @@ import type {
   DockerNetworkView,
   DockerOverview,
   DockerVolumeView,
+  EgressProfile,
   FirewallSnapshotView,
   GitBlameLineView,
   FileEntry,
@@ -440,6 +441,8 @@ export const sshConnectionSave = (params: {
   group?: string | null;
   /** Environment tag (prod / staging / dev / local / free-form). */
   envTag?: string | null;
+  /** Egress profile id (see `EgressProfile`). Null / missing → direct. */
+  egressId?: string | null;
 }) => invoke<void>("ssh_connection_save", {
   name: params.name,
   host: params.host,
@@ -450,6 +453,7 @@ export const sshConnectionSave = (params: {
   keyPath: params.keyPath || null,
   group: params.group && params.group.trim() ? params.group.trim() : null,
   envTag: params.envTag && params.envTag.trim() ? params.envTag.trim() : null,
+  egressId: params.egressId && params.egressId.trim() ? params.egressId.trim() : null,
 });
 
 export const sshConnectionUpdate = (params: {
@@ -466,6 +470,9 @@ export const sshConnectionUpdate = (params: {
   group?: string | null;
   /** Same semantics as `group` — undefined preserves, "" clears. */
   envTag?: string | null;
+  /** Same preserve-on-undefined / clear-on-empty semantics as `group`.
+   *  Pass an `EgressProfile.id` to attach a tunnel; `""` to detach. */
+  egressId?: string | null;
 }) => invoke<void>("ssh_connection_update", {
   index: params.index,
   name: params.name,
@@ -483,6 +490,12 @@ export const sshConnectionUpdate = (params: {
       ? null
       : params.envTag && params.envTag.trim()
         ? params.envTag.trim()
+        : "",
+  egressId:
+    params.egressId === undefined
+      ? null
+      : params.egressId && params.egressId.trim()
+        ? params.egressId.trim()
         : "",
 });
 
@@ -507,6 +520,48 @@ export const sshConnectionsReorder = (
  */
 export const sshGroupRename = (from: string, to: string | null) =>
   invoke<void>("ssh_group_rename", { from, to });
+
+// ── Egress profiles ─────────────────────────────────────────────
+
+/** List every saved egress profile in display order. */
+export const egressProfileList = () =>
+  invoke<EgressProfile[]>("egress_profile_list");
+
+/** Insert or replace an egress profile by id. The frontend is
+ *  responsible for storing any required credential blob via
+ *  `egressSetBasicAuth` BEFORE calling save (so the backend can
+ *  resolve it on the next connect). */
+export const egressProfileSave = (profile: EgressProfile) =>
+  invoke<void>("egress_profile_save", { profile });
+
+/** Remove a profile by id. Connections that referenced it have
+ *  their `egressId` cleared automatically (cascading removal). */
+export const egressProfileDelete = (id: string) =>
+  invoke<void>("egress_profile_delete", { id });
+
+/** Persist a username/password pair for a SOCKS5 / HTTP CONNECT
+ *  profile. `credentialId` is conventionally `pier-x.egress.<profile-id>`. */
+export const egressSetBasicAuth = (
+  credentialId: string,
+  user: string,
+  password: string,
+) => invoke<void>("egress_set_basic_auth", { credentialId, user, password });
+
+/** Remove a previously-saved egress credential. No-op when the
+ *  keyring has no entry under the id. */
+export const egressClearCredential = (credentialId: string) =>
+  invoke<void>("egress_clear_credential", { credentialId });
+
+/** Start the system VPN subprocess for a `wireguard` /
+ *  `external_vpn` profile. May trigger a sudo / UAC prompt. No-op
+ *  for SOCKS5 / HTTP / SshJump profiles. */
+export const egressVpnStart = (id: string) =>
+  invoke<void>("egress_vpn_start", { id });
+
+/** Stop a previously-started VPN subprocess. No-op when nothing is
+ *  running for the given profile id. */
+export const egressVpnStop = (id: string) =>
+  invoke<void>("egress_vpn_stop", { id });
 
 /**
  * Resolve the stored password for a saved SSH connection from the OS
@@ -1083,6 +1138,28 @@ export const dbCredResolve = (savedConnectionIndex: number, credentialId: string
     credentialId,
   });
 
+/** Endpoint a DB panel should connect to for the given credential.
+ *  When `cred.egressId` is set, the backend lazily starts a local
+ *  forwarder and returns `127.0.0.1:<port>`; otherwise it returns
+ *  `cred.host:cred.port` unchanged. Either way, the panel's connect
+ *  call uses the returned `(host, port)` as-is. */
+export type DbEgressEndpoint = {
+  host: string;
+  port: number;
+  /** True when the connection actually goes through a forwarder
+   *  (i.e. an egress profile is in play). False = direct. */
+  viaForwarder: boolean;
+};
+
+export const dbEgressEndpoint = (
+  savedConnectionIndex: number,
+  credentialId: string,
+) =>
+  invoke<DbEgressEndpoint>("db_egress_endpoint", {
+    savedConnectionIndex,
+    credentialId,
+  });
+
 export type DockerDbEnv = {
   mysqlDatabase: string | null;
   mysqlUser: string | null;
@@ -1308,6 +1385,17 @@ export const softwareRegistry = () => invoke<SoftwareDescriptor[]>("software_reg
 export const softwareProbeRemote = (params: SshParams) =>
   invoke<SoftwareProbeResult>("software_probe_remote", params);
 
+/** Sudo credential threaded into install / update / uninstall /
+ *  service-action / mirror / compose commands. `undefined` keeps the
+ *  legacy `sudo -n` non-interactive behaviour (suitable for already-
+ *  root sessions or NOPASSWD sudoers). When the host needs a real
+ *  password (Synology DSM, polkit-backed sudo, hardened Ubuntu
+ *  images), the panel pops a dialog, caches the entry per-host for
+ *  the session, and re-supplies it on every invoke — sudo's
+ *  per-tty timestamp doesn't carry across SSH `exec` channels.
+ *  Never logged, never written to history, never persisted. */
+export type SudoCredential = string | null | undefined;
+
 export const softwareInstallRemote = (
   params: SshParams & {
     packageId: string;
@@ -1327,12 +1415,15 @@ export const softwareInstallRemote = (
      *  entry AND confirms in the risk dialog. Omit / `false` =
      *  default package-manager path. */
     viaVendorScript?: boolean;
+    /** Sudo password — see `SudoCredential`. */
+    sudoPassword?: SudoCredential;
   },
 ) =>
   invoke<SoftwareInstallReport>("software_install_remote", {
     ...params,
     version: params.version ?? null,
     variantKey: params.variantKey ?? null,
+    sudoPassword: params.sudoPassword ?? null,
   });
 
 export const softwareUpdateRemote = (
@@ -1345,12 +1436,15 @@ export const softwareUpdateRemote = (
     version?: string | null;
     /** See `softwareInstallRemote.variantKey`. */
     variantKey?: string | null;
+    /** Sudo password — see `SudoCredential`. */
+    sudoPassword?: SudoCredential;
   },
 ) =>
   invoke<SoftwareInstallReport>("software_update_remote", {
     ...params,
     version: params.version ?? null,
     variantKey: params.variantKey ?? null,
+    sudoPassword: params.sudoPassword ?? null,
   });
 
 /** Enumerate package-manager-visible versions for `packageId` on the
@@ -1627,8 +1721,17 @@ export const softwareSearchRemote = (
  *  the SOFTWARE_INSTALL_EVENT channel so the existing event
  *  listener wiring works unchanged. */
 export const softwareInstallArbitrary = (
-  params: SshParams & { packageName: string; installId: string },
-) => invoke<SoftwareInstallReport>("software_install_arbitrary", params);
+  params: SshParams & {
+    packageName: string;
+    installId: string;
+    /** Sudo password — see `SudoCredential`. */
+    sudoPassword?: SudoCredential;
+  },
+) =>
+  invoke<SoftwareInstallReport>("software_install_arbitrary", {
+    ...params,
+    sudoPassword: params.sudoPassword ?? null,
+  });
 
 // ── Mirror switching (v2.3) ─────────────────────────────────────
 
@@ -1849,12 +1952,28 @@ export const softwareComposeDeleteUserTemplate = (id: string) =>
   invoke<void>("software_compose_delete_user_template", { id });
 
 export const softwareComposeApply = (
-  params: SshParams & { templateId: string },
-) => invoke<PostgresActionReport>("software_compose_apply", params);
+  params: SshParams & {
+    templateId: string;
+    /** Sudo password — see `SudoCredential`. */
+    sudoPassword?: SudoCredential;
+  },
+) =>
+  invoke<PostgresActionReport>("software_compose_apply", {
+    ...params,
+    sudoPassword: params.sudoPassword ?? null,
+  });
 
 export const softwareComposeDown = (
-  params: SshParams & { templateId: string },
-) => invoke<PostgresActionReport>("software_compose_down", params);
+  params: SshParams & {
+    templateId: string;
+    /** Sudo password — see `SudoCredential`. */
+    sudoPassword?: SudoCredential;
+  },
+) =>
+  invoke<PostgresActionReport>("software_compose_down", {
+    ...params,
+    sudoPassword: params.sudoPassword ?? null,
+  });
 
 /** Result of converting a Compose template to a multi-document
  *  Kubernetes manifest. The conversion runs entirely client-side
@@ -1959,11 +2078,27 @@ export const softwareMirrorGet = (params: SshParams) =>
   invoke<MirrorState>("software_mirror_get", params);
 
 export const softwareMirrorSet = (
-  params: SshParams & { mirrorId: MirrorId },
-) => invoke<MirrorActionReport>("software_mirror_set", params);
+  params: SshParams & {
+    mirrorId: MirrorId;
+    /** Sudo password — see `SudoCredential`. */
+    sudoPassword?: SudoCredential;
+  },
+) =>
+  invoke<MirrorActionReport>("software_mirror_set", {
+    ...params,
+    sudoPassword: params.sudoPassword ?? null,
+  });
 
-export const softwareMirrorRestore = (params: SshParams) =>
-  invoke<MirrorActionReport>("software_mirror_restore", params);
+export const softwareMirrorRestore = (
+  params: SshParams & {
+    /** Sudo password — see `SudoCredential`. */
+    sudoPassword?: SudoCredential;
+  },
+) =>
+  invoke<MirrorActionReport>("software_mirror_restore", {
+    ...params,
+    sudoPassword: params.sudoPassword ?? null,
+  });
 
 /** Per-mirror probe result. `latencyMs = null` = the host couldn't
  *  reach this mirror (DNS fail / timeout / non-2xx HTTP HEAD). */
@@ -2051,8 +2186,14 @@ export const softwareUninstallRemote = (
     packageId: string;
     installId: string;
     options: UninstallOptions;
+    /** Sudo password — see `SudoCredential`. */
+    sudoPassword?: SudoCredential;
   },
-) => invoke<SoftwareUninstallReport>("software_uninstall_remote", params);
+) =>
+  invoke<SoftwareUninstallReport>("software_uninstall_remote", {
+    ...params,
+    sudoPassword: params.sudoPassword ?? null,
+  });
 
 /** Trigger cancellation for an in-flight install / update / uninstall.
  *  The backend keys on the same `installId` the row generated when it
@@ -2123,9 +2264,14 @@ export const softwareServiceActionRemote = (
     packageId: string;
     installId: string;
     action: SoftwareServiceAction;
+    /** Sudo password — see `SudoCredential`. */
+    sudoPassword?: SudoCredential;
   },
 ) =>
-  invoke<SoftwareServiceActionReport>("software_service_action_remote", params);
+  invoke<SoftwareServiceActionReport>("software_service_action_remote", {
+    ...params,
+    sudoPassword: params.sudoPassword ?? null,
+  });
 
 /** One-shot fetch of the most recent N lines from `journalctl -u <unit>`.
  *  Backing the "View logs" dialog — true tailing is intentionally out

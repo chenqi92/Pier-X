@@ -71,10 +71,12 @@ import {
   type SoftwareActivityKind,
 } from "../stores/useSoftwareStore";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
+import { useSudoStore } from "../stores/useSudoStore";
 import Dialog from "../components/Dialog";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import Popover from "../components/Popover";
 import StatusDot from "../components/StatusDot";
+import SudoPasswordDialog from "../components/SudoPasswordDialog";
 
 type Props = { tab: TabState | null };
 
@@ -394,6 +396,20 @@ function SoftwarePanelBody({ tab }: Props) {
    *  notes / "I understand" gate. */
   const [vendorTarget, setVendorTarget] = useState<SoftwareDescriptor | null>(null);
 
+  /** Pending sudo-password prompt. `null` = no prompt visible.
+   *  When set, the modal `SudoPasswordDialog` appears; its submit /
+   *  cancel handlers resolve the embedded promise so the in-flight
+   *  install/uninstall/etc handler can decide whether to retry with
+   *  the new password or surface the original
+   *  `sudo-requires-password` outcome. */
+  const [sudoPrompt, setSudoPrompt] = useState<{
+    hostLabel: string;
+    errorMessage?: string;
+    resolve: (password: string | null) => void;
+  } | null>(null);
+  const sudoPromptRef = useRef(sudoPrompt);
+  sudoPromptRef.current = sudoPrompt;
+
   const sshParams = useMemo(() => {
     if (!sshTarget) return null;
     return {
@@ -647,6 +663,78 @@ function SoftwarePanelBody({ tab }: Props) {
     });
   }
 
+  /** Promise-returning helper: pop the sudo password dialog, wait
+   *  for the user, resolve with the entered string (or `null` on
+   *  Cancel). Used by the sudo-retry wrapper below; never shows two
+   *  prompts at once because the panel's lifecycle handlers wait on
+   *  this promise before continuing. */
+  function requestSudoPassword(errorMessage?: string): Promise<string | null> {
+    const hostLabel = sshTarget
+      ? `${sshTarget.user}@${sshTarget.host}`
+      : t("the remote host");
+    return new Promise<string | null>((resolve) => {
+      // If a prior prompt is still open (shouldn't happen — every
+      // call awaits the resolver — but be defensive), close it first
+      // so the previous awaiter sees a `null` and bails cleanly.
+      sudoPromptRef.current?.resolve(null);
+      setSudoPrompt({ hostLabel, errorMessage, resolve });
+    });
+  }
+
+  /** Wrap a single backend call in sudo-password retry logic. `fn`
+   *  is invoked once with whatever password is cached for the host
+   *  (or `null` for the legacy `sudo -n` path). If the report comes
+   *  back as `sudo-requires-password`, we pop the dialog, cache the
+   *  user's input, and call `fn` again — repeating until either:
+   *
+   *  - The report status is anything OTHER than
+   *    `sudo-requires-password` (success, package-manager-failed,
+   *    cancelled, …), in which case we return that report.
+   *  - The user dismisses the dialog (Cancel / Esc), in which case
+   *    we return the most recent `sudo-requires-password` report so
+   *    the caller can finalize the activity with the original
+   *    "needs password" outcome.
+   *
+   *  Each retry runs as a fresh attempt — the caller passes a
+   *  closure that owns its own subscribe / unsubscribe / installId
+   *  lifecycle so the activity log reflects the actual run. */
+  async function withSudoRetry<R extends { status: string }>(
+    fn: (sudoPassword: string | null) => Promise<R>,
+  ): Promise<R> {
+    if (!sshParams) {
+      // Should be unreachable — every caller checks sshParams first
+      // — but TypeScript wants the path-typed return.
+      return fn(null);
+    }
+    const cached = useSudoStore.getState().get(sshParams);
+    let password: string | null = cached;
+    let cachedRejectedThisRun = false;
+    let lastReport: R | null = null;
+    // Cap at 4 attempts (1 initial + 3 retries) so a stuck dialog
+    // can't spin forever. The user can re-trigger from the row.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const report = await fn(password);
+      lastReport = report;
+      if (report.status !== "sudo-requires-password") return report;
+      // First failure with a cached password → that cached value is
+      // wrong; clear it and ask fresh. After that it's straight
+      // "wrong password, try again" until the loop bottoms out.
+      let errorMessage: string | undefined;
+      if (cached && password === cached && !cachedRejectedThisRun) {
+        useSudoStore.getState().clear(sshParams);
+        cachedRejectedThisRun = true;
+        errorMessage = t("Saved sudo password was rejected — please re-enter.");
+      } else if (attempt > 0) {
+        errorMessage = t("Wrong password — please try again.");
+      }
+      const fresh = await requestSudoPassword(errorMessage);
+      if (fresh === null) return report;
+      password = fresh;
+      useSudoStore.getState().set(sshParams, fresh);
+    }
+    return lastReport as R;
+  }
+
   /** Kick off a `systemctl <verb>` for one row's service. Mirrors the
    *  install / uninstall handlers' lifecycle exactly so the row UI
    *  (busy state, log streaming, post-action status flip) reuses the
@@ -656,24 +744,43 @@ function SoftwarePanelBody({ tab }: Props) {
     action: SoftwareServiceAction,
   ) {
     if (!sshParams || !swKey) return;
-    const installId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random()}`;
     const kind: SoftwareActivityKind = `service-${action}`;
-    startActivity(swKey, descriptor.id, installId, kind);
-    const unlisten = await cmd.subscribeSoftwareServiceAction(installId, (evt) => {
-      if (evt.kind === "line") {
-        appendLine(swKey, descriptor.id, evt.text);
-      }
-    });
+    // Each retry attempt runs a complete subscribe → invoke →
+    // unsubscribe cycle so streaming output stays in sync with the
+    // installId the backend is emitting against. The startActivity
+    // fires once on the first attempt; activity logs from rejected
+    // sudo attempts are short (a single "needs password" line) and
+    // make the retry visible to the user.
+    let firstAttempt = true;
     try {
-      const report: SoftwareServiceActionReport = await cmd.softwareServiceActionRemote({
-        ...sshParams,
-        packageId: descriptor.id,
-        installId,
-        action,
-      });
+      const report = await withSudoRetry<SoftwareServiceActionReport>(
+        async (sudoPassword) => {
+          const installId =
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random()}`;
+          if (firstAttempt) {
+            startActivity(swKey, descriptor.id, installId, kind);
+            firstAttempt = false;
+          }
+          const unlisten = await cmd.subscribeSoftwareServiceAction(installId, (evt) => {
+            if (evt.kind === "line") {
+              appendLine(swKey, descriptor.id, evt.text);
+            }
+          });
+          try {
+            return await cmd.softwareServiceActionRemote({
+              ...sshParams,
+              packageId: descriptor.id,
+              installId,
+              action,
+              sudoPassword: sudoPassword ?? null,
+            });
+          } finally {
+            unlisten();
+          }
+        },
+      );
       const localized = describeServiceOutcome(report, t);
       // Flip just the serviceActive dot — version / installed are
       // unchanged by start / stop / restart / reload.
@@ -689,8 +796,6 @@ function SoftwarePanelBody({ tab }: Props) {
       );
     } catch (e) {
       finishActivity(swKey, descriptor.id, formatError(e), null);
-    } finally {
-      unlisten();
     }
   }
 
@@ -709,49 +814,64 @@ function SoftwarePanelBody({ tab }: Props) {
     action: "install" | "update" | "install-vendor",
   ) {
     if (!sshParams || !swKey) return;
-    const installId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random()}`;
-    // The store only knows three kinds of activity ("install" / "update"
-    // / "uninstall"); collapse the vendor variant to "install" so the
-    // existing "Installing…" label and busy-row dimming keep working.
-    startActivity(
-      swKey,
-      descriptor.id,
-      installId,
-      action === "install-vendor" ? "install" : action,
-    );
     // Cancel-vs-done race guard: when the user clicks Cancel, the
     // backend emits a `cancelled` event AND the awaited promise also
     // resolves with `status: "cancelled"`. Without this flag both code
     // paths would call finishActivity, the second overwriting the
-    // first. Mirrors `runUninstall`'s guard.
+    // first. Mirrors `runUninstall`'s guard. Hoisted here so each
+    // sudo retry attempt sees the same flag — once the user cancels,
+    // we don't want a still-in-flight retry to re-enter.
     let cancelledSeen = false;
-    const unlisten = await cmd.subscribeSoftwareInstall(installId, (evt) => {
-      if (evt.kind === "line") {
-        appendLine(swKey, descriptor.id, evt.text);
-      } else if (evt.kind === "cancelled") {
-        cancelledSeen = true;
-        finishActivity(swKey, descriptor.id, t("Cancelled"), null);
-      }
-      // `done` / `failed` are handled by the promise resolve/reject
-      // below — no extra work here.
-    });
+    let firstAttempt = true;
     try {
-      const params = {
-        ...sshParams,
-        packageId: descriptor.id,
-        installId,
-        enableService,
-        version: selectedVersions[descriptor.id],
-        variantKey: selectedVariants[descriptor.id] ?? null,
-        ...(action === "install-vendor" ? { viaVendorScript: true } : {}),
-      };
-      const report: SoftwareInstallReport =
-        action === "update"
-          ? await cmd.softwareUpdateRemote(params)
-          : await cmd.softwareInstallRemote(params);
+      const report = await withSudoRetry<SoftwareInstallReport>(
+        async (sudoPassword) => {
+          const installId =
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random()}`;
+          if (firstAttempt) {
+            // The store only knows three kinds of activity
+            // ("install" / "update" / "uninstall"); collapse the
+            // vendor variant to "install" so the existing
+            // "Installing…" label and busy-row dimming keep working.
+            startActivity(
+              swKey,
+              descriptor.id,
+              installId,
+              action === "install-vendor" ? "install" : action,
+            );
+            firstAttempt = false;
+          }
+          const unlisten = await cmd.subscribeSoftwareInstall(installId, (evt) => {
+            if (evt.kind === "line") {
+              appendLine(swKey, descriptor.id, evt.text);
+            } else if (evt.kind === "cancelled") {
+              cancelledSeen = true;
+              finishActivity(swKey, descriptor.id, t("Cancelled"), null);
+            }
+            // `done` / `failed` are handled by the promise resolve/reject
+            // below — no extra work here.
+          });
+          try {
+            const params = {
+              ...sshParams,
+              packageId: descriptor.id,
+              installId,
+              enableService,
+              version: selectedVersions[descriptor.id],
+              variantKey: selectedVariants[descriptor.id] ?? null,
+              ...(action === "install-vendor" ? { viaVendorScript: true } : {}),
+              sudoPassword: sudoPassword ?? null,
+            };
+            return action === "update"
+              ? await cmd.softwareUpdateRemote(params)
+              : await cmd.softwareInstallRemote(params);
+          } finally {
+            unlisten();
+          }
+        },
+      );
       // The `cancelled` event may have arrived first (most common —
       // event channel beats the awaited Tauri response) OR the report
       // itself may carry status="cancelled" (the response landed first).
@@ -815,8 +935,6 @@ function SoftwarePanelBody({ tab }: Props) {
       // with a raw error string from the unwound promise.
       if (cancelledSeen) return;
       finishActivity(swKey, descriptor.id, formatError(e), null);
-    } finally {
-      unlisten();
     }
   }
 
@@ -837,27 +955,40 @@ function SoftwarePanelBody({ tab }: Props) {
   ) {
     if (!sshParams || !swKey) return;
     setUninstallTarget(null);
-    const installId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random()}`;
-    startActivity(swKey, descriptor.id, installId, "uninstall");
     let cancelledSeen = false;
-    const unlisten = await cmd.subscribeSoftwareUninstall(installId, (evt) => {
-      if (evt.kind === "line") {
-        appendLine(swKey, descriptor.id, evt.text);
-      } else if (evt.kind === "cancelled") {
-        cancelledSeen = true;
-        finishActivity(swKey, descriptor.id, t("Cancelled"), null);
-      }
-    });
+    let firstAttempt = true;
     try {
-      const report: SoftwareUninstallReport = await cmd.softwareUninstallRemote({
-        ...sshParams,
-        packageId: descriptor.id,
-        installId,
-        options,
-      });
+      const report = await withSudoRetry<SoftwareUninstallReport>(
+        async (sudoPassword) => {
+          const installId =
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random()}`;
+          if (firstAttempt) {
+            startActivity(swKey, descriptor.id, installId, "uninstall");
+            firstAttempt = false;
+          }
+          const unlisten = await cmd.subscribeSoftwareUninstall(installId, (evt) => {
+            if (evt.kind === "line") {
+              appendLine(swKey, descriptor.id, evt.text);
+            } else if (evt.kind === "cancelled") {
+              cancelledSeen = true;
+              finishActivity(swKey, descriptor.id, t("Cancelled"), null);
+            }
+          });
+          try {
+            return await cmd.softwareUninstallRemote({
+              ...sshParams,
+              packageId: descriptor.id,
+              installId,
+              options,
+              sudoPassword: sudoPassword ?? null,
+            });
+          } finally {
+            unlisten();
+          }
+        },
+      );
       if (cancelledSeen) return;
       if (report.status === "cancelled") {
         finishActivity(swKey, descriptor.id, t("Cancelled"), null);
@@ -905,8 +1036,6 @@ function SoftwarePanelBody({ tab }: Props) {
     } catch (e) {
       if (cancelledSeen) return;
       finishActivity(swKey, descriptor.id, formatError(e), null);
-    } finally {
-      unlisten();
     }
   }
 
@@ -938,31 +1067,40 @@ function SoftwarePanelBody({ tab }: Props) {
    *  have descriptors update their installed flag. */
   async function installArbitrary(packageName: string) {
     if (!sshParams || arbitraryActivity[packageName]?.busy) return;
-    const installId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random()}`;
     setArbitraryActivity((prev) => ({
       ...prev,
       [packageName]: { busy: true, log: [], error: "" },
     }));
-    const unlisten = await cmd.subscribeSoftwareInstall(installId, (evt) => {
-      if (evt.kind === "line") {
-        setArbitraryActivity((prev) => {
-          const cur = prev[packageName];
-          if (!cur) return prev;
-          const log = [...cur.log, evt.text];
-          if (log.length > 200) log.splice(0, log.length - 200);
-          return { ...prev, [packageName]: { ...cur, log } };
-        });
-      }
-    });
     try {
-      const report = await cmd.softwareInstallArbitrary({
-        ...sshParams,
-        packageName,
-        installId,
-      });
+      const report = await withSudoRetry<SoftwareInstallReport>(
+        async (sudoPassword) => {
+          const installId =
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random()}`;
+          const unlisten = await cmd.subscribeSoftwareInstall(installId, (evt) => {
+            if (evt.kind === "line") {
+              setArbitraryActivity((prev) => {
+                const cur = prev[packageName];
+                if (!cur) return prev;
+                const log = [...cur.log, evt.text];
+                if (log.length > 200) log.splice(0, log.length - 200);
+                return { ...prev, [packageName]: { ...cur, log } };
+              });
+            }
+          });
+          try {
+            return await cmd.softwareInstallArbitrary({
+              ...sshParams,
+              packageName,
+              installId,
+              sudoPassword: sudoPassword ?? null,
+            });
+          } finally {
+            unlisten();
+          }
+        },
+      );
       setArbitraryActivity((prev) => ({
         ...prev,
         [packageName]: {
@@ -988,8 +1126,6 @@ function SoftwarePanelBody({ tab }: Props) {
           error: formatError(e),
         },
       }));
-    } finally {
-      unlisten();
     }
   }
 
@@ -1606,7 +1742,13 @@ function SoftwarePanelBody({ tab }: Props) {
     setMirrorBusy("set");
     setMirrorMessage("");
     try {
-      const report = await cmd.softwareMirrorSet({ ...sshParams, mirrorId });
+      const report = await withSudoRetry((sudoPassword) =>
+        cmd.softwareMirrorSet({
+          ...sshParams,
+          mirrorId,
+          sudoPassword: sudoPassword ?? null,
+        }),
+      );
       setMirrorState(report.stateAfter);
       void cmd.softwareHistoryLog({
         action: "mirror-set",
@@ -1701,7 +1843,12 @@ function SoftwarePanelBody({ tab }: Props) {
     setMirrorBusy("restore");
     setMirrorMessage("");
     try {
-      const report = await cmd.softwareMirrorRestore(sshParams);
+      const report = await withSudoRetry((sudoPassword) =>
+        cmd.softwareMirrorRestore({
+          ...sshParams,
+          sudoPassword: sudoPassword ?? null,
+        }),
+      );
       setMirrorState(report.stateAfter);
       if (report.status === "ok") {
         setMirrorMessage(t("Original sources restored."));
@@ -2465,6 +2612,21 @@ function SoftwarePanelBody({ tab }: Props) {
         onCancel={() => setUninstallTarget(null)}
         onConfirm={(opts) => {
           if (uninstallTarget) void runUninstall(uninstallTarget, opts);
+        }}
+      />
+      <SudoPasswordDialog
+        open={sudoPrompt !== null}
+        hostLabel={sudoPrompt?.hostLabel ?? ""}
+        errorMessage={sudoPrompt?.errorMessage}
+        onSubmit={(pw) => {
+          const cur = sudoPromptRef.current;
+          setSudoPrompt(null);
+          cur?.resolve(pw);
+        }}
+        onCancel={() => {
+          const cur = sudoPromptRef.current;
+          setSudoPrompt(null);
+          cur?.resolve(null);
         }}
       />
       <ServiceLogsDialog
@@ -4904,10 +5066,26 @@ function ComposeTemplatesDialog({
     setBusy(`${action}:${templateId}`);
     setMessage("");
     try {
+      // Pull the cached sudo password (set elsewhere by a prior
+      // install / mirror prompt). No retry loop here — the dialog
+      // doesn't own the password prompt component, and compose
+      // operations are infrequent enough that surfacing the
+      // localized "sudo requires a password" message is acceptable
+      // when nothing's cached. To get a prompt, kick off any
+      // install on the same host first.
+      const cachedSudo = sshParams ? useSudoStore.getState().get(sshParams) : null;
       const r =
         action === "apply"
-          ? await cmd.softwareComposeApply({ ...sshParams!, templateId })
-          : await cmd.softwareComposeDown({ ...sshParams!, templateId });
+          ? await cmd.softwareComposeApply({
+              ...sshParams!,
+              templateId,
+              sudoPassword: cachedSudo,
+            })
+          : await cmd.softwareComposeDown({
+              ...sshParams!,
+              templateId,
+              sudoPassword: cachedSudo,
+            });
       setMessage(describeServiceReport(r, t));
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
@@ -6000,9 +6178,16 @@ function MultiHostDialog({
     try {
       if (resolved.kind === "mirror") {
         if (!resolved.id) throw new Error("no mirror picked");
+        // Per-host sudo cache lookup — a host the user has already
+        // typed a password for in this session reuses it; the rest
+        // fall back to `sudo -n`. Bulk operations don't pop a
+        // prompt (no fair way to ask once for many hosts), so a
+        // wrong cache surfaces as `sudo-requires-password` in the
+        // per-row state.
         const report = await cmd.softwareMirrorSet({
           ...sshParams,
           mirrorId: resolved.id as MirrorId,
+          sudoPassword: useSudoStore.getState().get(sshParams),
         });
         if (report.status === "ok") {
           setHostStates((prev) => ({
@@ -6038,7 +6223,12 @@ function MultiHostDialog({
         }));
         return true;
       }
-      // Install each member sequentially.
+      // Install each member sequentially. Per-host sudo cache —
+      // bulk path doesn't prompt, so a host without a cached
+      // password falls through to `sudo -n` and surfaces "needs
+      // password" as a row-level failure the user can resolve by
+      // running a normal install on that host first.
+      const cachedSudo = useSudoStore.getState().get(sshParams);
       for (const pkgId of todo) {
         const installId =
           typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -6050,6 +6240,7 @@ function MultiHostDialog({
           packageId: pkgId,
           installId,
           enableService: true,
+          sudoPassword: cachedSudo,
         });
         if (report.status !== "installed") {
           setHostStates((prev) => ({

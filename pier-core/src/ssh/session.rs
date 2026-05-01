@@ -78,6 +78,46 @@ impl SshSession {
     /// of those fails, returns the corresponding [`SshError`]
     /// variant and never hands back a live handle.
     pub async fn connect(config: &SshConfig, verifier: HostKeyVerifier) -> Result<Self> {
+        Self::connect_with_egress(config, verifier, None).await
+    }
+
+    /// Sync convenience: run [`Self::connect`] on the shared
+    /// runtime and block until it completes. Must NOT be called
+    /// from inside a task already running on the shared runtime.
+    pub fn connect_blocking(config: &SshConfig, verifier: HostKeyVerifier) -> Result<Self> {
+        runtime::shared().block_on(Self::connect(config, verifier))
+    }
+
+    /// Same contract as [`Self::connect`], but routes the underlying
+    /// TCP transport through `egress` when supplied. `egress = None`
+    /// is exactly equivalent to [`Self::connect`].
+    ///
+    /// When an egress profile is given, [`crate::egress::resolve_tcp`]
+    /// produces the byte stream the SSH handshake runs on top of.
+    /// All the rest — host-key verification, authentication, channel
+    /// model — is unchanged from the direct path.
+    ///
+    /// This entry point cannot dial through `EgressKind::SshJump`
+    /// (that kind needs an [`crate::egress::EgressContext`]); use
+    /// [`Self::connect_with_egress_ctx`] when ssh-jump is in scope.
+    pub async fn connect_with_egress(
+        config: &SshConfig,
+        verifier: HostKeyVerifier,
+        egress: Option<&crate::egress::EgressProfile>,
+    ) -> Result<Self> {
+        Self::connect_with_egress_ctx(config, verifier, egress, None).await
+    }
+
+    /// Like [`Self::connect_with_egress`], but accepts an optional
+    /// [`crate::egress::EgressContext`] the resolver hands off to
+    /// when the profile is `EgressKind::SshJump`. All other kinds
+    /// ignore `ctx` — they don't need outside help to dial.
+    pub async fn connect_with_egress_ctx(
+        config: &SshConfig,
+        verifier: HostKeyVerifier,
+        egress: Option<&crate::egress::EgressProfile>,
+        ctx: Option<&dyn crate::egress::EgressContext>,
+    ) -> Result<Self> {
         if !config.is_valid() {
             return Err(SshError::InvalidConfig(
                 "host, user, port and auth must all be set".to_string(),
@@ -104,19 +144,47 @@ impl SshSession {
             last_verify_error: std::sync::Arc::clone(&verify_error_slot),
         };
 
-        let addr = config.address();
-        let connect_fut = client::connect(russh_config, addr.clone(), handler);
-
         // Apply the user-configured connect timeout. `0` = OS
         // default (= whatever russh's internal default does).
-        let connect_result = if config.connect_timeout_secs > 0 {
-            let timeout = Duration::from_secs(config.connect_timeout_secs);
-            match tokio::time::timeout(timeout, connect_fut).await {
-                Ok(inner) => inner,
-                Err(_) => return Err(SshError::Timeout(timeout)),
+        let connect_result = if let Some(profile) = egress {
+            // Egress path: dial through the profile, then hand the
+            // resulting byte stream to russh via connect_stream.
+            let dial_fut = async {
+                let stream = crate::egress::resolve_tcp_with(
+                    Some(profile),
+                    &config.host,
+                    config.port,
+                    ctx,
+                )
+                .await
+                .map_err(SshError::Connect)?;
+                client::connect_stream(russh_config, stream, handler)
+                    .await
+                    .map_err(SshError::from)
+            };
+            if config.connect_timeout_secs > 0 {
+                let timeout = Duration::from_secs(config.connect_timeout_secs);
+                match tokio::time::timeout(timeout, dial_fut).await {
+                    Ok(inner) => inner,
+                    Err(_) => return Err(SshError::Timeout(timeout)),
+                }
+            } else {
+                dial_fut.await
             }
         } else {
-            connect_fut.await
+            // Direct path: identical behavior to the previous
+            // implementation, byte-for-byte.
+            let addr = config.address();
+            let connect_fut = client::connect(russh_config, addr, handler);
+            if config.connect_timeout_secs > 0 {
+                let timeout = Duration::from_secs(config.connect_timeout_secs);
+                match tokio::time::timeout(timeout, connect_fut).await {
+                    Ok(inner) => inner.map_err(map_connect_error),
+                    Err(_) => return Err(SshError::Timeout(timeout)),
+                }
+            } else {
+                connect_fut.await.map_err(map_connect_error)
+            }
         };
 
         let handle = match connect_result {
@@ -130,7 +198,7 @@ impl SshSession {
                         return Err(verify_error_to_ssh_error(ve));
                     }
                 }
-                return Err(map_connect_error(e));
+                return Err(e);
             }
         };
 
@@ -156,11 +224,26 @@ impl SshSession {
         Ok(session)
     }
 
-    /// Sync convenience: run [`Self::connect`] on the shared
-    /// runtime and block until it completes. Must NOT be called
-    /// from inside a task already running on the shared runtime.
-    pub fn connect_blocking(config: &SshConfig, verifier: HostKeyVerifier) -> Result<Self> {
-        runtime::shared().block_on(Self::connect(config, verifier))
+    /// Blocking sibling of [`Self::connect_with_egress`]. Same
+    /// runtime restrictions as [`Self::connect_blocking`].
+    pub fn connect_with_egress_blocking(
+        config: &SshConfig,
+        verifier: HostKeyVerifier,
+        egress: Option<&crate::egress::EgressProfile>,
+    ) -> Result<Self> {
+        runtime::shared().block_on(Self::connect_with_egress(config, verifier, egress))
+    }
+
+    /// Blocking sibling of [`Self::connect_with_egress_ctx`]. Same
+    /// runtime restrictions as [`Self::connect_blocking`].
+    pub fn connect_with_egress_ctx_blocking(
+        config: &SshConfig,
+        verifier: HostKeyVerifier,
+        egress: Option<&crate::egress::EgressProfile>,
+        ctx: Option<&dyn crate::egress::EgressContext>,
+    ) -> Result<Self> {
+        runtime::shared()
+            .block_on(Self::connect_with_egress_ctx(config, verifier, egress, ctx))
     }
 
     /// Run every authentication method the config specifies, in
@@ -667,6 +750,34 @@ impl SshSession {
         runtime::shared().block_on(self.open_shell_channel(cols, rows))
     }
 
+    /// Open a `direct-tcpip` channel through this session and box it
+    /// as an [`crate::egress::EgressStream`]. The wrapper retains a
+    /// clone of this [`SshSession`] so the underlying SSH transport
+    /// outlives the stream — ssh-jump callers can drop their
+    /// reference to the jump session immediately after dial.
+    ///
+    /// Used by the egress layer to implement `EgressKind::SshJump`.
+    pub async fn dial_direct_tcpip(
+        &self,
+        target_host: &str,
+        target_port: u16,
+    ) -> Result<crate::egress::EgressStream> {
+        let channel = self
+            .handle
+            .channel_open_direct_tcpip(
+                target_host.to_string(),
+                target_port as u32,
+                "0.0.0.0".to_string(),
+                0,
+            )
+            .await
+            .map_err(SshError::Protocol)?;
+        Ok(Box::new(SessionGuardedStream {
+            inner: channel.into_stream(),
+            _session: self.clone(),
+        }))
+    }
+
     /// Open an SFTP subsystem channel on this session.
     ///
     /// Internally this opens a fresh channel, calls
@@ -998,6 +1109,49 @@ impl client::Handler for ClientHandler {
                 Ok(false)
             }
         }
+    }
+}
+
+/// AsyncRead/AsyncWrite wrapper that owns a clone of the underlying
+/// [`SshSession`] alongside the channel stream. Drop ordering is
+/// `inner` → `_session`, so the russh transport can finish flushing
+/// before the session handle goes away.
+struct SessionGuardedStream<S> {
+    inner: S,
+    _session: SshSession,
+}
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for SessionGuardedStream<S> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for SessionGuardedStream<S> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
     }
 }
 

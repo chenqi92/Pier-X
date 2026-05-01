@@ -257,7 +257,58 @@ export type SavedSshConnection = {
    *  Passwords are NOT included — only a `hasPassword` flag;
    *  resolve via `dbCredResolve` at connect time. */
   databases?: DbCredential[];
+  /** Optional `EgressProfile.id` this connection routes through.
+   *  `null` / undefined means a direct connection (no tunnel). */
+  egressId?: string | null;
 };
+
+// ── Egress (per-connection outbound tunnel) ─────────────────────
+
+/** Reference to a credential blob in the OS keyring under the
+ *  `pier-x.egress.*` namespace. The blob convention for SOCKS5 /
+ *  HTTP proxies is `"user\npassword"`. */
+export type EgressAuthRef = {
+  credentialId: string;
+};
+
+/** DNS resolution strategy for an `EgressProfile`. See
+ *  `docs/PRODUCT-SPEC.md` §3.4. */
+export type EgressDns =
+  | { mode: "passthrough" }
+  | { mode: "tunnel" }
+  | { mode: "custom"; server: string };
+
+/** External VPN engine flavor. Stage B+ — the `external_vpn` kind
+ *  is gated behind a backend cargo feature. */
+export type ExternalVpnEngine = "open_vpn" | "open_connect";
+
+/** Discriminated union of supported egress kinds. The `kind` field
+ *  doubles as the serde tag, matching `pier_core::egress::EgressKind`. */
+export type EgressKind =
+  | { kind: "none" }
+  | { kind: "socks5"; host: string; port: number; auth?: EgressAuthRef | null }
+  | { kind: "http"; host: string; port: number; auth?: EgressAuthRef | null }
+  | { kind: "ssh_jump"; viaConnection: string }
+  | {
+      kind: "wireguard";
+      endpoint: string;
+      address: string;
+      allowedIps: string[];
+      privateKey: EgressAuthRef;
+      peerPublicKey: string;
+    }
+  | { kind: "external_vpn"; engine: ExternalVpnEngine; config: string };
+
+/** One egress profile. The flattened serde shape on the Rust side
+ *  means the `kind` discriminator and its fields live alongside
+ *  `id` / `name` / `dns` at the top level. */
+export type EgressProfile = {
+  id: string;
+  name: string;
+  /** Optional. When omitted, the backend picks the kind's default
+   *  (`passthrough` for socks5/http/none, `tunnel` for the rest). */
+  dns?: EgressDns | null;
+} & EgressKind;
 
 // ── DB Credentials (persisted with SSH profile) ────────────────
 
@@ -281,6 +332,11 @@ export type DbCredential = {
   hasPassword: boolean;
   favorite: boolean;
   source: DbCredentialSource;
+  /** Optional `EgressProfile.id` this credential routes through.
+   *  Frontend should call `dbEgressEndpoint` before each connect
+   *  to translate `(host, port)` into the loopback forwarder when
+   *  this is set. `null` / undefined = direct. */
+  egressId?: string | null;
 };
 
 /** Input shape for `db_cred_save` — `password: null` means
@@ -298,6 +354,8 @@ export type DbCredentialInput = {
   /** Signature of the detection row this was adopted from.
    *  Empty / omitted → `source: manual`. */
   detectionSignature?: string | null;
+  /** Optional `EgressProfile.id` this credential should route through. */
+  egressId?: string | null;
 };
 
 /** Patch for `db_cred_update`. Absent fields are not touched;
@@ -311,6 +369,8 @@ export type DbCredentialPatch = {
   database?: string | null;
   sqlitePath?: string | null;
   favorite?: boolean;
+  /** `null` clears, string sets, undefined leaves untouched. */
+  egressId?: string | null;
 };
 
 /** Response from `db_cred_resolve`. Plaintext password is

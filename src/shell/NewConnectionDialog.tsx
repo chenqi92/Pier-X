@@ -1,4 +1,4 @@
-import { Key, Server, X } from "lucide-react";
+import { Key, Server, Shield, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import IconButton from "../components/IconButton";
 import { useDraggableDialog } from "../components/useDraggableDialog";
@@ -6,6 +6,8 @@ import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import type { SavedSshConnection } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
+import { useEgressStore } from "../stores/useEgressStore";
+import EgressProfilesDialog from "./EgressProfilesDialog";
 
 type ConnectionDraft = {
   index?: number;
@@ -17,6 +19,7 @@ type ConnectionDraft = {
   keyPath: string;
   group: string;
   envTag: string;
+  egressId: string;
 };
 
 type Props = {
@@ -53,6 +56,7 @@ function toDraft(connection?: SavedSshConnection | null): ConnectionDraft {
     keyPath: connection?.keyPath ?? "",
     group: connection?.group ?? "",
     envTag: connection?.envTag ?? "",
+    egressId: connection?.egressId ?? "",
   };
 }
 
@@ -60,6 +64,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const { save, update, connections } = useConnectionStore();
+  const { profiles: egressProfiles, refresh: refreshEgress } = useEgressStore();
   const isEditing = !!initialConnection;
   const initialDraft = useMemo(() => toDraft(initialConnection), [initialConnection]);
   const [name, setName] = useState(initialDraft.name);
@@ -71,6 +76,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const [keyPath, setKeyPath] = useState(initialDraft.keyPath);
   const [group, setGroup] = useState(initialDraft.group);
   const [envTag, setEnvTag] = useState(initialDraft.envTag);
+  const [egressId, setEgressId] = useState(initialDraft.egressId);
+  const [egressDialogOpen, setEgressDialogOpen] = useState(false);
   const [error, setError] = useState("");
   // Guards double-submit: `persistConnection` is async and the buttons
   // previously stayed enabled while the IPC was in flight, so a quick
@@ -87,6 +94,12 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  // Refresh the egress profile list whenever the dialog opens so the
+  // dropdown reflects anything the user may have added in another window.
+  useEffect(() => {
+    if (open) void refreshEgress();
+  }, [open, refreshEgress]);
 
   // Unique sorted list of existing group labels, for the datalist autocomplete.
   const knownGroups = useMemo(() => {
@@ -109,6 +122,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
     setKeyPath(next.keyPath);
     setGroup(next.group);
     setEnvTag(next.envTag);
+    setEgressId(next.egressId);
     setError("");
   }, [initialConnection, open]);
 
@@ -141,6 +155,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   async function persistConnection() {
     const trimmedGroup = group.trim();
     const trimmedEnvTag = envTag.trim();
+    const trimmedEgressId = egressId.trim();
     const params = {
       name: connectionName,
       host: host.trim(),
@@ -151,6 +166,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       keyPath: authMode === "key" ? keyPath.trim() : "",
       group: trimmedGroup ? trimmedGroup : null,
       envTag: trimmedEnvTag ? trimmedEnvTag : null,
+      egressId: trimmedEgressId ? trimmedEgressId : "",
     };
 
     if (isEditing && typeof initialDraft.index === "number") {
@@ -300,6 +316,35 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
               </datalist>
             </div>
             <div className="dlg-row">
+              <label className="dlg-row-label">{t("Egress")}</label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "var(--sp-2)" }}>
+                <select
+                  className="dlg-input"
+                  value={egressId}
+                  onChange={(e) => setEgressId(e.currentTarget.value)}
+                >
+                  <option value="">{t("Direct (no tunnel)")}</option>
+                  {egressProfiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name || p.id}
+                    </option>
+                  ))}
+                  {egressId && !egressProfiles.some((p) => p.id === egressId) && (
+                    <option value={egressId}>{t("(missing)")}: {egressId}</option>
+                  )}
+                </select>
+                <button
+                  type="button"
+                  className="gb-btn"
+                  onClick={() => setEgressDialogOpen(true)}
+                  title={t("Manage egress profiles")}
+                >
+                  <Shield size={12} />
+                  {t("Manage…")}
+                </button>
+              </div>
+            </div>
+            <div className="dlg-row">
               <label className="dlg-row-label">{t("Host")}</label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 88px", gap: "var(--sp-2)" }}>
                 <input className="dlg-input" onChange={(e) => setHost(e.currentTarget.value)} placeholder={t("server.example.com")} value={host} />
@@ -386,6 +431,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
           </button>
         </div>
       </div>
+      <EgressProfilesDialog open={egressDialogOpen} onClose={() => setEgressDialogOpen(false)} />
     </div>
   );
 }

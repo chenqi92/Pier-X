@@ -2,6 +2,7 @@ use pier_core::connections::{
     self, ConnectionStore, DbCredentialPatch, NewDbCredential, ResolvedDbCredential,
 };
 use pier_core::credentials;
+use pier_core::egress::{EgressKind, EgressProfile};
 use pier_core::markdown;
 use pier_core::services::docker;
 use pier_core::services::firewall;
@@ -146,6 +147,20 @@ struct AppState {
     /// every exit path (success, error, cancel) so a stale id
     /// never lingers across reconnects.
     transfer_cancels: Mutex<HashMap<String, CancellationToken>>,
+    /// Local TCP forwarders that bridge a loopback port to a remote
+    /// `host:port` through an egress profile. One forwarder per
+    /// `(egress_id, target_host, target_port)` triple — a re-open of
+    /// the same DB credential reuses the running forwarder rather
+    /// than spinning up a fresh listener (saves both an OS handle
+    /// and a fresh egress dial). Entries live until the app exits;
+    /// the listener stops accepting on `Drop`.
+    egress_forwarders: Mutex<HashMap<String, Arc<pier_core::egress::EgressForwarder>>>,
+    /// Long-lived system VPN subprocesses that back
+    /// `EgressKind::Wireguard` and `EgressKind::ExternalVpn`. Keyed
+    /// by profile id; one entry == one running `wg-quick` /
+    /// `openvpn` / `openconnect` child. The handle's `Drop` reaps
+    /// the process, so removing the entry tears the VPN down.
+    vpn_processes: Mutex<HashMap<String, Arc<pier_core::egress::VpnProcess>>>,
 }
 
 /// Bookkeeping for one in-flight "edit remote file with the OS
@@ -177,6 +192,8 @@ impl Default for AppState {
             software_cancel: Mutex::new(HashMap::new()),
             external_editors: Mutex::new(HashMap::new()),
             transfer_cancels: Mutex::new(HashMap::new()),
+            egress_forwarders: Mutex::new(HashMap::new()),
+            vpn_processes: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -995,6 +1012,10 @@ struct SavedSshConnection {
     /// lazily via `db_cred_resolve` at connect time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     databases: Vec<DbCredentialView>,
+    /// Egress profile id this connection routes through, if any.
+    /// Resolved against `egress_profile_list`. `None` = direct.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    egress_id: Option<String>,
 }
 
 /// Frontend-safe projection of [`DbCredential`]. Passwords are
@@ -1017,6 +1038,10 @@ struct DbCredentialView {
     has_password: bool,
     favorite: bool,
     source: DbCredentialSourceView,
+    /// Egress profile this credential routes through, if any.
+    /// Resolved against `egress_profile_list`. `None` = direct.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    egress_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1059,6 +1084,9 @@ struct DbCredentialInput {
     /// detection result. Omit for "manual" entries.
     #[serde(default)]
     detection_signature: Option<String>,
+    /// Optional egress profile id (see `egress_profile_list`).
+    #[serde(default)]
+    egress_id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1080,6 +1108,11 @@ struct DbCredentialPatchInput {
     sqlite_path: Option<Option<String>>,
     #[serde(default)]
     favorite: Option<bool>,
+    /// Same double-Option semantics as `database` — None leaves
+    /// existing untouched; Some(None) / Some(Some("")) clears;
+    /// Some(Some("id")) replaces.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    egress_id: Option<Option<String>>,
 }
 
 /// Serde helper — distinguish "field absent" from
@@ -1491,7 +1524,7 @@ fn build_ssh_session_from_params(
     );
     config.port = normalize_ssh_port(port);
     config.auth = auth;
-    SshSession::connect_blocking(&config, HostKeyVerifier::default()).map_err(|e| e.to_string())
+    ssh_connect_with_egress(&config)
 }
 
 /// Build an SSH session for a panel command, preferring the stored
@@ -1544,8 +1577,7 @@ fn build_ssh_session_saved_or_params(
 
     if let Some(index) = saved_index {
         if let Ok(config) = open_saved_ssh_config(index) {
-            return SshSession::connect_blocking(&config, HostKeyVerifier::default())
-                .map_err(|e| e.to_string());
+            return ssh_connect_with_egress(&config);
         }
     }
     build_ssh_session_from_params(
@@ -2157,6 +2189,11 @@ fn map_saved_connection(index: usize, config: &SshConfig) -> SavedSshConnection 
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         databases: config.databases.iter().map(map_db_credential).collect(),
+        egress_id: config
+            .egress_id
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
     }
 }
 
@@ -2202,6 +2239,7 @@ fn map_db_credential(c: &DbCredential) -> DbCredentialView {
                 signature: signature.clone(),
             },
         },
+        egress_id: c.egress_id.clone(),
     }
 }
 
@@ -2312,6 +2350,170 @@ fn open_saved_ssh_config(index: usize) -> Result<SshConfig, String> {
         .ok_or_else(|| format!("unknown saved SSH connection: {}", index))
 }
 
+/// Implements [`pier_core::egress::EgressContext`] for the Tauri
+/// runtime. Today the only hook is `ssh-jump`: open a separate SSH
+/// session to the saved connection named in the profile, then dial
+/// `direct-tcpip` through it.
+///
+/// Multi-hop is supported: the jump session is itself opened with
+/// `connect_with_egress_ctx`, so a chain like `target -> A -> B`
+/// works as long as `B` is reachable directly. Two safety nets keep
+/// the recursion bounded:
+///
+/// * `depth` is incremented on every entry and capped at
+///   [`Self::MAX_DEPTH`]. A misconfigured chain that exceeds the
+///   cap surfaces as `io::ErrorKind::InvalidInput`.
+/// * `visited` records every connection name we've already entered,
+///   so a cycle (`A -> B -> A`) is detected immediately rather than
+///   blowing through the depth cap.
+///
+/// `SshJumpContext::new()` returns a fresh context per top-level
+/// connect; the bookkeeping does not bleed across independent
+/// connections, even when they share a process.
+struct SshJumpContext {
+    inner: std::sync::Mutex<SshJumpInner>,
+}
+
+struct SshJumpInner {
+    visited: std::collections::HashSet<String>,
+    depth: usize,
+}
+
+impl SshJumpContext {
+    /// Hard cap on jump-host chain length. 8 is well past any
+    /// practical bastion topology and well shy of stack-blowing.
+    const MAX_DEPTH: usize = 8;
+
+    fn new() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(SshJumpInner {
+                visited: std::collections::HashSet::new(),
+                depth: 0,
+            }),
+        }
+    }
+
+    /// Atomically reserve a slot in the recursion. Returns `Err`
+    /// when the depth cap would be exceeded or the connection name
+    /// is already on the stack (cycle).
+    fn enter(&self, name: &str) -> std::io::Result<()> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| std::io::Error::other("ssh-jump context poisoned"))?;
+        if inner.depth >= Self::MAX_DEPTH {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "ssh-jump chain exceeded max depth {}",
+                    Self::MAX_DEPTH
+                ),
+            ));
+        }
+        if !inner.visited.insert(name.to_string()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("ssh-jump cycle detected at '{name}'"),
+            ));
+        }
+        inner.depth += 1;
+        Ok(())
+    }
+
+    fn leave(&self, name: &str) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.visited.remove(name);
+            inner.depth = inner.depth.saturating_sub(1);
+        }
+    }
+}
+
+impl pier_core::egress::EgressContext for SshJumpContext {
+    fn ssh_jump_dial<'a>(
+        &'a self,
+        via_connection: &'a str,
+        target_host: &'a str,
+        target_port: u16,
+    ) -> pier_core::egress::EgressFuture<'a> {
+        Box::pin(async move {
+            self.enter(via_connection)?;
+            // Convert the rest of the body to a closure that always
+            // calls `leave` on exit, no matter which branch fails.
+            let result = self
+                .ssh_jump_dial_inner(via_connection, target_host, target_port)
+                .await;
+            self.leave(via_connection);
+            result
+        })
+    }
+}
+
+impl SshJumpContext {
+    async fn ssh_jump_dial_inner(
+        &self,
+        via_connection: &str,
+        target_host: &str,
+        target_port: u16,
+    ) -> std::io::Result<pier_core::egress::EgressStream> {
+        let store = ConnectionStore::load_default()
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let cfg = store
+            .connections
+            .iter()
+            .find(|c| c.name == via_connection)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("ssh-jump: no saved SSH connection named '{via_connection}'"),
+                )
+            })?
+            .clone();
+        // Recurse: the jump host honours its own egress_id so the
+        // user can build chains like `target -> A (via SOCKS) -> B`.
+        let jump_egress = match cfg.egress_id.as_deref() {
+            Some(id) => store.egress_for(Some(id)).cloned(),
+            None => None,
+        };
+        let session = SshSession::connect_with_egress_ctx(
+            &cfg,
+            HostKeyVerifier::default(),
+            jump_egress.as_ref(),
+            Some(self as &dyn pier_core::egress::EgressContext),
+        )
+        .await
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+        session
+            .dial_direct_tcpip(target_host, target_port)
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    }
+}
+
+/// SSH connect that respects `config.egress_id` when set. Reads
+/// the referenced egress profile from the persisted store and
+/// routes the TCP transport through it; falls back to a direct
+/// connect when the field is unset or the referenced profile no
+/// longer exists (the store cascades dangling references on
+/// `remove_egress`, but a manually-edited file may still surprise
+/// us — degrade gracefully rather than refuse to connect).
+fn ssh_connect_with_egress(config: &SshConfig) -> Result<SshSession, String> {
+    let profile = match config.egress_id.as_deref() {
+        Some(id) => {
+            let store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
+            store.egress_for(Some(id)).cloned()
+        }
+        None => None,
+    };
+    let ctx = SshJumpContext::new();
+    SshSession::connect_with_egress_ctx_blocking(
+        config,
+        HostKeyVerifier::default(),
+        profile.as_ref(),
+        Some(&ctx as &dyn pier_core::egress::EgressContext),
+    )
+    .map_err(|error| error.to_string())
+}
+
 fn store_terminal_session(
     state: tauri::State<'_, AppState>,
     session_id: String,
@@ -2384,8 +2586,7 @@ fn create_ssh_terminal_from_config(
         // this terminal tab won't drop the panel-side session.
         SshSession::clone(&*arc)
     } else {
-        let fresh = SshSession::connect_blocking(&config, HostKeyVerifier::default())
-            .map_err(|error| error.to_string())?;
+        let fresh = ssh_connect_with_egress(&config)?;
         if let Ok(mut cache) = state.sftp_sessions.lock() {
             cache.insert(cache_key, Arc::new(fresh.clone()));
         }
@@ -3256,6 +3457,7 @@ fn ssh_connection_save(
     key_path: Option<String>,
     group: Option<String>,
     env_tag: Option<String>,
+    egress_id: Option<String>,
 ) -> Result<(), String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
@@ -3319,6 +3521,9 @@ fn ssh_connection_save(
     config.env_tag = env_tag
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    config.egress_id = egress_id
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
     store.add(config);
@@ -3373,6 +3578,7 @@ fn ssh_connection_update(
     key_path: Option<String>,
     group: Option<String>,
     env_tag: Option<String>,
+    egress_id: Option<String>,
 ) -> Result<(), String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
@@ -3497,6 +3703,18 @@ fn ssh_connection_update(
         }
         None => existing.env_tag.clone(),
     };
+    // Same preserve-on-None / clear-on-empty semantics as `group`.
+    config.egress_id = match egress_id {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        None => existing.egress_id.clone(),
+    };
 
     let new_auth = config.auth.clone();
     store.connections[index] = config;
@@ -3537,6 +3755,138 @@ fn ssh_group_rename(from: String, to: Option<String>) -> Result<(), String> {
     let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
     store.rename_group(from.trim(), to.as_deref());
     store.save_default().map_err(|error| error.to_string())
+}
+
+/// List all egress profiles in display order. The frontend uses
+/// this to populate the "Egress" picker on the connection dialog
+/// and the management page.
+#[tauri::command]
+fn egress_profile_list() -> Result<Vec<EgressProfile>, String> {
+    let store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
+    Ok(store.egress_profiles)
+}
+
+/// Insert or replace an egress profile, identified by its `id`.
+/// The frontend supplies the entire profile shape, including
+/// optional `auth.credential_id` references (caller is responsible
+/// for storing the credential blob via `egress_set_basic_auth`).
+#[tauri::command]
+fn egress_profile_save(profile: EgressProfile) -> Result<(), String> {
+    if profile.id.trim().is_empty() {
+        return Err(String::from("Egress profile id must not be empty."));
+    }
+    let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
+    store.upsert_egress(profile);
+    store.save_default().map_err(|error| error.to_string())
+}
+
+/// Remove an egress profile by id. Connections that referenced it
+/// have their `egress_id` cleared automatically (the store cascades
+/// the removal). Best-effort credential cleanup follows, plus any
+/// VPN subprocess this profile started gets reaped here.
+#[tauri::command]
+fn egress_profile_delete(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
+    let removed = store.remove_egress(&id);
+    store.save_default().map_err(|error| error.to_string())?;
+
+    // Reap any VPN subprocess this profile owned. Drop is what
+    // actually does the kill; we just need to release the cache slot.
+    if let Ok(mut procs) = state.vpn_processes.lock() {
+        procs.remove(&id);
+    }
+
+    // Best-effort credential cleanup. Failure to delete the keyring
+    // entry is not fatal — the profile is already gone from the
+    // store and any future lookup will return None anyway.
+    if let Some(profile) = removed {
+        for cred_id in egress_credential_ids(&profile.kind) {
+            let _ = credentials::delete(&cred_id);
+        }
+    }
+    Ok(())
+}
+
+/// Start the system VPN subprocess for a `wireguard` /
+/// `external_vpn` profile. No-op (returns success) for SOCKS5 /
+/// HTTP / SshJump / None — those don't need a long-lived helper.
+///
+/// This typically prompts for admin (sudo / UAC) the first time
+/// the binary tries to install its tun. Subsequent calls within
+/// the same Pier-X session reuse the cached `VpnProcess` handle.
+#[tauri::command]
+fn egress_vpn_start(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let store = ConnectionStore::load_default().map_err(|e| e.to_string())?;
+    let profile = store
+        .egress_for(Some(&id))
+        .cloned()
+        .ok_or_else(|| format!("unknown egress profile: {id}"))?;
+    {
+        if let Ok(procs) = state.vpn_processes.lock() {
+            if let Some(p) = procs.get(&id) {
+                if p.is_running() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    let process = pier_core::egress::vpn_subprocess::spawn(&id, &profile.kind)
+        .map_err(|e| e.to_string())?;
+    if let Some(p) = process {
+        if let Ok(mut procs) = state.vpn_processes.lock() {
+            procs.insert(id, Arc::new(p));
+        }
+    }
+    Ok(())
+}
+
+/// Stop the VPN subprocess associated with a profile. No-op when
+/// nothing is running. The corresponding VPN client is responsible
+/// for cleaning its own routes / tun on receipt of SIGTERM.
+#[tauri::command]
+fn egress_vpn_stop(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    if let Ok(mut procs) = state.vpn_processes.lock() {
+        procs.remove(&id);
+    }
+    Ok(())
+}
+
+/// Persist a username/password pair used by SOCKS5 / HTTP CONNECT
+/// egress profiles. The blob convention is `"user\npassword"`,
+/// matching what `pier_core::egress::resolve_auth` reads back.
+#[tauri::command]
+fn egress_set_basic_auth(
+    credential_id: String,
+    user: String,
+    password: String,
+) -> Result<(), String> {
+    if credential_id.trim().is_empty() {
+        return Err(String::from("Egress credential id must not be empty."));
+    }
+    let blob = format!("{user}\n{password}");
+    credentials::set(&credential_id, &blob).map_err(|error| error.to_string())
+}
+
+/// Remove a previously-saved egress credential. No-op when the
+/// keyring has no entry under `credential_id`.
+#[tauri::command]
+fn egress_clear_credential(credential_id: String) -> Result<(), String> {
+    credentials::delete(&credential_id).map_err(|error| error.to_string())
+}
+
+/// Collect every credential id that may have been written for a
+/// given egress kind, so `egress_profile_delete` can clean them
+/// up without the frontend having to track them separately.
+fn egress_credential_ids(kind: &EgressKind) -> Vec<String> {
+    match kind {
+        EgressKind::Socks5 { auth, .. } | EgressKind::Http { auth, .. } => {
+            auth.iter().map(|a| a.credential_id.clone()).collect()
+        }
+        EgressKind::Wireguard { private_key, .. } => vec![private_key.credential_id.clone()],
+        EgressKind::None | EgressKind::SshJump { .. } | EgressKind::ExternalVpn { .. } => {
+            Vec::new()
+        }
+    }
 }
 
 #[tauri::command]
@@ -6218,6 +6568,7 @@ fn db_cred_save(
         sqlite_path: credential.sqlite_path,
         favorite: credential.favorite,
         source,
+        egress_id: credential.egress_id.filter(|s| !s.trim().is_empty()),
     };
     let cred = connections::save_db_credential(saved_connection_index, input, password)
         .map_err(|e| e.to_string())?;
@@ -6239,6 +6590,7 @@ fn db_cred_update(
         database: patch.database,
         sqlite_path: patch.sqlite_path,
         favorite: patch.favorite,
+        egress_id: patch.egress_id,
     };
     let cred = connections::update_db_credential(
         saved_connection_index,
@@ -6264,6 +6616,90 @@ fn db_cred_resolve(
     let resolved = connections::resolve_db_credential(saved_connection_index, &credential_id)
         .map_err(|e| e.to_string())?;
     Ok(map_resolved_credential(resolved))
+}
+
+/// Frontend-visible endpoint a DB panel should connect to for the
+/// given saved credential. When `cred.egress_id` is unset, returns
+/// `cred.host:cred.port` unchanged. When it points at a known
+/// profile, lazily starts (or reuses) a local forwarder that proxies
+/// loopback ↔ remote through the egress, and returns
+/// `127.0.0.1:<assigned_port>`.
+///
+/// The forwarder lives for the rest of the process lifetime; the
+/// cache key is `(egress_id, host, port)` so reopening the same DB
+/// in a new tab is free.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DbEgressEndpoint {
+    host: String,
+    port: u16,
+    /// True if a forwarder was started or reused. False = direct.
+    via_forwarder: bool,
+}
+
+#[tauri::command]
+fn db_egress_endpoint(
+    state: tauri::State<'_, AppState>,
+    saved_connection_index: usize,
+    credential_id: String,
+) -> Result<DbEgressEndpoint, String> {
+    let store = ConnectionStore::load_default().map_err(|e| e.to_string())?;
+    let cred = store
+        .connections
+        .get(saved_connection_index)
+        .and_then(|c| c.databases.iter().find(|d| d.id == credential_id))
+        .ok_or_else(|| format!("unknown DB credential: {credential_id}"))?
+        .clone();
+    let Some(egress_id) = cred.egress_id.as_deref() else {
+        return Ok(DbEgressEndpoint {
+            host: cred.host.clone(),
+            port: cred.port,
+            via_forwarder: false,
+        });
+    };
+    let Some(profile) = store.egress_for(Some(egress_id)).cloned() else {
+        // Dangling reference — degrade to direct so the connection
+        // doesn't dead-end. Mirrors how `ssh_connect_with_egress`
+        // handles the same case.
+        return Ok(DbEgressEndpoint {
+            host: cred.host.clone(),
+            port: cred.port,
+            via_forwarder: false,
+        });
+    };
+
+    let key = format!("{egress_id}|{}|{}", cred.host, cred.port);
+    {
+        // Fast path: forwarder already running for this triple.
+        if let Ok(cache) = state.egress_forwarders.lock() {
+            if let Some(fwd) = cache.get(&key) {
+                return Ok(DbEgressEndpoint {
+                    host: "127.0.0.1".to_string(),
+                    port: fwd.local_port,
+                    via_forwarder: true,
+                });
+            }
+        }
+    }
+    // Cold path: spin up a forwarder and cache it.
+    let ctx: Arc<dyn pier_core::egress::EgressContext> = Arc::new(SshJumpContext::new());
+    let fwd = pier_core::egress::EgressForwarder::start_blocking(
+        Some(profile),
+        cred.host.clone(),
+        cred.port,
+        Some(ctx),
+    )
+    .map_err(|e| e.to_string())?;
+    let local_port = fwd.local_port;
+    let arc_fwd = Arc::new(fwd);
+    if let Ok(mut cache) = state.egress_forwarders.lock() {
+        cache.insert(key, Arc::clone(&arc_fwd));
+    }
+    Ok(DbEgressEndpoint {
+        host: "127.0.0.1".to_string(),
+        port: local_port,
+        via_forwarder: true,
+    })
 }
 
 #[tauri::command]
@@ -6998,6 +7434,7 @@ async fn software_install_or_update_inner(
     variant_key: Option<String>,
     is_update: bool,
     via_vendor_script: bool,
+    sudo_password: Option<String>,
 ) -> Result<SoftwareInstallReportView, String> {
     let app_for_failure = app.clone();
     let install_id_for_failure = install_id.clone();
@@ -7031,6 +7468,7 @@ async fn software_install_or_update_inner(
         };
         let version_ref = version.as_deref();
         let variant_ref = variant_key.as_deref();
+        let sudo_password_ref = sudo_password.as_deref();
         let report = if is_update {
             package_manager::update_blocking(
                 &session,
@@ -7038,6 +7476,7 @@ async fn software_install_or_update_inner(
                 enable_service,
                 version_ref,
                 variant_ref,
+                sudo_password_ref,
                 on_line,
                 Some(token_for_task.clone()),
             )
@@ -7047,6 +7486,7 @@ async fn software_install_or_update_inner(
                 &package_id,
                 enable_service,
                 variant_ref,
+                sudo_password_ref,
                 on_line,
                 Some(token_for_task.clone()),
             )
@@ -7057,6 +7497,7 @@ async fn software_install_or_update_inner(
                 enable_service,
                 version_ref,
                 variant_ref,
+                sudo_password_ref,
                 on_line,
                 Some(token_for_task.clone()),
             )
@@ -7142,6 +7583,7 @@ fn unregister_software_cancel(app: &tauri::AppHandle, install_id: &str) {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn software_install_remote(
     app: tauri::AppHandle,
     host: String,
@@ -7157,12 +7599,19 @@ async fn software_install_remote(
     version: Option<String>,
     variant_key: Option<String>,
     via_vendor_script: Option<bool>,
+    sudo_password: Option<String>,
 ) -> Result<SoftwareInstallReportView, String> {
     // `via_vendor_script == Some(true)` routes through the descriptor's
     // vendor_script channel (download + run the official installer)
     // instead of the default package-manager path. The frontend's
     // confirm dialog gates this — there's no UI path that sets the
     // flag without an explicit user opt-in.
+    //
+    // `sudo_password` carries the user's sudo credential when the
+    // host needs interactive auth (Synology DSM, hardened Ubuntu
+    // images). `None` keeps the legacy `sudo -n` non-interactive
+    // path. Lives only as a String inside this call — never logged,
+    // never written to history.
     software_install_or_update_inner(
         app,
         host,
@@ -7179,11 +7628,13 @@ async fn software_install_remote(
         variant_key,
         false,
         via_vendor_script.unwrap_or(false),
+        sudo_password,
     )
     .await
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn software_update_remote(
     app: tauri::AppHandle,
     host: String,
@@ -7198,6 +7649,7 @@ async fn software_update_remote(
     enable_service: bool,
     version: Option<String>,
     variant_key: Option<String>,
+    sudo_password: Option<String>,
 ) -> Result<SoftwareInstallReportView, String> {
     software_install_or_update_inner(
         app,
@@ -7215,6 +7667,7 @@ async fn software_update_remote(
         variant_key,
         true,
         false,
+        sudo_password,
     )
     .await
 }
@@ -8228,6 +8681,7 @@ fn software_compose_delete_user_template(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn software_compose_apply(
     app: tauri::AppHandle,
     host: String,
@@ -8238,6 +8692,7 @@ async fn software_compose_apply(
     key_path: String,
     saved_connection_index: Option<usize>,
     template_id: String,
+    sudo_password: Option<String>,
 ) -> Result<PostgresActionReportView, String> {
     let app_for_lookup = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -8251,15 +8706,22 @@ async fn software_compose_apply(
         // templates go through `compose_apply_inline_blocking` with
         // the on-disk YAML.
         let report = if package_manager::compose_template_by_id(&template_id).is_some() {
-            package_manager::compose_apply_blocking(&session, &template_id)
-                .map_err(|e| e.to_string())?
+            package_manager::compose_apply_blocking(
+                &session,
+                &template_id,
+                sudo_password.as_deref(),
+            )
+            .map_err(|e| e.to_string())?
         } else {
             let user = load_compose_user_templates(&app_for_lookup)
                 .into_iter()
                 .find(|t| t.id == template_id)
                 .ok_or_else(|| format!("unknown compose template: {template_id}"))?;
             package_manager::compose_apply_inline_blocking(
-                &session, &user.id, &user.yaml,
+                &session,
+                &user.id,
+                &user.yaml,
+                sudo_password.as_deref(),
             )
             .map_err(|e| e.to_string())?
         };
@@ -8342,6 +8804,7 @@ struct ComposeK8sExportView {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn software_compose_down(
     app: tauri::AppHandle,
     host: String,
@@ -8352,6 +8815,7 @@ async fn software_compose_down(
     key_path: String,
     saved_connection_index: Option<usize>,
     template_id: String,
+    sudo_password: Option<String>,
 ) -> Result<PostgresActionReportView, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
@@ -8359,8 +8823,12 @@ async fn software_compose_down(
             &state, &host, port, &user, &auth_mode, &password, &key_path,
             saved_connection_index,
         )?;
-        let report = package_manager::compose_down_blocking(&session, &template_id)
-            .map_err(|e| e.to_string())?;
+        let report = package_manager::compose_down_blocking(
+            &session,
+            &template_id,
+            sudo_password.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
         Ok::<_, String>(pg_report_to_view(report))
     })
     .await
@@ -8570,6 +9038,7 @@ async fn software_search_remote(
 /// SOFTWARE_INSTALL_EVENT channel as the regular install path so
 /// the activity log + cancel button reuse existing infrastructure.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn software_install_arbitrary(
     app: tauri::AppHandle,
     host: String,
@@ -8581,6 +9050,7 @@ async fn software_install_arbitrary(
     saved_connection_index: Option<usize>,
     package_name: String,
     install_id: String,
+    sudo_password: Option<String>,
 ) -> Result<SoftwareInstallReportView, String> {
     let app_for_failure = app.clone();
     let install_id_for_failure = install_id.clone();
@@ -8615,6 +9085,7 @@ async fn software_install_arbitrary(
         let report = package_manager::install_arbitrary_blocking(
             &session,
             &package_name,
+            sudo_password.as_deref(),
             on_line,
             Some(token_for_task.clone()),
         )
@@ -9017,6 +9488,7 @@ async fn software_mirror_get(
 /// Switch the host's apt / dnf sources to `mirror_id`. Backs up
 /// the originals to `.pier-bak` on first invocation.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn software_mirror_set(
     app: tauri::AppHandle,
     host: String,
@@ -9027,6 +9499,7 @@ async fn software_mirror_set(
     key_path: String,
     saved_connection_index: Option<usize>,
     mirror_id: String,
+    sudo_password: Option<String>,
 ) -> Result<MirrorActionReportView, String> {
     let app_for_prefs = app.clone();
     let mirror_id_for_prefs = mirror_id.clone();
@@ -9048,8 +9521,13 @@ async fn software_mirror_set(
             .ok_or_else(|| "host has no detected package manager".to_string())?;
         let id = package_mirror::MirrorId::from_str(&mirror_id)
             .ok_or_else(|| format!("unknown mirror id: {mirror_id}"))?;
-        let report = package_mirror::set_mirror_blocking(&session, manager, id)
-            .map_err(|e| e.to_string())?;
+        let report = package_mirror::set_mirror_blocking(
+            &session,
+            manager,
+            id,
+            sudo_password.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
         Ok::<_, String>(mirror_action_to_view(report))
     })
     .await
@@ -9196,6 +9674,7 @@ async fn software_mirror_benchmark(
 /// Restore the original sources from `.pier-bak`. No-op when no
 /// backup exists (the report still resolves with `ok`).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn software_mirror_restore(
     app: tauri::AppHandle,
     host: String,
@@ -9205,6 +9684,7 @@ async fn software_mirror_restore(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<MirrorActionReportView, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
@@ -9222,8 +9702,12 @@ async fn software_mirror_restore(
         let manager = env
             .package_manager
             .ok_or_else(|| "host has no detected package manager".to_string())?;
-        let report = package_mirror::restore_mirror_blocking(&session, manager)
-            .map_err(|e| e.to_string())?;
+        let report = package_mirror::restore_mirror_blocking(
+            &session,
+            manager,
+            sudo_password.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
         Ok::<_, String>(mirror_action_to_view(report))
     })
     .await
@@ -9235,6 +9719,7 @@ async fn software_mirror_restore(
 /// payload can carry uninstall-specific fields without a discriminant
 /// union on the install channel.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn software_uninstall_remote(
     app: tauri::AppHandle,
     host: String,
@@ -9247,6 +9732,7 @@ async fn software_uninstall_remote(
     package_id: String,
     install_id: String,
     options: package_manager::UninstallOptions,
+    sudo_password: Option<String>,
 ) -> Result<SoftwareUninstallReportView, String> {
     let app_for_failure = app.clone();
     let install_id_for_failure = install_id.clone();
@@ -9282,6 +9768,7 @@ async fn software_uninstall_remote(
             &session,
             &package_id,
             &options,
+            sudo_password.as_deref(),
             on_line,
             Some(token_for_task.clone()),
         )
@@ -9406,6 +9893,7 @@ fn parse_service_action(s: &str) -> Result<package_manager::ServiceAction, Strin
 /// a `failed` event on join error. The frontend filters by
 /// `installId` so concurrent rows on different hosts don't interleave.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn software_service_action_remote(
     app: tauri::AppHandle,
     host: String,
@@ -9418,6 +9906,7 @@ async fn software_service_action_remote(
     package_id: String,
     install_id: String,
     action: String,
+    sudo_password: Option<String>,
 ) -> Result<SoftwareServiceActionReportView, String> {
     let action = parse_service_action(&action)?;
     let app_for_failure = app.clone();
@@ -9450,9 +9939,14 @@ async fn software_service_action_remote(
                 },
             );
         };
-        let report =
-            package_manager::service_action_blocking(&session, descriptor, action, on_line)
-                .map_err(|e| e.to_string())?;
+        let report = package_manager::service_action_blocking(
+            &session,
+            descriptor,
+            action,
+            sudo_password.as_deref(),
+            on_line,
+        )
+        .map_err(|e| e.to_string())?;
         let view = service_action_report_to_view(report);
         let _ = app.emit(
             SOFTWARE_SERVICE_EVENT,
@@ -13341,6 +13835,14 @@ pub fn run() {
             ssh_connection_update,
             ssh_connections_reorder,
             ssh_group_rename,
+            egress_profile_list,
+            egress_profile_save,
+            egress_profile_delete,
+            egress_set_basic_auth,
+            egress_clear_credential,
+            egress_vpn_start,
+            egress_vpn_stop,
+            db_egress_endpoint,
             ssh_tunnel_open,
             ssh_tunnel_info,
             ssh_tunnel_list,

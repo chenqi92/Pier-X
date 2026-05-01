@@ -2376,11 +2376,12 @@ pub fn compose_template_by_id(id: &str) -> Option<&'static ComposeTemplate> {
 pub async fn compose_apply(
     session: &SshSession,
     template_id: &str,
+    sudo_password: Option<&str>,
 ) -> Result<PostgresActionReport> {
     let tmpl = compose_template_by_id(template_id).ok_or_else(|| {
         SshError::InvalidConfig(format!("unknown compose template: {template_id}"))
     })?;
-    compose_apply_inline(session, tmpl.id, tmpl.yaml).await
+    compose_apply_inline(session, tmpl.id, tmpl.yaml, sudo_password).await
 }
 
 /// Same as [`compose_apply`] but takes the YAML directly — used by the
@@ -2390,6 +2391,7 @@ pub async fn compose_apply_inline(
     session: &SshSession,
     id: &str,
     yaml: &str,
+    sudo_password: Option<&str>,
 ) -> Result<PostgresActionReport> {
     if id.is_empty() {
         return Err(SshError::InvalidConfig(
@@ -2405,7 +2407,6 @@ pub async fn compose_apply_inline(
         )));
     }
     let env = probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
     // Use a heredoc so we don't have to escape $ / quotes inside
     // the YAML. The marker is constant so the heredoc body is
     // verbatim from the supplied yaml.
@@ -2418,9 +2419,11 @@ pub async fn compose_apply_inline(
          cd \"$dir\"; \
          docker compose up -d 2>&1",
     );
-    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
+    let SudoCommand { full: command, display: command_display } =
+        wrap_sudo_sh(env.is_root, &inner, sudo_password);
     let (exit_code, stdout) = session.exec_command(&command).await?;
-    let output_tail = stdout
+    let stdout_clean = sanitize_sudo_output(&stdout, sudo_password);
+    let output_tail = stdout_clean
         .lines()
         .rev()
         .take(40)
@@ -2438,7 +2441,7 @@ pub async fn compose_apply_inline(
     };
     Ok(PostgresActionReport {
         status: status.to_string(),
-        command,
+        command: command_display,
         exit_code,
         output_tail,
     })
@@ -2452,6 +2455,7 @@ pub async fn compose_apply_inline(
 pub async fn compose_down(
     session: &SshSession,
     template_id: &str,
+    sudo_password: Option<&str>,
 ) -> Result<PostgresActionReport> {
     if template_id.is_empty() {
         return Err(SshError::InvalidConfig(
@@ -2467,7 +2471,6 @@ pub async fn compose_down(
         )));
     }
     let env = probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
     let inner = format!(
         "set -e; \
          dir=\"$HOME/pier-x-stacks/{id}\"; \
@@ -2476,9 +2479,11 @@ pub async fn compose_down(
          docker compose down 2>&1",
         id = template_id,
     );
-    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
+    let SudoCommand { full: command, display: command_display } =
+        wrap_sudo_sh(env.is_root, &inner, sudo_password);
     let (exit_code, stdout) = session.exec_command(&command).await?;
-    let output_tail = stdout
+    let stdout_clean = sanitize_sudo_output(&stdout, sudo_password);
+    let output_tail = stdout_clean
         .lines()
         .rev()
         .take(40)
@@ -2496,7 +2501,7 @@ pub async fn compose_down(
     };
     Ok(PostgresActionReport {
         status: status.to_string(),
-        command,
+        command: command_display,
         exit_code,
         output_tail,
     })
@@ -2506,8 +2511,9 @@ pub async fn compose_down(
 pub fn compose_apply_blocking(
     session: &SshSession,
     template_id: &str,
+    sudo_password: Option<&str>,
 ) -> Result<PostgresActionReport> {
-    crate::ssh::runtime::shared().block_on(compose_apply(session, template_id))
+    crate::ssh::runtime::shared().block_on(compose_apply(session, template_id, sudo_password))
 }
 
 /// Blocking wrapper for [`compose_apply_inline`].
@@ -2515,16 +2521,19 @@ pub fn compose_apply_inline_blocking(
     session: &SshSession,
     id: &str,
     yaml: &str,
+    sudo_password: Option<&str>,
 ) -> Result<PostgresActionReport> {
-    crate::ssh::runtime::shared().block_on(compose_apply_inline(session, id, yaml))
+    crate::ssh::runtime::shared()
+        .block_on(compose_apply_inline(session, id, yaml, sudo_password))
 }
 
 /// Blocking wrapper for [`compose_down`].
 pub fn compose_down_blocking(
     session: &SshSession,
     template_id: &str,
+    sudo_password: Option<&str>,
 ) -> Result<PostgresActionReport> {
-    crate::ssh::runtime::shared().block_on(compose_down(session, template_id))
+    crate::ssh::runtime::shared().block_on(compose_down(session, template_id, sudo_password))
 }
 
 // ── Co-install recommendations (v2.10) ─────────────────────────────
@@ -3168,6 +3177,7 @@ pub async fn install<F>(
     enable_service: bool,
     version: Option<&str>,
     variant_key: Option<&str>,
+    sudo_password: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
@@ -3181,6 +3191,7 @@ where
         enable_service,
         version,
         variant_key,
+        sudo_password,
         on_line,
         cancel,
     )
@@ -3201,6 +3212,7 @@ pub async fn update<F>(
     enable_service: bool,
     version: Option<&str>,
     variant_key: Option<&str>,
+    sudo_password: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
@@ -3214,6 +3226,7 @@ where
         enable_service,
         version,
         variant_key,
+        sudo_password,
         on_line,
         cancel,
     )
@@ -3289,13 +3302,23 @@ pub async fn install_via_script<F>(
     id: &str,
     enable_service: bool,
     variant_key: Option<&str>,
+    sudo_password: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    run_install_via_script(session, id, enable_service, variant_key, on_line, cancel).await
+    run_install_via_script(
+        session,
+        id,
+        enable_service,
+        variant_key,
+        sudo_password,
+        on_line,
+        cancel,
+    )
+    .await
 }
 
 /// Blocking wrapper for [`install_via_script`]. Accepts the same
@@ -3308,6 +3331,7 @@ pub fn install_via_script_blocking<F>(
     id: &str,
     enable_service: bool,
     variant_key: Option<&str>,
+    sudo_password: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
@@ -3319,6 +3343,7 @@ where
         id,
         enable_service,
         variant_key,
+        sudo_password,
         on_line,
         cancel,
     ))
@@ -3344,6 +3369,7 @@ pub fn install_blocking<F>(
     enable_service: bool,
     version: Option<&str>,
     variant_key: Option<&str>,
+    sudo_password: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
@@ -3356,6 +3382,7 @@ where
         enable_service,
         version,
         variant_key,
+        sudo_password,
         on_line,
         cancel,
     ))
@@ -3368,6 +3395,7 @@ pub fn update_blocking<F>(
     enable_service: bool,
     version: Option<&str>,
     variant_key: Option<&str>,
+    sudo_password: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
@@ -3380,6 +3408,7 @@ where
         enable_service,
         version,
         variant_key,
+        sudo_password,
         on_line,
         cancel,
     ))
@@ -3414,13 +3443,14 @@ pub async fn uninstall<F>(
     session: &SshSession,
     id: &str,
     opts: &UninstallOptions,
+    sudo_password: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<UninstallReport>
 where
     F: FnMut(&str),
 {
-    run_uninstall(session, id, opts, on_line, cancel).await
+    run_uninstall(session, id, opts, sudo_password, on_line, cancel).await
 }
 
 /// Blocking wrapper for [`uninstall`].
@@ -3428,13 +3458,15 @@ pub fn uninstall_blocking<F>(
     session: &SshSession,
     id: &str,
     opts: &UninstallOptions,
+    sudo_password: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<UninstallReport>
 where
     F: FnMut(&str),
 {
-    crate::ssh::runtime::shared().block_on(uninstall(session, id, opts, on_line, cancel))
+    crate::ssh::runtime::shared()
+        .block_on(uninstall(session, id, opts, sudo_password, on_line, cancel))
 }
 
 /// Drive a `systemctl <verb> <unit>` for one descriptor's service.
@@ -3452,12 +3484,13 @@ pub async fn service_action<F>(
     session: &SshSession,
     descriptor: &PackageDescriptor,
     action: ServiceAction,
+    sudo_password: Option<&str>,
     on_line: F,
 ) -> Result<ServiceActionReport>
 where
     F: FnMut(&str),
 {
-    run_service_action(session, descriptor, action, on_line).await
+    run_service_action(session, descriptor, action, sudo_password, on_line).await
 }
 
 /// Blocking wrapper for [`service_action`]. Tauri commands using
@@ -3467,13 +3500,14 @@ pub fn service_action_blocking<F>(
     session: &SshSession,
     descriptor: &PackageDescriptor,
     action: ServiceAction,
+    sudo_password: Option<&str>,
     on_line: F,
 ) -> Result<ServiceActionReport>
 where
     F: FnMut(&str),
 {
     crate::ssh::runtime::shared()
-        .block_on(service_action(session, descriptor, action, on_line))
+        .block_on(service_action(session, descriptor, action, sudo_password, on_line))
 }
 
 /// Pull the most recent `lines` rows of `journalctl -u <unit>` output
@@ -4113,26 +4147,34 @@ pub fn search_remote_blocking(
 pub async fn install_arbitrary<F>(
     session: &SshSession,
     package_name: &str,
+    sudo_password: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    run_install_arbitrary(session, package_name, on_line, cancel).await
+    run_install_arbitrary(session, package_name, sudo_password, on_line, cancel).await
 }
 
 /// Blocking wrapper for [`install_arbitrary`].
 pub fn install_arbitrary_blocking<F>(
     session: &SshSession,
     package_name: &str,
+    sudo_password: Option<&str>,
     on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
 where
     F: FnMut(&str),
 {
-    crate::ssh::runtime::shared().block_on(install_arbitrary(session, package_name, on_line, cancel))
+    crate::ssh::runtime::shared().block_on(install_arbitrary(
+        session,
+        package_name,
+        sudo_password,
+        on_line,
+        cancel,
+    ))
 }
 
 /// Synthesise the install command **without running it** so the
@@ -4427,6 +4469,7 @@ async fn run_setup_then_install<F>(
     enable_service: bool,
     version: Option<&str>,
     variant_key: Option<&str>,
+    sudo_password: Option<&str>,
     mut on_line: F,
     cancel: Option<CancellationToken>,
     env: HostPackageEnv,
@@ -4435,11 +4478,8 @@ async fn run_setup_then_install<F>(
 where
     F: FnMut(&str),
 {
-    let prefix = if env.is_root { "" } else { "sudo -n " };
-    let setup_command = format!(
-        "{prefix}sh -c {} 2>&1",
-        shell_single_quote(setup_inner)
-    );
+    let SudoCommand { full: setup_command, display: setup_command_display } =
+        wrap_sudo_sh(env.is_root, setup_inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
     let push_tail = |line: &str, tail: &mut Vec<String>| {
@@ -4463,7 +4503,7 @@ where
         Ok((code, _)) => code,
         Err(e) => return Err(e),
     };
-    let setup_tail = tail_lines.join("\n");
+    let setup_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
     if setup_exit == CANCELLED_EXIT_CODE
         || cancel.as_ref().is_some_and(|t| t.is_cancelled())
@@ -4477,7 +4517,7 @@ where
                 .package_manager
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_default(),
-            command: setup_command,
+            command: setup_command_display,
             exit_code: setup_exit,
             output_tail: setup_tail,
             installed_version: None,
@@ -4497,7 +4537,7 @@ where
                 .package_manager
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_default(),
-            command: setup_command,
+            command: setup_command_display,
             exit_code: setup_exit,
             output_tail: setup_tail,
             installed_version: None,
@@ -4520,7 +4560,7 @@ where
                 .package_manager
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_default(),
-            command: setup_command,
+            command: setup_command_display,
             exit_code: setup_exit,
             output_tail: setup_tail,
             installed_version: None,
@@ -4540,6 +4580,7 @@ where
         enable_service,
         version,
         variant_key,
+        sudo_password,
         on_line,
         cancel,
     )
@@ -4559,6 +4600,7 @@ where
 async fn run_install_arbitrary<F>(
     session: &SshSession,
     package_name: &str,
+    sudo_password: Option<&str>,
     mut on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
@@ -4591,11 +4633,8 @@ where
     // since this string may originate in a search result the user
     // could have manipulated.
     let install_inner = build_install_command(manager, &[package_name], false, None);
-    let prefix = if env.is_root { "" } else { "sudo -n " };
-    let command = format!(
-        "{prefix}sh -c {} 2>&1",
-        shell_single_quote(&install_inner)
-    );
+    let SudoCommand { full: command, display: command_display } =
+        wrap_sudo_sh(env.is_root, &install_inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = session
@@ -4611,7 +4650,7 @@ where
             cancel.clone(),
         )
         .await?;
-    let output_tail = tail_lines.join("\n");
+    let output_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
     if exit_code == CANCELLED_EXIT_CODE
         || cancel.as_ref().is_some_and(|t| t.is_cancelled())
@@ -4622,7 +4661,7 @@ where
             status: InstallStatus::Cancelled,
             distro_id: env.distro_id,
             package_manager: manager.as_str().to_string(),
-            command,
+            command: command_display,
             exit_code,
             output_tail,
             installed_version: None,
@@ -4639,7 +4678,7 @@ where
             status: InstallStatus::SudoRequiresPassword,
             distro_id: env.distro_id,
             package_manager: manager.as_str().to_string(),
-            command,
+            command: command_display,
             exit_code,
             output_tail,
             installed_version: None,
@@ -4662,7 +4701,7 @@ where
         status,
         distro_id: env.distro_id,
         package_manager: manager.as_str().to_string(),
-        command,
+        command: command_display,
         exit_code,
         output_tail,
         installed_version: None,
@@ -4799,6 +4838,7 @@ async fn run_install_via_script<F>(
     id: &str,
     enable_service: bool,
     variant_key: Option<&str>,
+    sudo_password: Option<&str>,
     mut on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
@@ -4857,6 +4897,7 @@ where
                 enable_service,
                 None, // no version pin from this entrypoint
                 variant_key,
+                sudo_password,
                 on_line,
                 cancel,
                 env,
@@ -4961,15 +5002,18 @@ where
 
     // --- Step 3+4+5: size-check + execute + cleanup, single sh ---
     let exec_inner = build_vendor_exec_command(&script_path);
-    let prefix = if vendor.run_as_root && !env.is_root {
-        "sudo -n "
+    // Vendor scripts that ask `run_as_root` get the same sudo
+    // treatment as the apt path: caller-supplied password (if any) or
+    // `-n` fallback. Scripts that don't need root (e.g. user-mode
+    // installers) bypass sudo entirely.
+    let needs_sudo = vendor.run_as_root && !env.is_root;
+    let SudoCommand { full: exec_command, display: exec_command_display } = if needs_sudo {
+        wrap_sudo_sh(false, &exec_inner, sudo_password)
     } else {
-        ""
+        // Non-sudo path — `wrap_sudo_sh(true, ...)` returns no prefix
+        // for both full and display.
+        wrap_sudo_sh(true, &exec_inner, None)
     };
-    let exec_command = format!(
-        "{prefix}sh -c {} 2>&1",
-        shell_single_quote(&exec_inner)
-    );
 
     let exec_exit = match session
         .exec_command_streaming(
@@ -4988,7 +5032,7 @@ where
             return Err(e);
         }
     };
-    let output_tail = tail_lines.join("\n");
+    let output_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
     // Same priority as the apt path: cancellation wins over both
     // sudo-prompt detection and the post-probe / service-enable steps.
@@ -4996,7 +5040,7 @@ where
         || cancel.as_ref().is_some_and(|t| t.is_cancelled())
     {
         cleanup_vendor_temp(session, &script_path).await;
-        return Ok(cancelled_report(exec_command, exec_exit, output_tail));
+        return Ok(cancelled_report(exec_command_display, exec_exit, output_tail));
     }
 
     if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
@@ -5010,7 +5054,7 @@ where
                 .package_manager
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_default(),
-            command: exec_command,
+            command: exec_command_display,
             exit_code: exec_exit,
             output_tail,
             installed_version: None,
@@ -5039,9 +5083,12 @@ where
             .package_manager
             .and_then(|pm| descriptor_service_unit(descriptor, pm))
         {
-            let svc_inner = format!("systemctl enable --now {unit} || true");
-            let svc_cmd =
-                format!("{prefix}sh -c {} 2>&1", shell_single_quote(&svc_inner));
+            let svc_cmd = wrap_sudo_sh(
+                env.is_root,
+                &format!("systemctl enable --now {unit} || true"),
+                sudo_password,
+            )
+            .full;
             let _ = session
                 .exec_command_streaming(&svc_cmd, &mut on_line, None)
                 .await;
@@ -5071,7 +5118,7 @@ where
             .package_manager
             .map(|m| m.as_str().to_string())
             .unwrap_or_default(),
-        command: exec_command,
+        command: exec_command_display,
         exit_code: exec_exit,
         output_tail,
         installed_version,
@@ -5129,6 +5176,7 @@ async fn run_install_or_update<F>(
     enable_service: bool,
     version: Option<&str>,
     variant_key: Option<&str>,
+    sudo_password: Option<&str>,
     mut on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<InstallReport>
@@ -5174,11 +5222,8 @@ where
     };
 
     let install_inner = build_install_command(manager, packages, is_update, version);
-    let prefix = if env.is_root { "" } else { "sudo -n " };
-    let command = format!(
-        "{prefix}sh -c {} 2>&1",
-        shell_single_quote(&install_inner)
-    );
+    let SudoCommand { full: command, display: command_display } =
+        wrap_sudo_sh(env.is_root, &install_inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = session
@@ -5194,7 +5239,7 @@ where
             cancel.clone(),
         )
         .await?;
-    let output_tail = tail_lines.join("\n");
+    let output_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
     // Cancellation has to be checked BEFORE the "looks like sudo" /
     // post-probe / service-enable branches: those would fire fresh
@@ -5211,7 +5256,7 @@ where
             status: InstallStatus::Cancelled,
             distro_id: env.distro_id,
             package_manager: manager.as_str().to_string(),
-            command,
+            command: command_display,
             exit_code,
             output_tail,
             installed_version: None,
@@ -5228,7 +5273,7 @@ where
             status: InstallStatus::SudoRequiresPassword,
             distro_id: env.distro_id,
             package_manager: manager.as_str().to_string(),
-            command,
+            command: command_display,
             exit_code,
             output_tail,
             installed_version: None,
@@ -5255,12 +5300,12 @@ where
     // this step trips; just record the resulting service_active state.
     let service_active = if was_installed_after && enable_service {
         if let Some(unit) = descriptor_service_unit(descriptor, manager) {
-            let svc_cmd = format!(
-                "{prefix}sh -c {} 2>&1",
-                shell_single_quote(&format!(
-                    "systemctl enable --now {unit} || true"
-                ))
-            );
+            let svc_cmd = wrap_sudo_sh(
+                env.is_root,
+                &format!("systemctl enable --now {unit} || true"),
+                sudo_password,
+            )
+            .full;
             let _ = session
                 .exec_command_streaming(&svc_cmd, &mut on_line, cancel.clone())
                 .await;
@@ -5286,7 +5331,7 @@ where
         status,
         distro_id: env.distro_id,
         package_manager: manager.as_str().to_string(),
-        command,
+        command: command_display,
         exit_code,
         output_tail,
         installed_version,
@@ -5303,6 +5348,7 @@ async fn run_uninstall<F>(
     session: &SshSession,
     id: &str,
     opts: &UninstallOptions,
+    sudo_password: Option<&str>,
     mut on_line: F,
     cancel: Option<CancellationToken>,
 ) -> Result<UninstallReport>
@@ -5373,8 +5419,8 @@ where
         service_unit,
         cleanup_script,
     );
-    let prefix = if env.is_root { "" } else { "sudo -n " };
-    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
+    let SudoCommand { full: command, display: command_display } =
+        wrap_sudo_sh(env.is_root, &inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = session
@@ -5390,7 +5436,7 @@ where
             cancel.clone(),
         )
         .await?;
-    let output_tail = tail_lines.join("\n");
+    let output_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
     // Same fast-path-out as the install side: cancel beats every other
     // post-action branch, including the post-removal probe.
@@ -5402,7 +5448,7 @@ where
             status: UninstallStatus::Cancelled,
             distro_id: env.distro_id,
             package_manager: manager.as_str().to_string(),
-            command,
+            command: command_display,
             exit_code,
             output_tail,
             data_dirs_removed: false,
@@ -5415,7 +5461,7 @@ where
             status: UninstallStatus::SudoRequiresPassword,
             distro_id: env.distro_id,
             package_manager: manager.as_str().to_string(),
-            command,
+            command: command_display,
             exit_code,
             output_tail,
             data_dirs_removed: false,
@@ -5442,7 +5488,7 @@ where
         status,
         distro_id: env.distro_id,
         package_manager: manager.as_str().to_string(),
-        command,
+        command: command_display,
         exit_code,
         output_tail,
         data_dirs_removed,
@@ -5459,6 +5505,7 @@ async fn run_service_action<F>(
     session: &SshSession,
     descriptor: &PackageDescriptor,
     action: ServiceAction,
+    sudo_password: Option<&str>,
     mut on_line: F,
 ) -> Result<ServiceActionReport>
 where
@@ -5481,7 +5528,8 @@ where
         });
     };
 
-    let command = build_systemctl_command(action, unit, env.is_root);
+    let SudoCommand { full: command, display: command_display } =
+        build_systemctl_command(action, unit, env.is_root, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = session
@@ -5497,7 +5545,7 @@ where
             None,
         )
         .await?;
-    let output_tail = tail_lines.join("\n");
+    let output_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
     if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
         return Ok(ServiceActionReport {
@@ -5505,7 +5553,7 @@ where
             status: ServiceActionStatus::SudoRequiresPassword,
             action: action.as_systemctl_verb().to_string(),
             unit: unit.to_string(),
-            command,
+            command: command_display,
             exit_code,
             output_tail,
             service_active_after: false,
@@ -5526,7 +5574,7 @@ where
         status,
         action: action.as_systemctl_verb().to_string(),
         unit: unit.to_string(),
-        command,
+        command: command_display,
         exit_code,
         output_tail,
         service_active_after: active_after,
@@ -5556,21 +5604,26 @@ async fn run_journalctl_tail(
         .collect())
 }
 
-/// Synthesise the `systemctl <verb> <unit>` command, with `sudo -n`
+/// Synthesise the `systemctl <verb> <unit>` command, sudo-prefixed
 /// when non-root and `2>&1` so stderr lines reach the streaming
 /// callback. The unit is single-quoted in case it ever contains
 /// shell metacharacters (today they don't, but the matrix is data).
+/// Returns both the executable form (carrying any caller-supplied
+/// password through `sudo -S`) and a display form with the password
+/// redacted.
 fn build_systemctl_command(
     action: ServiceAction,
     unit: &str,
     is_root: bool,
-) -> String {
-    let prefix = if is_root { "" } else { "sudo -n " };
+    sudo_password: Option<&str>,
+) -> SudoCommand {
+    let pfx = build_sudo_prefix(is_root, sudo_password);
     let verb = action.as_systemctl_verb();
-    format!(
-        "{prefix}systemctl {verb} {} 2>&1",
-        shell_single_quote(unit)
-    )
+    let suffix = format!("systemctl {verb} {} 2>&1", shell_single_quote(unit));
+    SudoCommand {
+        full: format!("{}{suffix}", pfx.full),
+        display: format!("{}{suffix}", pfx.display),
+    }
 }
 
 /// Synthesise the `journalctl -u <unit> -n <lines>` command. We pin
@@ -6083,6 +6136,96 @@ fn build_pkg_installed_check(manager: PackageManager, package: &str) -> String {
     }
 }
 
+/// Sudo prefix in two flavours: `full` is what we hand to SSH, `display`
+/// is what we surface in reports.
+///
+/// When the caller didn't supply a password (or we're already root) the
+/// two are identical. When a password is supplied, `full` pipes it via
+/// `printf | sudo -S -p ''` so sudo reads it from stdin, and `display`
+/// substitutes a plain `sudo ` so the password never lands in
+/// `command` strings, history logs, or error output_tails.
+pub struct SudoPrefix {
+    /// Real prefix sent to SSH. Carries the password when one is set.
+    pub full: String,
+    /// Same shape with the password redacted; safe to surface in
+    /// reports, logs, and history entries.
+    pub display: String,
+}
+
+/// Build the sudo prefix to put in front of `sh -c '...'` (or any
+/// other root-required command). Three cases:
+///
+/// - `is_root` → empty prefix; both fields are `""`.
+/// - `password = Some(_)` → `printf '%s\n' '<pw>' | sudo -S -p '' `,
+///   with the display form rewritten to plain `sudo `.
+/// - `password = None` → `sudo -n ` (the old non-interactive default,
+///   still used everywhere a caller hasn't pushed a password).
+///
+/// `-p ''` blanks the prompt so sudo doesn't echo `[sudo] password
+/// for user:` into the captured output. `printf` (rather than `echo`)
+/// because some `/bin/sh`s aliasing `echo` mangle backslashes. The
+/// password is shell-single-quoted so embedded `'`, `$`, `\` are
+/// literal — same escape that all other inner snippets use.
+pub fn build_sudo_prefix(is_root: bool, password: Option<&str>) -> SudoPrefix {
+    if is_root {
+        return SudoPrefix {
+            full: String::new(),
+            display: String::new(),
+        };
+    }
+    match password.filter(|p| !p.is_empty()) {
+        Some(pw) => SudoPrefix {
+            full: format!("printf '%s\\n' {} | sudo -S -p '' ", shell_single_quote(pw)),
+            display: "sudo ".to_string(),
+        },
+        None => SudoPrefix {
+            full: "sudo -n ".to_string(),
+            display: "sudo -n ".to_string(),
+        },
+    }
+}
+
+/// Strip the sudo authentication prompt's first-line noise from
+/// captured output. With `-S -p ''` the prompt is empty so usually
+/// nothing leaks, but some sudo builds still emit a blank line or a
+/// password-mismatch message ahead of the actual command output.
+/// Also defence-in-depths: drop any line that literally contains the
+/// password (shouldn't happen, but cheap to guard).
+pub fn sanitize_sudo_output(output: &str, password: Option<&str>) -> String {
+    let pw = password.filter(|p| !p.is_empty());
+    output
+        .lines()
+        .filter(|line| match pw {
+            Some(p) => !line.contains(p),
+            None => true,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Wrap `inner` in `<prefix>sh -c '<inner>' 2>&1`, returning both the
+/// executable form (carrying the password through `sudo -S`) and a
+/// display form with the password redacted. Use the executable form
+/// for `session.exec_command*`, and the display form anywhere the
+/// command string surfaces back to the UI / activity log.
+pub struct SudoCommand {
+    /// Executable form: send this to `session.exec_command*`.
+    pub full: String,
+    /// Display form (password redacted): use this in reports.
+    pub display: String,
+}
+
+/// Helper: wrap `inner` in `<prefix>sh -c '<inner>' 2>&1` for both the
+/// executable and display variants in one call.
+pub fn wrap_sudo_sh(is_root: bool, inner: &str, password: Option<&str>) -> SudoCommand {
+    let pfx = build_sudo_prefix(is_root, password);
+    let quoted = shell_single_quote(inner);
+    SudoCommand {
+        full: format!("{}sh -c {} 2>&1", pfx.full, quoted),
+        display: format!("{}sh -c {} 2>&1", pfx.display, quoted),
+    }
+}
+
 /// Heuristic: is this output from `sudo -n` bailing for a password?
 pub fn looks_like_sudo_password_prompt(output: &str) -> bool {
     let lower = output.to_ascii_lowercase();
@@ -6090,6 +6233,16 @@ pub fn looks_like_sudo_password_prompt(output: &str) -> bool {
         || lower.contains("sudo: a terminal is required")
         || lower.contains("no tty present")
         || (lower.contains("sudo:") && lower.contains("password"))
+        // polkit / pkexec-backed sudo on Synology DSM, recent Ubuntu
+        // server images, and some hardened distros print this instead
+        // of the classic "a password is required". Same meaning — we
+        // can't auth non-interactively, frontend should prompt.
+        || lower.contains("interactive authentication is required")
+        // Wrong password entered through `sudo -S` — sudo prints this
+        // before exiting non-zero. Reusing the same status lets the
+        // frontend keep the password dialog open for another try
+        // instead of dropping into the generic failure branch.
+        || lower.contains("sorry, try again")
 }
 
 /// `systemctl is-active <unit>` → bool. Treats anything that isn't an
@@ -6963,6 +7116,12 @@ mod tests {
         assert!(looks_like_sudo_password_prompt(
             "sudo: a terminal is required to read the password"
         ));
+        assert!(looks_like_sudo_password_prompt(
+            "sudo: interactive authentication is required"
+        ));
+        assert!(looks_like_sudo_password_prompt(
+            "Sorry, try again."
+        ));
         assert!(!looks_like_sudo_password_prompt(
             "E: Unable to locate package sqlite3"
         ));
@@ -7225,25 +7384,37 @@ mod tests {
 
     #[test]
     fn build_systemctl_command_root_omits_sudo() {
-        let cmd = build_systemctl_command(ServiceAction::Restart, "redis-server", true);
-        assert_eq!(cmd, "systemctl restart 'redis-server' 2>&1");
-        assert!(!cmd.contains("sudo"));
+        let cmd = build_systemctl_command(ServiceAction::Restart, "redis-server", true, None);
+        assert_eq!(cmd.full, "systemctl restart 'redis-server' 2>&1");
+        assert_eq!(cmd.display, cmd.full);
+        assert!(!cmd.full.contains("sudo"));
     }
 
     #[test]
     fn build_systemctl_command_non_root_uses_sudo_n() {
-        let cmd = build_systemctl_command(ServiceAction::Stop, "redis", false);
-        assert!(cmd.starts_with("sudo -n systemctl stop "));
-        assert!(cmd.contains("'redis'"));
-        assert!(cmd.ends_with("2>&1"));
+        let cmd = build_systemctl_command(ServiceAction::Stop, "redis", false, None);
+        assert!(cmd.full.starts_with("sudo -n systemctl stop "));
+        assert!(cmd.full.contains("'redis'"));
+        assert!(cmd.full.ends_with("2>&1"));
+        assert_eq!(cmd.display, cmd.full);
+    }
+
+    #[test]
+    fn build_systemctl_command_with_password_pipes_via_stdin() {
+        let cmd = build_systemctl_command(ServiceAction::Stop, "redis", false, Some("hunter2"));
+        // Full carries the password through `printf | sudo -S`.
+        assert!(cmd.full.starts_with("printf '%s\\n' 'hunter2' | sudo -S -p '' systemctl stop "));
+        // Display redacts the password and reads as plain `sudo`.
+        assert!(cmd.display.starts_with("sudo systemctl stop "));
+        assert!(!cmd.display.contains("hunter2"));
     }
 
     #[test]
     fn build_systemctl_command_quotes_unit() {
         // Defensive: even though no v1 unit has metacharacters, the
         // unit string is data — keep the escape in place.
-        let cmd = build_systemctl_command(ServiceAction::Start, "weird unit", true);
-        assert!(cmd.contains("'weird unit'"));
+        let cmd = build_systemctl_command(ServiceAction::Start, "weird unit", true, None);
+        assert!(cmd.full.contains("'weird unit'"));
     }
 
     #[test]
@@ -7254,10 +7425,11 @@ mod tests {
             (ServiceAction::Restart, "restart"),
             (ServiceAction::Reload, "reload"),
         ] {
-            let cmd = build_systemctl_command(action, "redis", true);
+            let cmd = build_systemctl_command(action, "redis", true, None);
             assert!(
-                cmd.contains(&format!("systemctl {verb} ")),
-                "{action:?} → expected verb {verb} in {cmd}",
+                cmd.full.contains(&format!("systemctl {verb} ")),
+                "{action:?} → expected verb {verb} in {}",
+                cmd.full,
             );
         }
     }

@@ -56,6 +56,12 @@ pub struct SshConfig {
     /// panels to seed forms and auto-open tunnels.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub databases: Vec<DbCredential>,
+    /// Optional reference to a `crate::egress::EgressProfile::id` in
+    /// the same `ConnectionStore`. `None` = direct connection. The
+    /// SSH layer has not yet wired this through (stage B); today
+    /// only persistence and round-trip are guaranteed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress_id: Option<String>,
 }
 
 fn default_connect_timeout() -> u64 {
@@ -79,6 +85,7 @@ impl SshConfig {
             group: None,
             env_tag: None,
             databases: Vec::new(),
+            egress_id: None,
         }
     }
 
@@ -302,6 +309,13 @@ pub struct DbCredential {
     /// Whether the user typed this or adopted it from detection.
     #[serde(default = "default_db_cred_source_manual")]
     pub source: DbCredentialSource,
+    /// Optional reference to an `crate::egress::EgressProfile::id`.
+    /// When set, DB connections to this credential should be made
+    /// through the profile (typically via a local TCP forwarder),
+    /// not directly to `host:port`. `None` = direct (or via the
+    /// owning SSH session's tunnel, which is the legacy path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress_id: Option<String>,
 }
 
 fn default_db_cred_source_manual() -> DbCredentialSource {
@@ -378,6 +392,7 @@ mod tests {
             group: Some("prod".into()),
             env_tag: Some("prod".into()),
             databases: Vec::new(),
+            egress_id: None,
         };
         let json = serde_json::to_string(&original).expect("serialize");
         let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");
@@ -402,6 +417,7 @@ mod tests {
             },
             favorite: true,
             source: DbCredentialSource::Manual,
+            egress_id: None,
         };
         let json = serde_json::to_string(&original).expect("serialize");
         let parsed: DbCredential = serde_json::from_str(&json).expect("deserialize");
@@ -429,6 +445,7 @@ mod tests {
             },
             favorite: false,
             source: DbCredentialSource::Manual,
+            egress_id: None,
         };
         let json = serde_json::to_string(&original).expect("serialize");
         assert!(
@@ -460,6 +477,7 @@ mod tests {
             source: DbCredentialSource::Detected {
                 signature: "file:///srv/app.db".into(),
             },
+            egress_id: None,
         };
         assert!(c.is_valid(), "sqlite credential with path must be valid");
         let mut bad = c.clone();
@@ -487,6 +505,7 @@ mod tests {
             },
             favorite: true,
             source: DbCredentialSource::Manual,
+            egress_id: None,
         });
         let json = serde_json::to_string(&cfg).expect("serialize");
         let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");
@@ -525,6 +544,7 @@ mod tests {
             group: None,
             env_tag: None,
             databases: Vec::new(),
+            egress_id: None,
         };
         let json = serde_json::to_string(&c).expect("serialize");
         let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");

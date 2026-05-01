@@ -189,7 +189,10 @@ pub async fn install(session: &SshSession) -> Result<RemoteSqliteInstallReport> 
     // The SQLite panel button has no version pin and no Cancel UI —
     // pass `None` for both. Match arm below stays exhaustive for
     // `Cancelled` defensively in case a future caller injects a token.
-    let report = pm::install(session, "sqlite3", false, None, None, |_| {}, None).await?;
+    // No sudo password threaded here either — the SQLite panel doesn't
+    // surface the password prompt; callers needing that go through
+    // `software_install_remote` instead.
+    let report = pm::install(session, "sqlite3", false, None, None, None, |_| {}, None).await?;
     Ok(RemoteSqliteInstallReport {
         status: match report.status {
             pm::InstallStatus::Installed => RemoteSqliteInstallStatus::Installed,

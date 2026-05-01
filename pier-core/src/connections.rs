@@ -63,6 +63,7 @@ use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
 
 use crate::credentials;
+use crate::egress::EgressProfile;
 use crate::paths;
 use crate::ssh::config::{DbCredential, DbCredentialSource, DbKind, DbPasswordStorage};
 use crate::ssh::SshConfig;
@@ -141,7 +142,13 @@ pub fn password_available(cred: &DbCredential) -> bool {
 
 /// Current on-disk schema version. Bumped on any breaking
 /// change to the JSON shape.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+///
+/// History:
+/// * v1 — initial shape: `{ version, connections }`.
+/// * v2 — added `egress_profiles` (see `crate::egress`). v1 files
+///   load forward as v2 with an empty profile list (the new field
+///   is `#[serde(default)]`).
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// Errors that can occur loading or saving the connections file.
 #[derive(Debug, thiserror::Error)]
@@ -183,6 +190,11 @@ pub struct ConnectionStore {
     /// The actual connections list, in display order.
     #[serde(default)]
     pub connections: Vec<SshConfig>,
+    /// Named egress profiles (SOCKS / HTTP / SSH-jump / WireGuard /
+    /// external-VPN) referenced from `SshConfig::egress_id`. Order
+    /// is preserved so the picker UI is stable. See `crate::egress`.
+    #[serde(default)]
+    pub egress_profiles: Vec<EgressProfile>,
 }
 
 impl Default for ConnectionStore {
@@ -190,6 +202,7 @@ impl Default for ConnectionStore {
         Self {
             version: CURRENT_SCHEMA_VERSION,
             connections: Vec::new(),
+            egress_profiles: Vec::new(),
         }
     }
 }
@@ -252,6 +265,7 @@ impl ConnectionStore {
         let stamped = Self {
             version: CURRENT_SCHEMA_VERSION,
             connections: self.connections.clone(),
+            egress_profiles: self.egress_profiles.clone(),
         };
         let json = serde_json::to_vec_pretty(&stamped)?;
 
@@ -328,6 +342,46 @@ impl ConnectionStore {
         Ok(())
     }
 
+    /// Insert or replace an egress profile by id. Returns true if
+    /// an existing entry was replaced, false if the entry is new.
+    pub fn upsert_egress(&mut self, profile: EgressProfile) -> bool {
+        if let Some(slot) = self
+            .egress_profiles
+            .iter_mut()
+            .find(|p| p.id == profile.id)
+        {
+            *slot = profile;
+            true
+        } else {
+            self.egress_profiles.push(profile);
+            false
+        }
+    }
+
+    /// Remove an egress profile by id. Any [`SshConfig::egress_id`]
+    /// that referenced it is silently set back to `None` so the
+    /// store never holds dangling references.
+    ///
+    /// Returns the removed profile, or `None` if the id was unknown.
+    pub fn remove_egress(&mut self, id: &str) -> Option<EgressProfile> {
+        let idx = self.egress_profiles.iter().position(|p| p.id == id)?;
+        let removed = self.egress_profiles.remove(idx);
+        for c in self.connections.iter_mut() {
+            if c.egress_id.as_deref() == Some(id) {
+                c.egress_id = None;
+            }
+        }
+        Some(removed)
+    }
+
+    /// Borrow the egress profile referenced by an `egress_id`, or
+    /// `None` when the id is missing or unknown. Convenience for
+    /// the connect path.
+    pub fn egress_for(&self, egress_id: Option<&str>) -> Option<&EgressProfile> {
+        let id = egress_id?;
+        self.egress_profiles.iter().find(|p| p.id == id)
+    }
+
     /// Rename a group: every connection whose `group` equals
     /// `from` gets its group set to `to` (or `None` if `to` is
     /// empty). Returns the number of connections updated.
@@ -377,6 +431,10 @@ pub struct NewDbCredential {
     pub favorite: bool,
     /// Where the credential came from (detection / manual).
     pub source: DbCredentialSource,
+    /// Optional egress profile id this credential should route
+    /// through. `None` = direct connection (the legacy path that
+    /// rides the SSH session's tunnel).
+    pub egress_id: Option<String>,
 }
 
 /// Patch for [`update_db_credential`]. Every field is
@@ -397,6 +455,10 @@ pub struct DbCredentialPatch {
     pub sqlite_path: Option<Option<String>>,
     /// Flip the favourite bit.
     pub favorite: Option<bool>,
+    /// Change which egress profile this credential routes through.
+    /// `Some(Some(id))` sets the reference; `Some(None)` clears it
+    /// (use direct); `None` leaves the existing value untouched.
+    pub egress_id: Option<Option<String>>,
 }
 
 /// Resolved credential ready to connect with. The `password`
@@ -567,6 +629,7 @@ pub fn save_db_credential(
         password: password_storage.clone(),
         favorite: input.favorite,
         source: input.source,
+        egress_id: input.egress_id.filter(|s| !s.is_empty()),
     };
     store.connections[connection_index]
         .databases
@@ -678,6 +741,9 @@ pub fn update_db_credential(
         }
         if let Some(v) = patch.sqlite_path {
             c.sqlite_path = v.filter(|s| !s.is_empty());
+        }
+        if let Some(v) = patch.egress_id {
+            c.egress_id = v.filter(|s| !s.trim().is_empty());
         }
     }
 
@@ -925,6 +991,23 @@ mod tests {
     }
 
     #[test]
+    fn v1_file_loads_forward_with_empty_egress_profiles() {
+        // A file written by an older pier-x build (schema v1, no
+        // `egress_profiles` key) must load cleanly and surface an
+        // empty profile list.
+        let path = fresh_tmp("v1");
+        let v1 = serde_json::json!({
+            "version": 1,
+            "connections": [],
+        });
+        fs::write(&path, serde_json::to_vec(&v1).unwrap()).unwrap();
+
+        let loaded = ConnectionStore::load_from_path(&path).expect("v1 must load forward");
+        assert!(loaded.egress_profiles.is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn future_schema_version_is_rejected() {
         let path = fresh_tmp("future");
         let json = serde_json::json!({
@@ -1069,6 +1152,7 @@ mod tests {
             password: DbPasswordStorage::None,
             favorite: false,
             source,
+            egress_id: None,
         }
     }
 
@@ -1089,6 +1173,7 @@ mod tests {
             sqlite_path: None,
             favorite: false,
             source,
+            egress_id: None,
         }
     }
 
@@ -1261,6 +1346,74 @@ mod tests {
         )];
         let i = input(DbKind::Mysql, "", 0, "", DbCredentialSource::Manual);
         assert_eq!(find_db_cred_upsert_slot(&dbs, &i), None);
+    }
+
+    #[test]
+    fn upsert_egress_replaces_existing_id() {
+        use crate::egress::{EgressKind, EgressProfile};
+        let mut store = ConnectionStore::new();
+        let was_replaced = store.upsert_egress(EgressProfile {
+            id: "p1".into(),
+            name: "first".into(),
+            kind: EgressKind::None,
+            dns: None,
+        });
+        assert!(!was_replaced);
+        assert_eq!(store.egress_profiles.len(), 1);
+
+        let was_replaced = store.upsert_egress(EgressProfile {
+            id: "p1".into(),
+            name: "renamed".into(),
+            kind: EgressKind::None,
+            dns: None,
+        });
+        assert!(was_replaced);
+        assert_eq!(store.egress_profiles.len(), 1);
+        assert_eq!(store.egress_profiles[0].name, "renamed");
+    }
+
+    #[test]
+    fn remove_egress_clears_dangling_references() {
+        use crate::egress::{EgressKind, EgressProfile};
+        let mut store = ConnectionStore::new();
+        store.upsert_egress(EgressProfile {
+            id: "office".into(),
+            name: "Office SOCKS".into(),
+            kind: EgressKind::Socks5 {
+                host: "10.0.0.1".into(),
+                port: 1080,
+                auth: None,
+            },
+            dns: None,
+        });
+        let mut a = make_config("a", "id-a");
+        a.egress_id = Some("office".into());
+        let mut b = make_config("b", "id-b"); // unrelated
+        b.egress_id = Some("other".into());
+        store.add(a);
+        store.add(b);
+
+        let removed = store.remove_egress("office").expect("removed");
+        assert_eq!(removed.id, "office");
+        assert_eq!(store.connections[0].egress_id, None);
+        // Reference to a different id is left alone — only the
+        // removed one is cascaded.
+        assert_eq!(store.connections[1].egress_id.as_deref(), Some("other"));
+    }
+
+    #[test]
+    fn egress_for_returns_referenced_profile() {
+        use crate::egress::{EgressKind, EgressProfile};
+        let mut store = ConnectionStore::new();
+        store.upsert_egress(EgressProfile {
+            id: "p1".into(),
+            name: "x".into(),
+            kind: EgressKind::None,
+            dns: None,
+        });
+        assert!(store.egress_for(Some("p1")).is_some());
+        assert!(store.egress_for(Some("nope")).is_none());
+        assert!(store.egress_for(None).is_none());
     }
 
     #[test]

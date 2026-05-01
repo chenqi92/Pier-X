@@ -315,16 +315,17 @@ pub async fn set_mirror(
     session: &SshSession,
     manager: PackageManager,
     mirror_id: MirrorId,
+    sudo_password: Option<&str>,
 ) -> Result<MirrorActionReport> {
     let mirror = mirror_by_id(mirror_id).ok_or_else(|| {
         SshError::InvalidConfig(format!("unknown mirror id: {}", mirror_id.as_str()))
     })?;
     match manager {
-        PackageManager::Apt => set_apt(session, mirror).await,
-        PackageManager::Dnf | PackageManager::Yum => set_dnf(session, mirror).await,
-        PackageManager::Apk => set_apk(session, mirror).await,
-        PackageManager::Pacman => set_pacman(session, mirror).await,
-        PackageManager::Zypper => set_zypper(session, mirror).await,
+        PackageManager::Apt => set_apt(session, mirror, sudo_password).await,
+        PackageManager::Dnf | PackageManager::Yum => set_dnf(session, mirror, sudo_password).await,
+        PackageManager::Apk => set_apk(session, mirror, sudo_password).await,
+        PackageManager::Pacman => set_pacman(session, mirror, sudo_password).await,
+        PackageManager::Zypper => set_zypper(session, mirror, sudo_password).await,
     }
 }
 
@@ -333,13 +334,14 @@ pub async fn set_mirror(
 pub async fn restore_mirror(
     session: &SshSession,
     manager: PackageManager,
+    sudo_password: Option<&str>,
 ) -> Result<MirrorActionReport> {
     match manager {
-        PackageManager::Apt => restore_apt(session).await,
-        PackageManager::Dnf | PackageManager::Yum => restore_dnf(session).await,
-        PackageManager::Apk => restore_apk(session).await,
-        PackageManager::Pacman => restore_pacman(session).await,
-        PackageManager::Zypper => restore_zypper(session).await,
+        PackageManager::Apt => restore_apt(session, sudo_password).await,
+        PackageManager::Dnf | PackageManager::Yum => restore_dnf(session, sudo_password).await,
+        PackageManager::Apk => restore_apk(session, sudo_password).await,
+        PackageManager::Pacman => restore_pacman(session, sudo_password).await,
+        PackageManager::Zypper => restore_zypper(session, sudo_password).await,
     }
 }
 
@@ -360,16 +362,19 @@ pub fn set_mirror_blocking(
     session: &SshSession,
     manager: PackageManager,
     mirror_id: MirrorId,
+    sudo_password: Option<&str>,
 ) -> Result<MirrorActionReport> {
-    crate::ssh::runtime::shared().block_on(set_mirror(session, manager, mirror_id))
+    crate::ssh::runtime::shared()
+        .block_on(set_mirror(session, manager, mirror_id, sudo_password))
 }
 
 /// Blocking wrapper for [`restore_mirror`].
 pub fn restore_mirror_blocking(
     session: &SshSession,
     manager: PackageManager,
+    sudo_password: Option<&str>,
 ) -> Result<MirrorActionReport> {
-    crate::ssh::runtime::shared().block_on(restore_mirror(session, manager))
+    crate::ssh::runtime::shared().block_on(restore_mirror(session, manager, sudo_password))
 }
 
 /// Per-mirror latency probe result. `latency_ms` = `None` when the
@@ -539,6 +544,7 @@ async fn detect_apt(session: &SshSession) -> MirrorState {
 async fn set_apt(
     session: &SshSession,
     mirror: &MirrorChoice,
+    sudo_password: Option<&str>,
 ) -> Result<MirrorActionReport> {
     let new_host = mirror.apt_host;
     let sed_expr = build_sed_swap(&known_apt_hosts(), new_host);
@@ -556,10 +562,13 @@ async fn set_apt(
          echo OK",
         sed = shell_single_quote(&sed_expr),
     );
-    run_root_sh(session, &inner, "apt").await
+    run_root_sh(session, &inner, "apt", sudo_password).await
 }
 
-async fn restore_apt(session: &SshSession) -> Result<MirrorActionReport> {
+async fn restore_apt(
+    session: &SshSession,
+    sudo_password: Option<&str>,
+) -> Result<MirrorActionReport> {
     let inner = format!(
         "set -e; \
          restored=0; \
@@ -568,7 +577,7 @@ async fn restore_apt(session: &SshSession) -> Result<MirrorActionReport> {
          if [ \"$restored\" -eq 0 ]; then echo 'no backup found'; exit 0; fi; \
          echo OK",
     );
-    run_root_sh(session, &inner, "apt").await
+    run_root_sh(session, &inner, "apt", sudo_password).await
 }
 
 // ── dnf ─────────────────────────────────────────────────────────────
@@ -604,6 +613,7 @@ async fn detect_dnf(session: &SshSession) -> MirrorState {
 async fn set_dnf(
     session: &SshSession,
     mirror: &MirrorChoice,
+    sudo_password: Option<&str>,
 ) -> Result<MirrorActionReport> {
     let new_host = mirror.dnf_host;
     let sed_expr = build_sed_swap(&known_dnf_hosts(), new_host);
@@ -616,10 +626,13 @@ async fn set_dnf(
          echo OK",
         sed = shell_single_quote(&sed_expr),
     );
-    run_root_sh(session, &inner, "dnf").await
+    run_root_sh(session, &inner, "dnf", sudo_password).await
 }
 
-async fn restore_dnf(session: &SshSession) -> Result<MirrorActionReport> {
+async fn restore_dnf(
+    session: &SshSession,
+    sudo_password: Option<&str>,
+) -> Result<MirrorActionReport> {
     let inner = format!(
         "set -e; \
          if [ ! -d {DNF_DIR_BAK} ]; then echo 'no backup found'; exit 0; fi; \
@@ -628,7 +641,7 @@ async fn restore_dnf(session: &SshSession) -> Result<MirrorActionReport> {
          rm -rf {DNF_DIR_BAK}; \
          echo OK",
     );
-    run_root_sh(session, &inner, "dnf").await
+    run_root_sh(session, &inner, "dnf", sudo_password).await
 }
 
 // ── apk ─────────────────────────────────────────────────────────────
@@ -656,7 +669,11 @@ async fn detect_apk(session: &SshSession) -> MirrorState {
     }
 }
 
-async fn set_apk(session: &SshSession, mirror: &MirrorChoice) -> Result<MirrorActionReport> {
+async fn set_apk(
+    session: &SshSession,
+    mirror: &MirrorChoice,
+    sudo_password: Option<&str>,
+) -> Result<MirrorActionReport> {
     let Some(new_host) = mirror.apk_host else {
         return Ok(unsupported_for(mirror.id, "apk"));
     };
@@ -668,10 +685,13 @@ async fn set_apk(session: &SshSession, mirror: &MirrorChoice) -> Result<MirrorAc
          echo OK",
         sed = shell_single_quote(&sed_expr),
     );
-    run_root_sh(session, &inner, "apk").await
+    run_root_sh(session, &inner, "apk", sudo_password).await
 }
 
-async fn restore_apk(session: &SshSession) -> Result<MirrorActionReport> {
+async fn restore_apk(
+    session: &SshSession,
+    sudo_password: Option<&str>,
+) -> Result<MirrorActionReport> {
     let inner = format!(
         "set -e; \
          if [ ! -e {APK_FILE_BAK} ]; then echo 'no backup found'; exit 0; fi; \
@@ -679,7 +699,7 @@ async fn restore_apk(session: &SshSession) -> Result<MirrorActionReport> {
          rm -f {APK_FILE_BAK}; \
          echo OK",
     );
-    run_root_sh(session, &inner, "apk").await
+    run_root_sh(session, &inner, "apk", sudo_password).await
 }
 
 // ── pacman ──────────────────────────────────────────────────────────
@@ -716,7 +736,11 @@ async fn detect_pacman(session: &SshSession) -> MirrorState {
     }
 }
 
-async fn set_pacman(session: &SshSession, mirror: &MirrorChoice) -> Result<MirrorActionReport> {
+async fn set_pacman(
+    session: &SshSession,
+    mirror: &MirrorChoice,
+    sudo_password: Option<&str>,
+) -> Result<MirrorActionReport> {
     let Some(url) = mirror.pacman_url else {
         return Ok(unsupported_for(mirror.id, "pacman"));
     };
@@ -733,10 +757,13 @@ async fn set_pacman(session: &SshSession, mirror: &MirrorChoice) -> Result<Mirro
          echo OK",
         line = shell_single_quote(&new_line),
     );
-    run_root_sh(session, &inner, "pacman").await
+    run_root_sh(session, &inner, "pacman", sudo_password).await
 }
 
-async fn restore_pacman(session: &SshSession) -> Result<MirrorActionReport> {
+async fn restore_pacman(
+    session: &SshSession,
+    sudo_password: Option<&str>,
+) -> Result<MirrorActionReport> {
     let inner = format!(
         "set -e; \
          if [ ! -e {PACMAN_FILE_BAK} ]; then echo 'no backup found'; exit 0; fi; \
@@ -744,7 +771,7 @@ async fn restore_pacman(session: &SshSession) -> Result<MirrorActionReport> {
          rm -f {PACMAN_FILE_BAK}; \
          echo OK",
     );
-    run_root_sh(session, &inner, "pacman").await
+    run_root_sh(session, &inner, "pacman", sudo_password).await
 }
 
 // ── zypper ──────────────────────────────────────────────────────────
@@ -774,7 +801,11 @@ async fn detect_zypper(session: &SshSession) -> MirrorState {
     }
 }
 
-async fn set_zypper(session: &SshSession, mirror: &MirrorChoice) -> Result<MirrorActionReport> {
+async fn set_zypper(
+    session: &SshSession,
+    mirror: &MirrorChoice,
+    sudo_password: Option<&str>,
+) -> Result<MirrorActionReport> {
     let Some(new_host) = mirror.zypper_host else {
         return Ok(unsupported_for(mirror.id, "zypper"));
     };
@@ -788,10 +819,13 @@ async fn set_zypper(session: &SshSession, mirror: &MirrorChoice) -> Result<Mirro
          echo OK",
         sed = shell_single_quote(&sed_expr),
     );
-    run_root_sh(session, &inner, "zypper").await
+    run_root_sh(session, &inner, "zypper", sudo_password).await
 }
 
-async fn restore_zypper(session: &SshSession) -> Result<MirrorActionReport> {
+async fn restore_zypper(
+    session: &SshSession,
+    sudo_password: Option<&str>,
+) -> Result<MirrorActionReport> {
     let inner = format!(
         "set -e; \
          if [ ! -d {ZYPPER_DIR_BAK} ]; then echo 'no backup found'; exit 0; fi; \
@@ -800,7 +834,7 @@ async fn restore_zypper(session: &SshSession) -> Result<MirrorActionReport> {
          rm -rf {ZYPPER_DIR_BAK}; \
          echo OK",
     );
-    run_root_sh(session, &inner, "zypper").await
+    run_root_sh(session, &inner, "zypper", sudo_password).await
 }
 
 /// Build a "this mirror doesn't carry that distro" report.
@@ -822,22 +856,24 @@ fn unsupported_for(_id: MirrorId, manager_name: &str) -> MirrorActionReport {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-/// Run `inner` under `sh -c`, prefixed with `sudo -n` when the
-/// session isn't root. Returns a structured report; SSH-level
-/// failure surfaces as `Err`.
+/// Run `inner` under `sh -c`, sudo-prefixed when the session isn't
+/// root. Returns a structured report; SSH-level failure surfaces as
+/// `Err`. When `sudo_password` is `Some`, the inner command runs
+/// under `printf | sudo -S`; otherwise it stays on the legacy
+/// `sudo -n` non-interactive path.
 async fn run_root_sh(
     session: &SshSession,
     inner: &str,
     manager_name: &str,
+    sudo_password: Option<&str>,
 ) -> Result<MirrorActionReport> {
+    use super::package_manager::{sanitize_sudo_output, wrap_sudo_sh, SudoCommand};
     let env = super::package_manager::probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
-    let command = format!(
-        "{prefix}sh -c {} 2>&1",
-        shell_single_quote(inner)
-    );
+    let SudoCommand { full: command, display: command_display } =
+        wrap_sudo_sh(env.is_root, inner, sudo_password);
     let (exit_code, stdout) = session.exec_command(&command).await?;
-    let output_tail = stdout
+    let stdout_clean = sanitize_sudo_output(&stdout, sudo_password);
+    let output_tail = stdout_clean
         .lines()
         .rev()
         .take(40)
@@ -869,7 +905,7 @@ async fn run_root_sh(
     Ok(MirrorActionReport {
         status,
         package_manager: manager_name.to_string(),
-        command,
+        command: command_display,
         exit_code,
         output_tail,
         state_after,

@@ -1,7 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { CircleDot, GitBranch, Loader2, Terminal } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CircleDot, GitBranch, Loader2, Network, Terminal } from "lucide-react";
 import type { RightTool, TabState } from "../lib/types";
+import { effectiveSshTarget } from "../lib/types";
+import { buildEgressChain, describeHop, formatChain } from "../lib/egressChain";
 import { useI18n } from "../i18n/useI18n";
+import { useConnectionStore } from "../stores/useConnectionStore";
+import { useEgressStore } from "../stores/useEgressStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useStatusStore } from "../stores/useStatusStore";
 import { useTaskStore } from "../stores/useTaskStore";
@@ -20,6 +24,53 @@ function rightToolLabel(activeTool: RightTool | undefined, tab: TabState | null 
 export default function StatusBar({ version, coreInfo, activeTab, activeTool }: Props) {
   const { t } = useI18n();
   const showPerf = useSettingsStore((s) => s.performanceOverlay);
+  const egressProfiles = useEgressStore((s) => s.profiles);
+  const refreshEgress = useEgressStore((s) => s.refresh);
+  const connections = useConnectionStore((s) => s.connections);
+
+  // The egress store is dialog-driven elsewhere (NewConnectionDialog,
+  // EgressProfilesDialog). Pull once on mount so the badge has data
+  // even when the user never opened those dialogs in this session.
+  useEffect(() => {
+    if (egressProfiles.length === 0) {
+      void refreshEgress();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const egressBadge = useMemo(() => {
+    if (!activeTab) return null;
+    const sshTarget = effectiveSshTarget(activeTab);
+    if (!sshTarget) return null;
+    const conn = connections.find((c) => c.index === sshTarget.savedConnectionIndex);
+    if (!conn) return null;
+
+    // Active DB credential takes precedence over the SSH connection's
+    // own egress: when a credential carries an egressId the DB connect
+    // path skips the parent SSH tunnel and dials directly through the
+    // credential's profile (see useDbCredentialFlow.ensureConnectionTarget).
+    const credId =
+      activeTab.pgActiveCredentialId ??
+      activeTab.mysqlActiveCredentialId ??
+      activeTab.redisActiveCredentialId ??
+      null;
+    let rootEgressId: string | null | undefined = conn.egressId;
+    let targetLabel = `${sshTarget.user}@${sshTarget.host}:${sshTarget.port}`;
+    if (credId) {
+      const cred = (conn.databases ?? []).find((d) => d.id === credId);
+      if (cred?.egressId) {
+        rootEgressId = cred.egressId;
+        targetLabel = `${cred.host}:${cred.port}`;
+      }
+    }
+    const hops = buildEgressChain(rootEgressId, egressProfiles, connections);
+    if (hops.length === 0) return null;
+    return {
+      compact: formatChain(hops, targetLabel),
+      tooltip: hops.map(describeHop).join("\n") + `\n→ ${targetLabel}`,
+    };
+  }, [activeTab, connections, egressProfiles]);
+
   const branch = useStatusStore((s) => s.branch);
   const ahead = useStatusStore((s) => s.ahead);
   const behind = useStatusStore((s) => s.behind);
@@ -81,6 +132,12 @@ export default function StatusBar({ version, coreInfo, activeTab, activeTool }: 
       </span>
       {sizeLabel ? (
         <span className="sb-item text-muted">{sizeLabel}</span>
+      ) : null}
+      {egressBadge ? (
+        <span className="sb-item accent" title={egressBadge.tooltip}>
+          <Network size={10} />
+          <span>{egressBadge.compact}</span>
+        </span>
       ) : null}
       <span className="sb-spacer" />
       {tasks.length > 0 && (

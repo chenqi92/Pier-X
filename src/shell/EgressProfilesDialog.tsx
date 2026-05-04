@@ -1,11 +1,17 @@
-import { Plus, Shield, Trash2, X, Zap } from "lucide-react";
+import { ClipboardPaste, Plus, Shield, Trash2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import IconButton from "../components/IconButton";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
-import { egressProfileTest, type EgressProbeResult } from "../lib/commands";
+import { readClipboardText } from "../lib/clipboard";
+import {
+  egressProfileTest,
+  egressWgConfSave,
+  type EgressProbeResult,
+} from "../lib/commands";
+import { matchJumpConnection, parseEgressClipboard } from "../lib/egressImport";
 import type { EgressProfile } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useEgressStore } from "../stores/useEgressStore";
@@ -337,6 +343,100 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
       });
     } finally {
       setProbing(false);
+    }
+  }
+
+  /// Read the clipboard, sniff a wg-quick conf / SOCKS or HTTP proxy
+  /// URL / OpenSSH ProxyJump, and seed `draft` with the parsed
+  /// fields. WireGuard configs are written to the app-managed slot
+  /// (`<data_dir>/egress/<id>.conf`) right away because that's the
+  /// path `vpn_subprocess::plan_for` falls back to when `confPath`
+  /// is empty — saving the profile separately would otherwise
+  /// dead-end at `start VPN` with "config missing".
+  async function handleImportFromClipboard() {
+    if (busy) return;
+    setError("");
+    const raw = await readClipboardText();
+    if (!raw.trim()) {
+      setError(t("Clipboard is empty."));
+      return;
+    }
+    const parsed = parseEgressClipboard(raw);
+    if (!parsed) {
+      setError(
+        t(
+          "Couldn't recognise a SOCKS5 / HTTP proxy URL, OpenSSH ProxyJump line, or wg-quick .conf in the clipboard.",
+        ),
+      );
+      return;
+    }
+    const baseDraft: Draft = { ...emptyDraft(), name: draft.name || "" };
+    if (parsed.kind === "socks5" || parsed.kind === "http") {
+      const next: Draft = {
+        ...baseDraft,
+        kind: parsed.kind,
+        host: parsed.patch.host,
+        port: String(parsed.patch.port),
+        useAuth: parsed.patch.useAuth,
+        auth: {
+          user: parsed.patch.authUser,
+          password: parsed.patch.authPassword,
+          dirty: parsed.patch.useAuth,
+        },
+        name: baseDraft.name || `${parsed.kind}-${parsed.patch.host}`,
+      };
+      setSelectedId(null);
+      setDraft(next);
+      setError("");
+      return;
+    }
+    if (parsed.kind === "ssh_jump") {
+      const matched = matchJumpConnection(parsed.jumpHint, connections);
+      const next: Draft = {
+        ...baseDraft,
+        kind: "ssh_jump",
+        viaConnection: matched ?? "",
+        name:
+          baseDraft.name ||
+          `jump-${parsed.jumpHint.user ? parsed.jumpHint.user + "-" : ""}${parsed.jumpHint.host}`,
+      };
+      setSelectedId(null);
+      setDraft(next);
+      setError(
+        matched
+          ? ""
+          : t(
+              "No saved SSH connection matches {hint} — pick one from the dropdown or save it first, then re-import.",
+              {
+                hint: `${parsed.jumpHint.user ? parsed.jumpHint.user + "@" : ""}${parsed.jumpHint.host}:${parsed.jumpHint.port}`,
+              },
+            ),
+      );
+      return;
+    }
+    if (parsed.kind === "wireguard") {
+      const next: Draft = {
+        ...baseDraft,
+        kind: "wireguard",
+        wgConfPath: "",
+        name: baseDraft.name || `wg-${baseDraft.id.slice(-6)}`,
+      };
+      setBusy(true);
+      try {
+        await egressWgConfSave(next.id, parsed.wgConf);
+        setSelectedId(null);
+        setDraft(next);
+        setError(
+          t(
+            "Imported wg-quick conf into the managed slot. Save the profile, then click Start VPN.",
+          ),
+        );
+      } catch (e) {
+        setError(formatError(e));
+      } finally {
+        setBusy(false);
+      }
+      return;
     }
   }
 
@@ -689,6 +789,18 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
           </div>
         </div>
         <div className="dlg-foot">
+          <button
+            type="button"
+            className="gb-btn"
+            disabled={busy}
+            onClick={() => void handleImportFromClipboard()}
+            title={t(
+              "Detect a SOCKS5/HTTP proxy URL, OpenSSH ProxyJump string, or wg-quick .conf in the clipboard and pre-fill the form.",
+            )}
+          >
+            <ClipboardPaste size={12} />
+            {t("Import from clipboard")}
+          </button>
           <button
             type="button"
             className="gb-btn"

@@ -1,4 +1,14 @@
 export const zhExtra: Record<string, string> = {
+  "Import from clipboard": "从剪贴板导入",
+  "Detect a SOCKS5/HTTP proxy URL, OpenSSH ProxyJump string, or wg-quick .conf in the clipboard and pre-fill the form.":
+    "识别剪贴板中的 SOCKS5/HTTP 代理 URL、OpenSSH ProxyJump 串或 wg-quick .conf，并预填表单。",
+  "Clipboard is empty.": "剪贴板为空。",
+  "Couldn't recognise a SOCKS5 / HTTP proxy URL, OpenSSH ProxyJump line, or wg-quick .conf in the clipboard.":
+    "剪贴板内容未匹配 SOCKS5 / HTTP 代理 URL、OpenSSH ProxyJump 行或 wg-quick .conf。",
+  "No saved SSH connection matches {hint} — pick one from the dropdown or save it first, then re-import.":
+    "未找到匹配 {hint} 的已保存 SSH 连接 —— 请从下拉框选择，或先保存后再导入。",
+  "Imported wg-quick conf into the managed slot. Save the profile, then click Start VPN.":
+    "已将 wg-quick conf 写入受管路径。保存 profile 后点击「Start VPN」。",
   "(no command)": "（无命令）",
   "(no file selected)": "（未选择文件）",
   "(no preset)": "（无预设）",

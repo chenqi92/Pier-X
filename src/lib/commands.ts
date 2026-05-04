@@ -539,6 +539,14 @@ export const egressProfileSave = (profile: EgressProfile) =>
 export const egressProfileDelete = (id: string) =>
   invoke<void>("egress_profile_delete", { id });
 
+/** Write a wg-quick `.conf` blob into the app-managed slot for the
+ *  given profile id (`<data_dir>/egress/<id>.conf`). The path is
+ *  what `vpn_subprocess::plan_for` falls back to when a wireguard
+ *  profile's `confPath` is empty. Returns the absolute path the
+ *  blob landed at. */
+export const egressWgConfSave = (profileId: string, conf: string) =>
+  invoke<string>("egress_wg_conf_save", { profileId, conf });
+
 /** Persist a username/password pair for a SOCKS5 / HTTP CONNECT
  *  profile. `credentialId` is conventionally `pier-x.egress.<profile-id>`. */
 export const egressSetBasicAuth = (

@@ -3781,6 +3781,35 @@ fn egress_profile_save(profile: EgressProfile) -> Result<(), String> {
     store.save_default().map_err(|error| error.to_string())
 }
 
+/// Write a wg-quick `.conf` blob into the app-managed slot for the
+/// given profile id (`<data_dir>/egress/<id>.conf`). Used by the
+/// clipboard-import flow so a pasted WireGuard config lands at the
+/// path `vpn_subprocess::plan_for` falls back to when the profile's
+/// `conf_path` is empty. Created with restrictive perms because the
+/// file holds the WireGuard private key.
+#[tauri::command]
+fn egress_wg_conf_save(profile_id: String, conf: String) -> Result<String, String> {
+    let id = profile_id.trim();
+    if id.is_empty() {
+        return Err(String::from("Egress profile id must not be empty."));
+    }
+    if id.contains(['/', '\\', ':', '\0']) || id == "." || id == ".." {
+        return Err(String::from("Invalid egress profile id."));
+    }
+    let base = pier_core::paths::data_dir()
+        .ok_or_else(|| String::from("no usable application data directory"))?;
+    let dir = base.join("egress");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create egress dir: {e}"))?;
+    let path = dir.join(format!("{id}.conf"));
+    std::fs::write(&path, conf.as_bytes()).map_err(|e| format!("write conf: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(path.display().to_string())
+}
+
 /// Remove an egress profile by id. Connections that referenced it
 /// have their `egress_id` cleared automatically (the store cascades
 /// the removal). Best-effort credential cleanup follows, plus any
@@ -14092,6 +14121,7 @@ pub fn run() {
             egress_profile_list,
             egress_profile_save,
             egress_profile_delete,
+            egress_wg_conf_save,
             egress_set_basic_auth,
             egress_clear_credential,
             egress_vpn_start,

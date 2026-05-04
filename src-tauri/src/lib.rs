@@ -29,7 +29,8 @@ use pier_core::ssh::sftp_parallel::{
     upload_chunked_parallel_blocking, upload_tree_parallel_blocking, ParallelOpts,
 };
 use pier_core::ssh::{
-    AuthMethod, ExecStream, HostKeyVerifier, SftpClient, SshConfig, SshSession, Tunnel,
+    AuthMethod, ExecStream, HostKeyDecision, HostKeyPromptCb, HostKeyPromptRequest,
+    HostKeyVerifier, SftpClient, SshConfig, SshSession, Tunnel,
 };
 use pier_core::terminal::{Cell, Color, NotifyEvent, NotifyFn, PierTerminal};
 use serde::{Deserialize, Serialize};
@@ -38,7 +39,7 @@ use std::ffi::c_void;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 use tokio_util::sync::CancellationToken;
@@ -2476,7 +2477,7 @@ impl SshJumpContext {
         };
         let session = SshSession::connect_with_egress_ctx(
             &cfg,
-            HostKeyVerifier::default(),
+            host_key_verifier(),
             jump_egress.as_ref(),
             Some(self as &dyn pier_core::egress::EgressContext),
         )
@@ -2507,7 +2508,7 @@ fn ssh_connect_with_egress(config: &SshConfig) -> Result<SshSession, String> {
     let ctx = SshJumpContext::new();
     SshSession::connect_with_egress_ctx_blocking(
         config,
-        HostKeyVerifier::default(),
+        host_key_verifier(),
         profile.as_ref(),
         Some(&ctx as &dyn pier_core::egress::EgressContext),
     )
@@ -4121,6 +4122,98 @@ fn ssh_known_hosts_remove(line: usize) -> Result<(), String> {
     let path = pier_core::ssh::default_known_hosts_path()
         .ok_or_else(|| String::from("home directory is not resolvable"))?;
     pier_core::ssh::remove_known_host_line(&path, line).map_err(|e| e.to_string())
+}
+
+/// Process-global state for the interactive host-key prompt
+/// (M3b). The setup hook installs an `AppHandle` here so the
+/// callback can emit events; pending prompts live in a map
+/// keyed by the id we hand to the frontend, and the
+/// `ssh_host_key_decide` command pops the matching oneshot
+/// sender to deliver the user's answer.
+struct HostKeyPromptState {
+    app: tauri::AppHandle,
+    next_id: AtomicU64,
+    pending: Mutex<HashMap<String, tokio::sync::oneshot::Sender<HostKeyDecision>>>,
+}
+
+static HOST_KEY_PROMPT: OnceLock<Arc<HostKeyPromptState>> = OnceLock::new();
+
+/// Build a [`HostKeyVerifier`] that routes unknown / changed
+/// hosts through the React "trust this host?" dialog when the
+/// app handle is available, falling back to the silent
+/// accept-new TOFU path otherwise (e.g. before the setup hook
+/// has run, or from a unit test that loads this module).
+fn host_key_verifier() -> HostKeyVerifier {
+    let base = HostKeyVerifier::default();
+    match HOST_KEY_PROMPT.get().cloned() {
+        Some(state) => {
+            let cb: HostKeyPromptCb = Arc::new(move |req: HostKeyPromptRequest| {
+                let state = state.clone();
+                Box::pin(async move {
+                    let id = format!(
+                        "khp-{}",
+                        state.next_id.fetch_add(1, Ordering::Relaxed),
+                    );
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    if let Ok(mut map) = state.pending.lock() {
+                        map.insert(id.clone(), tx);
+                    } else {
+                        return HostKeyDecision::Reject;
+                    }
+
+                    let payload = serde_json::json!({
+                        "id": id,
+                        "request": req,
+                    });
+                    if state.app.emit("ssh:host-key-prompt", &payload).is_err() {
+                        // No webview to dispatch to (early-exit
+                        // race during shutdown). Fail closed.
+                        if let Ok(mut map) = state.pending.lock() {
+                            map.remove(&id);
+                        }
+                        return HostKeyDecision::Reject;
+                    }
+
+                    // 3-minute ceiling so a forgotten dialog
+                    // can't pin SSH worker threads forever.
+                    match tokio::time::timeout(Duration::from_secs(180), rx).await {
+                        Ok(Ok(decision)) => decision,
+                        _ => {
+                            if let Ok(mut map) = state.pending.lock() {
+                                map.remove(&id);
+                            }
+                            HostKeyDecision::Reject
+                        }
+                    }
+                })
+            });
+            base.with_prompt(cb)
+        }
+        None => base,
+    }
+}
+
+#[tauri::command]
+fn ssh_host_key_decide(prompt_id: String, accept: bool) -> Result<(), String> {
+    let state = HOST_KEY_PROMPT
+        .get()
+        .ok_or_else(|| String::from("host-key prompt state not initialised"))?;
+    let mut map = state
+        .pending
+        .lock()
+        .map_err(|_| String::from("host-key prompt state poisoned"))?;
+    if let Some(tx) = map.remove(&prompt_id) {
+        let decision = if accept {
+            HostKeyDecision::Accept
+        } else {
+            HostKeyDecision::Reject
+        };
+        let _ = tx.send(decision);
+    }
+    // Silent OK on unknown prompt_id — the prompt may have
+    // already timed out by the time the user answered, and
+    // the caller has nothing useful to do with that fact.
+    Ok(())
 }
 
 /// Background pre-warm for the shared SSH session cache.
@@ -13699,6 +13792,17 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
+            // Capture an AppHandle for the host-key prompt
+            // callback. Anything constructed before this point
+            // would have used the silent-TOFU verifier; the
+            // setup hook runs before any command can fire so
+            // there's no race.
+            let _ = HOST_KEY_PROMPT.set(Arc::new(HostKeyPromptState {
+                app: app.handle().clone(),
+                next_id: AtomicU64::new(1),
+                pending: Mutex::new(HashMap::new()),
+            }));
+
             // Install the shared file logger before we do anything else —
             // the rest of this hook (and every subsequent command) can
             // then emit events that survive a crash. Truncates the file
@@ -13949,6 +14053,7 @@ pub fn run() {
             ssh_tunnel_close,
             ssh_known_hosts_list,
             ssh_known_hosts_remove,
+            ssh_host_key_decide,
             ssh_session_prewarm,
             terminal_create,
             terminal_create_ssh,

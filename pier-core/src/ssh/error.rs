@@ -45,6 +45,17 @@ pub enum SshError {
         fingerprint: String,
     },
 
+    /// The user explicitly declined the "trust this host?" /
+    /// "host key changed" dialog and the connection was aborted.
+    /// Distinct from `HostKeyMismatch` so the UI can phrase the
+    /// failure as "you rejected" rather than re-showing the
+    /// MITM warning.
+    #[error("ssh host key rejected by user for {host}")]
+    HostKeyRejected {
+        /// Hostname the user declined to trust.
+        host: String,
+    },
+
     /// The channel we were reading from or writing to has closed.
     /// Almost always means the remote shell exited.
     #[error("ssh channel closed")]

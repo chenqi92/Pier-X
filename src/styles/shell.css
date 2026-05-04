@@ -8405,6 +8405,27 @@ button,
   align-items: center;
   font-size: var(--ui-fs-sm);
 }
+
+/* Host-key prompt (M3b) ----------------------------------------- */
+.dlg--host-key {
+  width: min(520px, 92vw);
+}
+.host-key-prompt__fp {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.host-key-prompt__fp code {
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  font-size: var(--ui-fs-sm);
+  word-break: break-all;
+}
 .sw-panel__bundle-card-progress {
   position: relative;
   margin-top: var(--sp-1);

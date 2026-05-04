@@ -71,7 +71,8 @@ pub use db_detect::{
 pub use error::SshError;
 pub use exec_stream::{ExecEvent, ExecStream, EXIT_UNKNOWN};
 pub use known_hosts::{
-    default_known_hosts_path, list_known_hosts, remove_known_host_line, HostKeyVerifier,
+    default_known_hosts_path, list_known_hosts, remove_known_host_line, HostKeyDecision,
+    HostKeyPromptCb, HostKeyPromptKind, HostKeyPromptRequest, HostKeySource, HostKeyVerifier,
     KnownHostEntry,
 };
 pub use service_detector::{detect_all, detect_all_blocking, DetectedService, ServiceStatus};

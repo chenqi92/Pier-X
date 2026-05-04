@@ -53,6 +53,7 @@ import type { MenuDef } from "./components/TitlebarMenu";
 import TerminalPanel from "./panels/TerminalPanel";
 import HostsHealthPanel from "./panels/HostsHealthPanel";
 import CommandPalette, { type PaletteCommand } from "./shell/CommandPalette";
+import HostKeyPromptDialog from "./shell/HostKeyPromptDialog";
 import NewConnectionDialog from "./shell/NewConnectionDialog";
 import TopBar from "./shell/TopBar";
 import BroadcastDialog from "./shell/BroadcastDialog";
@@ -1049,6 +1050,7 @@ function App() {
             open={portForwardOpen}
             onClose={() => setPortForwardOpen(false)}
           />
+          <HostKeyPromptDialog />
           <TaskTray />
           <ToastStack />
         </div>

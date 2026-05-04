@@ -1,57 +1,99 @@
 //! Host key verification.
 //!
-//! ## M3c4: real OpenSSH known_hosts support
+//! ## M3b — interactive TOFU + mismatch prompts
 //!
-//! M3a shipped an `AcceptAllLogFingerprint` placeholder that
-//! accepted every server key it saw. M3c4 replaces that with a
-//! real `OpenSshKnownHosts` variant that reads an OpenSSH-format
-//! `known_hosts` file, parses host→key pairs via russh's
-//! `check_known_hosts_path` helper, and:
+//! Earlier milestones shipped `OpenSshKnownHosts` with silent
+//! `accept-new` (auto-learn) semantics: any host not pinned in
+//! the file was learned without asking, mismatches always blocked.
+//! M3b adds an optional `prompt` callback: when set, unknown
+//! hosts and changed-key hosts both go through the user before
+//! the connection completes. The callback returns
+//! [`HostKeyDecision::Accept`] (learn / replace + accept) or
+//! [`HostKeyDecision::Reject`] (block).
 //!
-//!  * accepts keys that match a pinned entry,
-//!  * rejects keys that conflict with a pinned entry
-//!    (russh returns `Error::KeyChanged { line }`, we surface it
-//!    as [`super::SshError::HostKeyMismatch`]),
-//!  * "trusts on first use" any host that has no pinned entry
-//!    yet — we append the key to the known_hosts file via
-//!    russh's `learn_known_hosts_path`. This matches the
-//!    OpenSSH `StrictHostKeyChecking=accept-new` behaviour,
-//!    which is the most ergonomic safe-by-default setting for
-//!    an IDE-style SSH client.
-//!
-//! The default variant also goes through the real verifier
-//! now (pointing at `~/.ssh/known_hosts`). `AcceptAllLogFingerprint`
-//! stays in the enum for tests and for users who explicitly
-//! want to bypass verification.
+//! When `prompt` is unset (the default for tests + sync code
+//! paths), behaviour is exactly the pre-M3b silent TOFU — kept
+//! for backward compatibility and to avoid making every test
+//! drag in an async runtime.
 //!
 //! ## What does NOT live here
 //!
-//! Any shell prompt. A "trust this new host?" interaction would
-//! be the safest-by-default UX, but it requires a round-trip
-//! through the desktop command/event layer from inside an async
-//! russh handler, which is non-trivial. M3c5 or later can add a
-//! "paranoid mode" verifier that holds up the handshake on a
-//! channel and waits for a user answer; M3c4 ships
-//! accept-on-first-use which is the widely-accepted compromise.
+//! The dialog itself. The Tauri layer constructs a callback that
+//! emits an event to the React frontend, awaits a oneshot
+//! response, and returns the decision — `pier-core` stays
+//! UI-agnostic.
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use russh::keys::ssh_key::PublicKey;
 
 use crate::paths;
 
-/// How an SSH session decides whether to trust a server's host key.
+/// Decision the prompt callback hands back. `Accept` causes a
+/// learn (for unknown hosts) or a replace-and-learn (for
+/// changed hosts); `Reject` causes the connect to fail with
+/// the appropriate typed error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostKeyDecision {
+    /// Trust this host key. For unknown hosts the verifier
+    /// learns the key (TOFU); for changed hosts it removes the
+    /// stale pin and writes the new one.
+    Accept,
+    /// Refuse this host key. The connect fails with
+    /// [`super::SshError::HostKeyRejected`] (unknown) or
+    /// [`super::SshError::HostKeyMismatch`] (changed).
+    Reject,
+}
+
+/// What the verifier wants the user to decide. Carried into
+/// the prompt callback so the UI can render the right copy
+/// ("trust this new host?" vs "host key changed!").
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostKeyPromptRequest {
+    /// Hostname being dialed.
+    pub host: String,
+    /// Port being dialed.
+    pub port: u16,
+    /// SSH key algorithm name (e.g. `ssh-ed25519`).
+    pub key_type: String,
+    /// SHA-256 fingerprint of the server-presented key
+    /// (`SHA256:abcd…`).
+    pub fingerprint: String,
+    /// Why we're asking.
+    pub kind: HostKeyPromptKind,
+}
+
+/// Reason for the prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HostKeyPromptKind {
+    /// No existing pin for this host — TOFU first contact.
+    Unknown,
+    /// The pinned key for this host doesn't match the
+    /// presented one.
+    Changed,
+}
+
+/// Async callback the verifier consults for unknown / changed
+/// hosts. The Tauri layer wires this to a "trust this host?"
+/// dialog; tests pass `None` and fall back to silent TOFU.
+pub type HostKeyPromptCb = Arc<
+    dyn Fn(HostKeyPromptRequest) -> Pin<Box<dyn Future<Output = HostKeyDecision> + Send + 'static>>
+        + Send
+        + Sync,
+>;
+
+/// Where the verifier reads pins from.
 #[derive(Debug, Clone)]
-pub enum HostKeyVerifier {
-    /// Parse an OpenSSH-format known_hosts file, match server
-    /// keys against it, and append new keys on first connect
-    /// (accept-new / trust-on-first-use semantics).
-    ///
-    /// This is the default constructed by [`HostKeyVerifier::default`]
-    /// pointing at `~/.ssh/known_hosts`.
+pub enum HostKeySource {
+    /// Parse an OpenSSH-format known_hosts file. `path` is
+    /// created on first write if it does not yet exist.
     OpenSshKnownHosts {
-        /// Absolute path to the known_hosts file. Created on
-        /// first write if it does not yet exist.
+        /// Absolute path to the known_hosts file.
         path: PathBuf,
     },
 
@@ -61,84 +103,243 @@ pub enum HostKeyVerifier {
     AcceptAllLogFingerprint,
 }
 
+/// How an SSH session decides whether to trust a server's host
+/// key. Cheap to clone — the optional prompt callback is an
+/// `Arc`.
+#[derive(Clone)]
+pub struct HostKeyVerifier {
+    /// Where the pinned keys live (or `AcceptAll` for the
+    /// test/escape-hatch variant).
+    pub source: HostKeySource,
+    /// Optional async callback. Consulted by `verify_async`
+    /// for unknown / changed hosts; left unset, the verifier
+    /// silently learns first-contact keys and rejects
+    /// mismatches.
+    pub prompt: Option<HostKeyPromptCb>,
+}
+
+impl std::fmt::Debug for HostKeyVerifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostKeyVerifier")
+            .field("source", &self.source)
+            .field("prompt", &self.prompt.as_ref().map(|_| "<fn>"))
+            .finish()
+    }
+}
+
 impl HostKeyVerifier {
-    /// Verify a server-presented key for the given host. Returns
-    /// `Ok(true)` to accept, `Ok(false)` to reject, `Err(_)` on
-    /// parse / I/O failure reading the known_hosts file.
-    ///
-    /// On an unknown host (no existing pinned entry) with the
-    /// `OpenSshKnownHosts` variant, this ALSO appends the new
-    /// key to the file — that's the accept-on-first-use
-    /// behaviour. Callers that want stricter behaviour should
-    /// wrap this in a higher-level check.
+    /// Construct an `OpenSshKnownHosts` verifier with no prompt
+    /// — silent TOFU on unknown hosts, hard error on mismatch.
+    pub fn open_ssh_known_hosts(path: PathBuf) -> Self {
+        Self {
+            source: HostKeySource::OpenSshKnownHosts { path },
+            prompt: None,
+        }
+    }
+
+    /// Construct the test/escape-hatch verifier that accepts
+    /// any key.
+    pub fn accept_all_log_fingerprint() -> Self {
+        Self {
+            source: HostKeySource::AcceptAllLogFingerprint,
+            prompt: None,
+        }
+    }
+
+    /// Attach a prompt callback. When set, unknown hosts and
+    /// changed-key hosts both round-trip to the user before
+    /// the connection proceeds.
+    pub fn with_prompt(mut self, prompt: HostKeyPromptCb) -> Self {
+        self.prompt = Some(prompt);
+        self
+    }
+
+    /// Sync verifier — silent TOFU on unknown, hard error on
+    /// mismatch. The prompt callback is not consulted (sync code
+    /// has no runtime to await on). Used by tests and by any
+    /// caller that explicitly wants the legacy `accept-new`
+    /// behaviour.
     pub fn verify(&self, host: &str, port: u16, key: &PublicKey) -> Result<bool, VerifyError> {
-        match self {
-            Self::AcceptAllLogFingerprint => {
-                let fingerprint = key.fingerprint(russh::keys::HashAlg::Sha256);
-                log::info!(
-                    "ssh host key for {host}:{port} (AcceptAll, M3a verifier): {fingerprint}",
-                );
+        match self.preflight(host, port, key)? {
+            Decision::Accept => Ok(true),
+            Decision::NeedsLearn => {
+                self.learn(host, port, key)?;
                 Ok(true)
             }
-            Self::OpenSshKnownHosts { path } => {
+            Decision::NeedsReplace { line, fingerprint } => Err(VerifyError::Mismatch {
+                host: host.to_string(),
+                fingerprint,
+                line,
+            }),
+        }
+    }
+
+    /// Async verifier — consults the prompt callback (if set)
+    /// before learning a new host or replacing a changed pin.
+    /// Used by [`super::session::SshSession`] from inside the
+    /// russh client handler.
+    pub async fn verify_async(
+        &self,
+        host: &str,
+        port: u16,
+        key: &PublicKey,
+    ) -> Result<bool, VerifyError> {
+        let outcome = self.preflight(host, port, key)?;
+        match outcome {
+            Decision::Accept => Ok(true),
+            Decision::NeedsLearn => match &self.prompt {
+                Some(prompt) => {
+                    let req = HostKeyPromptRequest {
+                        host: host.to_string(),
+                        port,
+                        key_type: key.algorithm().to_string(),
+                        fingerprint: format!("{}", key.fingerprint(russh::keys::HashAlg::Sha256)),
+                        kind: HostKeyPromptKind::Unknown,
+                    };
+                    match prompt(req).await {
+                        HostKeyDecision::Accept => {
+                            self.learn(host, port, key)?;
+                            Ok(true)
+                        }
+                        HostKeyDecision::Reject => Err(VerifyError::UserRejected {
+                            host: host.to_string(),
+                            kind: HostKeyPromptKind::Unknown,
+                        }),
+                    }
+                }
+                None => {
+                    // Legacy: silent TOFU.
+                    self.learn(host, port, key)?;
+                    Ok(true)
+                }
+            },
+            Decision::NeedsReplace { line, fingerprint } => match &self.prompt {
+                Some(prompt) => {
+                    let req = HostKeyPromptRequest {
+                        host: host.to_string(),
+                        port,
+                        key_type: key.algorithm().to_string(),
+                        fingerprint: fingerprint.clone(),
+                        kind: HostKeyPromptKind::Changed,
+                    };
+                    match prompt(req).await {
+                        HostKeyDecision::Accept => {
+                            // Drop the conflicting pin first, then
+                            // append the new one. Subsequent
+                            // verifications match the new key by
+                            // value; the line-number shift from
+                            // removing the old line is harmless.
+                            self.replace(host, port, key, line)?;
+                            Ok(true)
+                        }
+                        HostKeyDecision::Reject => Err(VerifyError::Mismatch {
+                            host: host.to_string(),
+                            fingerprint,
+                            line,
+                        }),
+                    }
+                }
+                None => Err(VerifyError::Mismatch {
+                    host: host.to_string(),
+                    fingerprint,
+                    line,
+                }),
+            },
+        }
+    }
+
+    /// Look up `(host, port, key)` in the configured source
+    /// without mutating anything — returns one of the three
+    /// outcomes the sync / async paths then act on.
+    fn preflight(
+        &self,
+        host: &str,
+        port: u16,
+        key: &PublicKey,
+    ) -> Result<Decision, VerifyError> {
+        match &self.source {
+            HostKeySource::AcceptAllLogFingerprint => {
+                let fingerprint = key.fingerprint(russh::keys::HashAlg::Sha256);
+                log::info!(
+                    "ssh host key for {host}:{port} (AcceptAll, escape-hatch): {fingerprint}",
+                );
+                Ok(Decision::Accept)
+            }
+            HostKeySource::OpenSshKnownHosts { path } => {
                 match russh::keys::known_hosts::check_known_hosts_path(host, port, key, path) {
-                    // Existing matching entry → trust.
                     Ok(true) => {
                         log::debug!("host key for {host}:{port} matches known_hosts pin");
-                        Ok(true)
+                        Ok(Decision::Accept)
                     }
-                    // No existing entry → learn it (TOFU).
-                    Ok(false) => {
-                        // Make sure the directory exists before
-                        // learn_known_hosts_path opens the file
-                        // for append. A fresh `pier-x` profile
-                        // on a new machine won't have ~/.ssh yet.
-                        if let Some(parent) = path.parent() {
-                            if !parent.exists() {
-                                if let Err(e) = std::fs::create_dir_all(parent) {
-                                    log::warn!(
-                                        "failed to create known_hosts parent {parent:?}: {e}",
-                                    );
-                                }
-                                // Best-effort chmod 700 on the
-                                // freshly-created directory —
-                                // matches what ssh-keygen does.
-                                #[cfg(unix)]
-                                {
-                                    use std::os::unix::fs::PermissionsExt;
-                                    let _ = std::fs::set_permissions(
-                                        parent,
-                                        std::fs::Permissions::from_mode(0o700),
-                                    );
-                                }
-                            }
-                        }
-                        russh::keys::known_hosts::learn_known_hosts_path(host, port, key, path)
-                            .map_err(|e| VerifyError::Io(format!("{e}")))?;
-                        let fingerprint = key.fingerprint(russh::keys::HashAlg::Sha256);
-                        log::info!("learned new host key for {host}:{port} (TOFU): {fingerprint}",);
-                        Ok(true)
-                    }
-                    // An existing entry that doesn't match →
-                    // surface as a structured error so the
-                    // higher layers can translate to
-                    // SshError::HostKeyMismatch.
+                    Ok(false) => Ok(Decision::NeedsLearn),
                     Err(russh::keys::Error::KeyChanged { line }) => {
-                        let fingerprint = key.fingerprint(russh::keys::HashAlg::Sha256);
+                        let fingerprint =
+                            format!("{}", key.fingerprint(russh::keys::HashAlg::Sha256));
                         log::warn!(
                             "host key for {host}:{port} MISMATCH at {path:?} line {line}: {fingerprint}",
                         );
-                        Err(VerifyError::Mismatch {
-                            host: host.to_string(),
-                            fingerprint: format!("{fingerprint}"),
-                            line,
-                        })
+                        Ok(Decision::NeedsReplace { line, fingerprint })
                     }
                     Err(e) => Err(VerifyError::Io(format!("{e}"))),
                 }
             }
         }
     }
+
+    /// Append `key` to the configured source. Best-effort
+    /// creates `~/.ssh` (or the equivalent parent) with mode
+    /// 0700 first to match `ssh-keygen` behaviour on a fresh
+    /// machine.
+    fn learn(&self, host: &str, port: u16, key: &PublicKey) -> Result<(), VerifyError> {
+        let path = match &self.source {
+            HostKeySource::OpenSshKnownHosts { path } => path,
+            HostKeySource::AcceptAllLogFingerprint => return Ok(()),
+        };
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    log::warn!("failed to create known_hosts parent {parent:?}: {e}",);
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        parent,
+                        std::fs::Permissions::from_mode(0o700),
+                    );
+                }
+            }
+        }
+        russh::keys::known_hosts::learn_known_hosts_path(host, port, key, path)
+            .map_err(|e| VerifyError::Io(format!("{e}")))?;
+        let fingerprint = key.fingerprint(russh::keys::HashAlg::Sha256);
+        log::info!("learned new host key for {host}:{port}: {fingerprint}",);
+        Ok(())
+    }
+
+    /// Drop the entry on `line` and append `key` as a fresh
+    /// pin. Used after the user accepts a changed-host prompt.
+    fn replace(
+        &self,
+        host: &str,
+        port: u16,
+        key: &PublicKey,
+        line: usize,
+    ) -> Result<(), VerifyError> {
+        let path = match &self.source {
+            HostKeySource::OpenSshKnownHosts { path } => path.clone(),
+            HostKeySource::AcceptAllLogFingerprint => return Ok(()),
+        };
+        remove_known_host_line(&path, line).map_err(|e| VerifyError::Io(format!("{e}")))?;
+        self.learn(host, port, key)
+    }
+}
+
+/// Internal: outcome of a non-mutating known_hosts lookup.
+enum Decision {
+    Accept,
+    NeedsLearn,
+    NeedsReplace { line: usize, fingerprint: String },
 }
 
 impl Default for HostKeyVerifier {
@@ -150,10 +351,10 @@ impl Default for HostKeyVerifier {
         // accept-all variant and log — failing loudly here would
         // keep pier-x from running at all on an unusual setup.
         match default_known_hosts_path() {
-            Some(path) => Self::OpenSshKnownHosts { path },
+            Some(path) => Self::open_ssh_known_hosts(path),
             None => {
                 log::warn!("no resolvable home directory; falling back to AcceptAllLogFingerprint",);
-                Self::AcceptAllLogFingerprint
+                Self::accept_all_log_fingerprint()
             }
         }
     }
@@ -290,9 +491,9 @@ pub fn remove_known_host_line(path: &std::path::Path, line_no: usize) -> std::io
 
 /// Errors the verifier can produce. Separate from
 /// [`crate::ssh::SshError`] so the `SshSession::connect`
-/// handler can match on `Mismatch` specifically and translate
-/// to [`crate::ssh::SshError::HostKeyMismatch`] with the full
-/// UI-friendly structure.
+/// handler can match on `Mismatch` / `UserRejected`
+/// specifically and translate to the matching
+/// [`crate::ssh::SshError`] variant.
 #[derive(Debug, thiserror::Error)]
 pub enum VerifyError {
     /// An existing known_hosts entry for this host does not
@@ -306,6 +507,19 @@ pub enum VerifyError {
         fingerprint: String,
         /// Line number in known_hosts of the conflicting entry.
         line: usize,
+    },
+
+    /// The user explicitly declined a TOFU / changed-host
+    /// prompt — the connect must abort. Distinct from
+    /// `Mismatch` so the UI can phrase the failure as "you
+    /// rejected" rather than re-showing the security warning.
+    #[error("host key rejected by user for {host}")]
+    UserRejected {
+        /// Hostname the user declined to trust.
+        host: String,
+        /// Whether the prompt was for a first-contact (`Unknown`)
+        /// host or a key-changed host.
+        kind: HostKeyPromptKind,
     },
 
     /// I/O or parse error reading the known_hosts file.
@@ -349,7 +563,7 @@ mod tests {
 
     #[test]
     fn accept_all_variant_always_returns_true() {
-        let v = HostKeyVerifier::AcceptAllLogFingerprint;
+        let v = HostKeyVerifier::accept_all_log_fingerprint();
         let key = make_test_key(1);
         assert!(v.verify("example.com", 22, &key).unwrap());
     }
@@ -357,10 +571,9 @@ mod tests {
     #[test]
     fn opensshkh_tofu_learns_and_then_accepts() {
         let path = fresh_tmp_path("tofu");
-        // Make sure we start clean.
         let _ = fs::remove_file(&path);
 
-        let verifier = HostKeyVerifier::OpenSshKnownHosts { path: path.clone() };
+        let verifier = HostKeyVerifier::open_ssh_known_hosts(path.clone());
         let key = make_test_key(2);
 
         // First verify: file doesn't exist → learned + accepted.
@@ -379,13 +592,11 @@ mod tests {
         let path = fresh_tmp_path("mismatch");
         let _ = fs::remove_file(&path);
 
-        let verifier = HostKeyVerifier::OpenSshKnownHosts { path: path.clone() };
+        let verifier = HostKeyVerifier::open_ssh_known_hosts(path.clone());
         let key_a = make_test_key(3);
         let key_b = make_test_key(4);
 
-        // Learn key_a for the host.
         assert!(verifier.verify("mismatch.example.com", 22, &key_a).unwrap());
-        // Now show up with a different key for the same host.
         let err = verifier
             .verify("mismatch.example.com", 22, &key_b)
             .expect_err("mismatch must surface as Err(VerifyError::Mismatch)");
@@ -407,13 +618,144 @@ mod tests {
 
     #[test]
     fn default_resolves_to_openssh_path() {
-        // The default variant must not be AcceptAll on any
-        // supported platform. This catches accidental regressions
-        // where someone flips the default "for testing".
         let v = HostKeyVerifier::default();
         assert!(
-            matches!(v, HostKeyVerifier::OpenSshKnownHosts { .. }),
+            matches!(v.source, HostKeySource::OpenSshKnownHosts { .. }),
             "default must be the real verifier, not {v:?}",
         );
+        assert!(v.prompt.is_none(), "default must not carry a prompt");
+    }
+
+    #[tokio::test]
+    async fn verify_async_consults_prompt_for_unknown_host() {
+        let path = fresh_tmp_path("async-unknown");
+        let _ = fs::remove_file(&path);
+        let key = make_test_key(5);
+
+        let calls = Arc::new(std::sync::Mutex::new(0u32));
+        let calls_cb = calls.clone();
+        let prompt: HostKeyPromptCb = Arc::new(move |req| {
+            assert_eq!(req.kind, HostKeyPromptKind::Unknown);
+            *calls_cb.lock().unwrap() += 1;
+            Box::pin(async move { HostKeyDecision::Accept })
+        });
+
+        let verifier = HostKeyVerifier::open_ssh_known_hosts(path.clone()).with_prompt(prompt);
+        assert!(verifier
+            .verify_async("u.example.com", 22, &key)
+            .await
+            .unwrap());
+        assert_eq!(*calls.lock().unwrap(), 1, "prompt should fire once");
+        // Second call: pin matches → no prompt.
+        assert!(verifier
+            .verify_async("u.example.com", 22, &key)
+            .await
+            .unwrap());
+        assert_eq!(*calls.lock().unwrap(), 1);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn verify_async_user_reject_blocks_unknown_host() {
+        let path = fresh_tmp_path("async-reject-unknown");
+        let _ = fs::remove_file(&path);
+        let key = make_test_key(6);
+
+        let prompt: HostKeyPromptCb = Arc::new(|_req| {
+            Box::pin(async move { HostKeyDecision::Reject })
+        });
+        let verifier = HostKeyVerifier::open_ssh_known_hosts(path.clone()).with_prompt(prompt);
+        let err = verifier
+            .verify_async("r.example.com", 22, &key)
+            .await
+            .expect_err("rejection must surface as Err");
+        assert!(matches!(
+            err,
+            VerifyError::UserRejected {
+                kind: HostKeyPromptKind::Unknown,
+                ..
+            }
+        ));
+        assert!(
+            !path.exists() || std::fs::read_to_string(&path).unwrap_or_default().is_empty(),
+            "rejected host must not be learned",
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn verify_async_accept_replaces_changed_pin() {
+        let path = fresh_tmp_path("async-replace");
+        let _ = fs::remove_file(&path);
+        let key_a = make_test_key(7);
+        let key_b = make_test_key(8);
+
+        // Seed the file with key_a via the no-prompt path.
+        let seed = HostKeyVerifier::open_ssh_known_hosts(path.clone());
+        assert!(seed.verify("c.example.com", 22, &key_a).unwrap());
+
+        let prompt_kind = Arc::new(std::sync::Mutex::new(None::<HostKeyPromptKind>));
+        let prompt_kind_cb = prompt_kind.clone();
+        let prompt: HostKeyPromptCb = Arc::new(move |req| {
+            *prompt_kind_cb.lock().unwrap() = Some(req.kind);
+            Box::pin(async move { HostKeyDecision::Accept })
+        });
+        let verifier = HostKeyVerifier::open_ssh_known_hosts(path.clone()).with_prompt(prompt);
+
+        // key_b for the same host → user accepts → pin replaced.
+        assert!(verifier
+            .verify_async("c.example.com", 22, &key_b)
+            .await
+            .unwrap());
+        assert_eq!(
+            *prompt_kind.lock().unwrap(),
+            Some(HostKeyPromptKind::Changed),
+        );
+        // Subsequent verify with key_b matches the (now-replaced)
+        // pin, no prompt.
+        let calls = Arc::new(std::sync::Mutex::new(0u32));
+        let calls_cb = calls.clone();
+        let prompt2: HostKeyPromptCb = Arc::new(move |_| {
+            *calls_cb.lock().unwrap() += 1;
+            Box::pin(async move { HostKeyDecision::Reject })
+        });
+        let verifier2 =
+            HostKeyVerifier::open_ssh_known_hosts(path.clone()).with_prompt(prompt2);
+        assert!(verifier2
+            .verify_async("c.example.com", 22, &key_b)
+            .await
+            .unwrap());
+        assert_eq!(*calls.lock().unwrap(), 0, "matching pin must skip prompt");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn verify_async_reject_keeps_old_pin_on_mismatch() {
+        let path = fresh_tmp_path("async-reject-changed");
+        let _ = fs::remove_file(&path);
+        let key_a = make_test_key(9);
+        let key_b = make_test_key(10);
+
+        let seed = HostKeyVerifier::open_ssh_known_hosts(path.clone());
+        assert!(seed.verify("k.example.com", 22, &key_a).unwrap());
+        let original = std::fs::read_to_string(&path).unwrap();
+
+        let prompt: HostKeyPromptCb = Arc::new(|_| {
+            Box::pin(async move { HostKeyDecision::Reject })
+        });
+        let verifier = HostKeyVerifier::open_ssh_known_hosts(path.clone()).with_prompt(prompt);
+        let err = verifier
+            .verify_async("k.example.com", 22, &key_b)
+            .await
+            .expect_err("rejection on mismatch must surface as Err");
+        assert!(matches!(err, VerifyError::Mismatch { .. }));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "rejected mismatch must not touch the file",
+        );
+        let _ = fs::remove_file(&path);
     }
 }

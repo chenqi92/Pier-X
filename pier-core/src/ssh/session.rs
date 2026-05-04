@@ -1054,6 +1054,7 @@ fn verify_error_to_ssh_error(e: super::known_hosts::VerifyError) -> SshError {
         VerifyError::Mismatch {
             host, fingerprint, ..
         } => SshError::HostKeyMismatch { host, fingerprint },
+        VerifyError::UserRejected { host, .. } => SshError::HostKeyRejected { host },
         VerifyError::Io(msg) => SshError::InvalidConfig(format!("known_hosts: {msg}")),
     }
 }
@@ -1087,7 +1088,8 @@ impl client::Handler for ClientHandler {
     ) -> std::result::Result<bool, Self::Error> {
         match self
             .verifier
-            .verify(&self.host, self.port, server_public_key)
+            .verify_async(&self.host, self.port, server_public_key)
+            .await
         {
             Ok(accept) => Ok(accept),
             Err(e) => {

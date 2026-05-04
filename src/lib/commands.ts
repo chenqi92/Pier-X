@@ -703,6 +703,24 @@ export const sshKnownHostsList = () =>
 export const sshKnownHostsRemove = (line: number) =>
   invoke<void>("ssh_known_hosts_remove", { line });
 
+export type HostKeyPromptKind = "unknown" | "changed";
+
+export type HostKeyPromptRequest = {
+  host: string;
+  port: number;
+  keyType: string;
+  fingerprint: string;
+  kind: HostKeyPromptKind;
+};
+
+export type HostKeyPromptEvent = {
+  id: string;
+  request: HostKeyPromptRequest;
+};
+
+export const sshHostKeyDecide = (promptId: string, accept: boolean) =>
+  invoke<void>("ssh_host_key_decide", { promptId, accept });
+
 /**
  * Background pre-warm of the shared SSH session cache for a target.
  *

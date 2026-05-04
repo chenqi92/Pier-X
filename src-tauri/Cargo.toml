@@ -40,5 +40,11 @@ serde_json = "1"
 # `package_manager`. Default features only (we just need the `sync`
 # token primitives).
 tokio-util = { version = "0.7", default-features = false }
+# Used for the host-key prompt callback: a oneshot channel
+# carries the user's accept/reject answer back from the
+# `ssh_host_key_decide` command into the verifier callback,
+# with a timeout fallback so a forgotten dialog can't pin SSH
+# worker threads forever.
+tokio = { version = "1", features = ["sync", "time"] }
 pier-core = { path = "../pier-core" }
 

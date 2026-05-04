@@ -736,6 +736,41 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     );
   }, [session?.sessionId, scrollbackLines]);
 
+  // ── Persist last cwd so a restart re-cd's the new session ────
+  //
+  // OSC 7 / pwd polling lands the shell's working dir in the
+  // backend; we mirror it onto the tab record (debounced via the
+  // tab store's own save timer) so the rehydrate path can prepend
+  // a `cd …` startup command. Polled at 4s — slow enough to be
+  // negligible IPC, fast enough that a `cd /var/log` followed by
+  // an immediate quit usually catches. The "last seen" value is
+  // tracked in a ref so a successful update doesn't re-run the
+  // effect and thrash the interval.
+  const lastCwdSampledRef = useRef<string | null>(tab.lastCwd ?? null);
+  useEffect(() => {
+    if (!session) return;
+    let disposed = false;
+    const sample = async () => {
+      if (disposed) return;
+      try {
+        const cwd = await cmd.terminalCurrentCwd(session.sessionId);
+        if (disposed) return;
+        if (cwd && cwd !== lastCwdSampledRef.current) {
+          lastCwdSampledRef.current = cwd;
+          updateTab(tab.id, { lastCwd: cwd });
+        }
+      } catch {
+        /* osc7 hasn't fired or backend race; try again next tick */
+      }
+    };
+    void sample();
+    const id = window.setInterval(sample, 4000);
+    return () => {
+      disposed = true;
+      window.clearInterval(id);
+    };
+  }, [session?.sessionId, tab.id, updateTab]);
+
   // ── Run startup command once per created session ─────────────
 
   useEffect(() => {

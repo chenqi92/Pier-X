@@ -1146,6 +1146,16 @@ export type TabState = {
   logSourcePins: LogSource[];
   markdownPath: string;
   startupCommand: string;
+  /** Last shell working directory observed via OSC 7 / pwd polling.
+   *  Persisted across restarts so a fresh session re-cd's into the
+   *  user's last location instead of dumping them in `$HOME`.
+   *  `null` until the first probe lands; cleared whenever the
+   *  underlying connection identity changes (host / user). */
+  lastCwd: string | null;
+  /** Last directory the SFTP panel was browsing in this tab. Same
+   *  rehydration story as `lastCwd` but on the remote side; `null`
+   *  while the panel hasn't been opened yet. */
+  sftpLastPath: string | null;
   /** Registry mirror prefix for `docker pull`, e.g.
    *  `"docker.m.daocloud.io"`. Applied only when the image ref does not
    *  already contain a registry domain. Empty → no rewrite. */

@@ -108,7 +108,26 @@ function loadPersisted(): PersistedShape {
     if (!parsed || !Array.isArray(parsed.tabs)) {
       return { tabs: [], activeTabId: null };
     }
-    const tabs = parsed.tabs.map(scrubRuntimeFields);
+    const tabs = parsed.tabs.map((tab) => {
+      const scrubbed = scrubRuntimeFields(tab);
+      // Reinstate the user's last cwd as a one-shot startup cd so
+      // the freshly-spawned PTY lands where they were working last
+      // session. Skipped when an explicit startupCommand is already
+      // queued (e.g. the user just opened a new tab and the app
+      // crashed before the first session spawned) — that command
+      // wins over the automatic cd.
+      if (
+        scrubbed.lastCwd &&
+        scrubbed.lastCwd.trim() &&
+        !scrubbed.startupCommand.trim()
+      ) {
+        return {
+          ...scrubbed,
+          startupCommand: `cd ${JSON.stringify(scrubbed.lastCwd)}`,
+        };
+      }
+      return scrubbed;
+    });
     const activeTabId =
       parsed.activeTabId && tabs.some((t) => t.id === parsed.activeTabId)
         ? parsed.activeTabId
@@ -232,6 +251,8 @@ function makeDefaultTab(
     dockerRegistryMirror: partial.dockerRegistryMirror ?? "",
     dockerPullProxy: partial.dockerPullProxy ?? "",
     nestedSshTarget: partial.nestedSshTarget ?? null,
+    lastCwd: partial.lastCwd ?? null,
+    sftpLastPath: partial.sftpLastPath ?? null,
   };
 }
 

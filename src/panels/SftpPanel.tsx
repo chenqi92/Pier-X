@@ -47,6 +47,7 @@ import {
   useSftpBookmarksStore,
   type SftpBookmark,
 } from "../stores/useSftpBookmarksStore";
+import { useTabStore } from "../stores/useTabStore";
 
 // Module-scope constant for "no bookmarks". Kept out of the
 // zustand selector so two consecutive renders get the *same*
@@ -234,8 +235,10 @@ function SftpPanelBody({ tab }: Props) {
   // return the user's home rather than dropping us at `/`. Once the
   // first browse lands, this is set to whatever `current_path` came
   // back (already canonicalised), and every subsequent browse
-  // carries an explicit path.
-  const [path, setPath] = useState("");
+  // carries an explicit path. We seed from the persisted
+  // `tab.sftpLastPath` so reopening the same tab rehydrates the
+  // user's last directory instead of resetting to $HOME each time.
+  const [path, setPath] = useState(tab.sftpLastPath ?? "");
   const [selectedPath, setSelectedPath] = useState("");
   const [editingPath, setEditingPath] = useState(false);
   const [pathDraft, setPathDraft] = useState("");
@@ -477,6 +480,13 @@ function SftpPanelBody({ tab }: Props) {
       setSelectedPath("");
       setRenamingPath(null);
       setRenameDraft("");
+      // Mirror onto the tab so a restart reopens the same dir
+      // instead of bouncing us back to $HOME.
+      if (next.currentPath && next.currentPath !== tab.sftpLastPath) {
+        useTabStore.getState().updateTab(tab.id, {
+          sftpLastPath: next.currentPath,
+        });
+      }
     } catch (e) {
       // Keep the last successful listing on screen — wiping `state`
       // here would strand the user on a "Browse" empty view, break

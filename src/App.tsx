@@ -84,6 +84,7 @@ import "./styles/db-panel.css";
 
 const MARKDOWN_EXTENSIONS = /\.(md|markdown|mdown|mkdn|mkd|mdx)$/i;
 const PANE_STORAGE_KEY = "pierx:pane-widths";
+const SIDEBAR_PATH_STORAGE_KEY = "pierx:sidebar-path";
 const TOOLSTRIP_W = 42;
 const DEFAULT_SIDEBAR_W = 244;
 const DEFAULT_RIGHT_W = 360 + TOOLSTRIP_W;
@@ -111,7 +112,17 @@ const PANEL_PALETTE_ITEMS: ReadonlyArray<{ tool: RightTool; title: string }> = [
 
 function App() {
   const [coreInfo, setCoreInfo] = useState<CoreInfo | null>(null);
-  const [browserPath, setBrowserPath] = useState("");
+  // Sidebar's current browse path. Initial value comes from
+  // localStorage so a restart drops the user back where they were
+  // — the bootstrap effect below only seeds homeDir / workspaceRoot
+  // when no persisted value is present.
+  const [browserPath, setBrowserPath] = useState(() => {
+    try {
+      return window.localStorage.getItem(SIDEBAR_PATH_STORAGE_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
   const [selectedMarkdownPath, setSelectedMarkdownPath] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** Optional landing page when the dialog opens — used by the
@@ -197,7 +208,12 @@ function App() {
     cmd.coreInfo()
       .then((info) => {
         setCoreInfo(info);
-        setBrowserPath(info.homeDir || info.workspaceRoot || "");
+        // Only fall back to homeDir / workspaceRoot when there's no
+        // persisted value — otherwise we'd overwrite the user's
+        // last-browsed dir on every restart.
+        setBrowserPath((cur) =>
+          cur ? cur : info.homeDir || info.workspaceRoot || "",
+        );
       })
       .catch(() => {});
     useConnectionStore.getState().refresh();
@@ -287,6 +303,25 @@ function App() {
     }, 250);
     return () => window.clearTimeout(id);
   }, [rightWidth, sidebarWidth, rightCollapsed]);
+
+  // Persist sidebar browse path on change. Same 250ms debounce —
+  // sidebar navigation can fire several setBrowserPath calls in a
+  // row when the user types into the breadcrumb editor, and we
+  // don't want every keystroke landing on disk.
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      try {
+        if (browserPath) {
+          window.localStorage.setItem(SIDEBAR_PATH_STORAGE_KEY, browserPath);
+        } else {
+          window.localStorage.removeItem(SIDEBAR_PATH_STORAGE_KEY);
+        }
+      } catch {
+        /* ignore persistence errors */
+      }
+    }, 250);
+    return () => window.clearTimeout(id);
+  }, [browserPath]);
 
   // ── Desktop behaviors ───────────────────────────────────────
   useEffect(() => {

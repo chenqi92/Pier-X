@@ -105,6 +105,16 @@ type Props = {
   onEditConnection?: (index: number) => void;
 };
 
+// Shells only split on ASCII whitespace. Commands copied from web pages,
+// IMEs, or macOS Option-Space can contain lookalike spaces such as NBSP
+// or full-width space; normalize those at human text ingress so `ps -ef |`
+// does not become one invalid `-ef<nbsp>|` argument.
+const SHELL_COMPAT_SPACE_RE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/g;
+
+function normalizeTerminalCommandText(text: string): string {
+  return text.replace(SHELL_COMPAT_SPACE_RE, " ");
+}
+
 export default function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   const { t, locale } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
@@ -160,7 +170,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
    *  the line lands at the prompt for review. */
   async function pasteSnippet(s: TerminalSnippet) {
     if (!session) return;
-    const text = s.runOnPaste ? `${s.command}\n` : s.command;
+    const text = normalizeTerminalCommandText(s.runOnPaste ? `${s.command}\n` : s.command);
     try {
       await cmd.terminalWrite(session.sessionId, text);
     } catch {
@@ -784,7 +794,10 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     }
     startupAppliedRef.current = startupKey;
 
-    cmd.terminalWrite(session.sessionId, `${tab.startupCommand}\r`)
+    cmd.terminalWrite(
+      session.sessionId,
+      normalizeTerminalCommandText(`${tab.startupCommand}\r`),
+    )
       .then(() => {
         updateTab(tab.id, { startupCommand: "" });
       })
@@ -2160,7 +2173,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     if (mod && !event.altKey && event.key.toLowerCase() === "v") {
       event.preventDefault();
       void readClipboardText().then((text) => {
-        if (text) void sendInput(text.replace(/\r?\n/g, "\r"));
+        if (text) void sendInput(normalizeTerminalCommandText(text.replace(/\r?\n/g, "\r")));
       });
       return;
     }
@@ -2203,7 +2216,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     } else if (event.key === "End") {
       payload = "\u001b[F";
     } else if (!event.metaKey && !event.ctrlKey && event.key.length === 1) {
-      payload = event.key;
+      payload = normalizeTerminalCommandText(event.key);
     }
 
     if (!payload) return;
@@ -2312,7 +2325,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     const text = await readClipboardText();
     if (text) {
       try {
-        await cmd.terminalWrite(session.sessionId, text);
+        await sendInput(normalizeTerminalCommandText(text.replace(/\r?\n/g, "\r")));
       } catch {
         /* PTY write blocked */
       }

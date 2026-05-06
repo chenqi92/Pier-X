@@ -1761,16 +1761,21 @@ button,
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
+  min-width: 0;
 }
 
 .mon-host {
   border-bottom: 1px dashed var(--line);
   padding-bottom: var(--sp-2-5);
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 .mon-host-top {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  min-width: 0;
 }
 .mon-host-name {
   font-family: var(--sans);
@@ -1779,23 +1784,32 @@ button,
   color: var(--ink);
   letter-spacing: -0.01em;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mon-host-uptime {
   margin-left: auto;
   color: var(--muted);
   font-size: var(--size-micro);
+  flex: none;
 }
 .mon-host-meta {
   font-size: var(--size-micro);
   color: var(--muted);
   margin-top: var(--sp-0-5);
   margin-left: calc(7px + var(--sp-2));
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .mon-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--sp-2);
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .mon-gauge {
@@ -1805,6 +1819,9 @@ button,
   padding: var(--sp-2-5) var(--sp-3);
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 .mon-gauge-label {
   display: inline-flex;
@@ -1887,6 +1904,9 @@ button,
   display: flex;
   gap: var(--sp-1-5);
   flex-wrap: wrap;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 .mon-pill {
   display: inline-flex;
@@ -1911,11 +1931,15 @@ button,
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   overflow: hidden;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 .mon-block-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--sp-2);
   padding: var(--sp-1-5) var(--sp-3);
   background: var(--surface-2);
   border-bottom: 1px solid var(--line);
@@ -1930,6 +1954,79 @@ button,
   color: var(--muted);
   text-transform: none;
   letter-spacing: 0;
+}
+.mon-proc-head-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.mon-proc-head-tools .mini-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(var(--sp-5) + var(--sp-0-5));
+  padding: 0 var(--sp-1-5);
+  gap: var(--sp-0-5);
+  font-size: var(--size-micro);
+}
+.mon-proc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.mon-proc-mode.active {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: var(--accent-subtle);
+}
+.mon-proc-icon-btn {
+  width: calc(var(--sp-5) + var(--sp-1));
+  padding: var(--sp-0);
+}
+.mon-proc-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xs);
+}
+.mon-proc-filter:focus-within { border-color: var(--accent); }
+.mon-proc-filter > svg {
+  color: var(--muted);
+  flex: none;
+}
+.mon-proc-filter input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+}
+.mon-proc-filter input::placeholder { color: var(--muted); }
+.mon-proc-table-wrap {
+  overflow: hidden;
+}
+.mon-proc-table-wrap--full {
+  max-height: calc(var(--row-h) * 16);
+  overflow: auto;
+}
+.mon-proc-table-wrap--full .mon-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
 }
 .mon-table {
   width: 100%;
@@ -1958,16 +2055,31 @@ button,
 .mon-cell-right { text-align: right; }
 .mon-cell-muted { color: var(--muted); }
 .mon-cell-actions {
-  display: flex;
-  gap: 2px;
-  justify-content: flex-end;
+  text-align: right;
+  white-space: nowrap;
+}
+.mon-proc-actions {
+  display: inline-flex;
   align-items: center;
-  padding-right: 0;
+  justify-content: flex-end;
+  gap: var(--sp-0-5);
+  opacity: 0.38;
+  transition: opacity var(--dur-fast) var(--easing);
 }
-.mon-cell-actions .mini-button {
-  padding: 1px 4px;
+.mon-table--procs tr:hover .mon-proc-actions,
+.mon-table--procs tr:focus-within .mon-proc-actions {
+  opacity: 1;
 }
-.mon-cell-actions .mini-button:hover {
+.mon-proc-actions .mini-button {
+  display: inline-grid;
+  place-items: center;
+  width: calc(var(--sp-4) + var(--sp-0-5));
+  height: calc(var(--sp-4) + var(--sp-0-5));
+  min-height: calc(var(--sp-4) + var(--sp-0-5));
+  padding: var(--sp-0);
+  border-radius: var(--radius-xs);
+}
+.mon-proc-actions .mini-button:hover {
   color: var(--neg);
 }
 .mon-cell-warn { color: var(--warn); }
@@ -1979,10 +2091,45 @@ button,
 .mon-table--disks,
 .mon-table--procs { table-layout: fixed; }
 .mon-table--disks th,
+.mon-table--procs th {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mon-table--disks .mon-col-disk-type {
+  width: calc(var(--sp-10) + var(--sp-1));
+}
+.mon-table--disks .mon-col-disk-num {
+  width: calc(var(--sp-12) + var(--sp-2-5));
+  text-align: right;
+}
+.mon-table--disks .mon-col-disk-use {
+  width: calc(var(--sp-10) + var(--sp-1));
+  text-align: right;
+}
+.mon-table--procs .mon-col-pid { width: calc(var(--sp-10) + var(--sp-3)); }
+.mon-table--procs .mon-col-ports { width: calc(var(--sp-12) + var(--sp-2)); }
+.mon-table--procs .mon-col-num {
+  width: var(--sp-12);
+  text-align: right;
+}
+.mon-table--procs .mon-col-actions {
+  width: calc(var(--sp-10) + var(--sp-3));
+  text-align: right;
+}
+.mon-table--disks th,
 .mon-table--disks td,
 .mon-table--procs th,
 .mon-table--procs td {
   padding: 4px var(--sp-1-5);
+}
+.mon-table--disks td {
+  white-space: nowrap;
+}
+.mon-table--disks .mon-cell-right {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 .mon-table--disks th:first-child,
 .mon-table--disks td:first-child,
@@ -2010,6 +2157,30 @@ button,
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.mon-proc-name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.mon-proc-name > .mon-cell-trunc {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+}
+.mon-proc-indent-unit {
+  flex: none;
+  width: var(--sp-2);
+}
+.mon-proc-branch {
+  flex: none;
+  width: var(--sp-2);
+  color: var(--muted);
+  opacity: 0.78;
+}
+.mon-proc-ports {
+  color: var(--muted);
+  font-size: var(--size-micro);
 }
 
 /* BLOCK DEVICES tree — dense list of `lsblk` rows showing physical
@@ -8457,6 +8628,10 @@ button,
 .cs-input-clear:hover {
   color: var(--ink);
   background: var(--surface-2);
+}
+.cs-inline-clear {
+  position: static;
+  flex: 0 0 auto;
 }
 .cs-toggles {
   display: flex;

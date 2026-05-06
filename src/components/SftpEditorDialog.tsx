@@ -113,6 +113,9 @@ type Props = {
   onSaved?: (bytes: number) => void;
   /** Optional owner label shown in the head chips (e.g. "deploy"). */
   ownerLabel?: string;
+  /** Optional initial caret target used by Code Search hits. */
+  initialLine?: number;
+  initialColumn?: number;
 };
 
 type Mode = "view" | "edit" | "render";
@@ -154,6 +157,8 @@ export default function SftpEditorDialog({
   onClose,
   onSaved,
   ownerLabel,
+  initialLine,
+  initialColumn,
 }: Props) {
   const { t } = useI18n();
   const { dialogStyle, handleProps } = useDraggableDialog(open);
@@ -292,6 +297,7 @@ export default function SftpEditorDialog({
           v.dispatch({ changes: { from: 0, insert: res.content } });
           baselineRef.current = res.content;
           setDirty(false);
+          revealInitialLocation(v);
         });
       } catch (e) {
         if (!alive) return;
@@ -305,7 +311,7 @@ export default function SftpEditorDialog({
       disposeEditor();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, path, tooLargeForInline]);
+  }, [open, path, tooLargeForInline, initialLine, initialColumn]);
 
   useEffect(() => () => disposeEditor(), []);
 
@@ -498,6 +504,19 @@ export default function SftpEditorDialog({
     viewRef.current = view;
     setCursor((c) => ({ ...c, totalLines: state.doc.lines }));
     view.dispatch({ selection: EditorSelection.single(0) });
+    view.focus();
+  }
+
+  function revealInitialLocation(view: EditorView) {
+    if (!initialLine || initialLine < 1) return;
+    const lineNumber = Math.min(initialLine, view.state.doc.lines);
+    const line = view.state.doc.line(lineNumber);
+    const col = Math.max(1, initialColumn ?? 1);
+    const pos = Math.min(line.to, line.from + col - 1);
+    view.dispatch({
+      selection: EditorSelection.cursor(pos),
+      effects: EditorView.scrollIntoView(pos, { y: "center" }),
+    });
     view.focus();
   }
 

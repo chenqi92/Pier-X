@@ -915,6 +915,7 @@ struct ServerSnapshotView {
     net_tx_bps: f64,
     top_processes: Vec<ProcessRowView>,
     top_processes_mem: Vec<ProcessRowView>,
+    processes: Vec<ProcessRowView>,
     disks: Vec<DiskEntryView>,
     /// Block-device topology from `lsblk -P -b`. Empty when the remote
     /// doesn't have lsblk (BusyBox, macOS) or when the caller asked for
@@ -953,6 +954,7 @@ struct BlockDeviceEntryView {
 #[serde(rename_all = "camelCase")]
 struct ProcessRowView {
     pid: String,
+    ppid: String,
     command: String,
     cpu_pct: String,
     mem_pct: String,
@@ -961,6 +963,7 @@ struct ProcessRowView {
     /// didn't carry it (current SSH path) or sysinfo couldn't read
     /// `/proc/<pid>/cmdline`. UI shows it as a hover tooltip.
     cmd_line: String,
+    ports: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -4243,6 +4246,7 @@ fn code_search(
     case_insensitive: Option<bool>,
     regex: Option<bool>,
     whole_word: Option<bool>,
+    glob: Option<String>,
     max_hits: Option<usize>,
 ) -> Result<pier_core::services::code_search::SearchOutput, String> {
     let trimmed_query = query.trim();
@@ -4255,6 +4259,7 @@ fn code_search(
         case_insensitive: case_insensitive.unwrap_or(false),
         regex: regex.unwrap_or(false),
         whole_word: whole_word.unwrap_or(false),
+        glob: glob.unwrap_or_default(),
         max_hits: max_hits.unwrap_or(500),
     };
 
@@ -6512,6 +6517,19 @@ fn server_monitor_probe(
 fn server_snapshot_to_view(
     snap: pier_core::services::server_monitor::ServerSnapshot,
 ) -> ServerSnapshotView {
+    fn process_row_to_view(p: pier_core::services::server_monitor::ProcessRow) -> ProcessRowView {
+        ProcessRowView {
+            pid: p.pid,
+            ppid: p.ppid,
+            command: p.command,
+            cpu_pct: p.cpu_pct,
+            mem_pct: p.mem_pct,
+            elapsed: p.elapsed,
+            cmd_line: p.cmd_line,
+            ports: p.ports,
+        }
+    }
+
     ServerSnapshotView {
         uptime: snap.uptime,
         load_1: snap.load_1,
@@ -6535,26 +6553,17 @@ fn server_snapshot_to_view(
         top_processes: snap
             .top_processes
             .into_iter()
-            .map(|p| ProcessRowView {
-                pid: p.pid,
-                command: p.command,
-                cpu_pct: p.cpu_pct,
-                mem_pct: p.mem_pct,
-                elapsed: p.elapsed,
-                cmd_line: p.cmd_line,
-            })
+            .map(process_row_to_view)
             .collect(),
         top_processes_mem: snap
             .top_processes_mem
             .into_iter()
-            .map(|p| ProcessRowView {
-                pid: p.pid,
-                command: p.command,
-                cpu_pct: p.cpu_pct,
-                mem_pct: p.mem_pct,
-                elapsed: p.elapsed,
-                cmd_line: p.cmd_line,
-            })
+            .map(process_row_to_view)
+            .collect(),
+        processes: snap
+            .processes
+            .into_iter()
+            .map(process_row_to_view)
             .collect(),
         disks: snap
             .disks

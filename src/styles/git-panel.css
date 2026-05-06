@@ -1519,10 +1519,24 @@
    so the header, every row, and the column resizers all stay in sync.
    Defaults below; the React panel persists overrides via localStorage. */
 .git-history-list-surface {
+  --col-subject-w: calc(var(--sp-12) * 10);
   --col-author-w: 96px;
   --col-date-w: 120px;
   --col-hash-w: 64px;
+  --graph-lane-w: calc(var(--sp-12) + var(--sp-2));
+  --history-row-min-w: calc(
+    var(--graph-lane-w) +
+    var(--col-subject-w) +
+    var(--col-author-w) +
+    var(--col-date-w) +
+    var(--col-hash-w) +
+    var(--sp-10)
+  );
   position: relative;
+}
+
+.git-history-list__spacer {
+  width: max(100%, var(--history-row-min-w));
 }
 
 /* Indeterminate progress strip across the top of the history list while
@@ -1594,9 +1608,8 @@
    to accent on hover / active drag. */
 .git-col-resizer {
   flex: none;
-  width: 5px;
+  width: var(--sp-1-5);
   height: 22px;
-  margin: 0 -2px;
   cursor: col-resize;
   position: relative;
   background: transparent;
@@ -1670,9 +1683,18 @@
 }
 
 .git-history-row {
-  display: flex;
+  display: grid;
+  grid-template-columns:
+    var(--graph-lane-w)
+    minmax(var(--col-subject-w), 1fr)
+    var(--sp-1-5)
+    var(--col-author-w)
+    var(--sp-1-5)
+    var(--col-date-w)
+    var(--sp-1-5)
+    var(--col-hash-w);
   align-items: stretch;
-  width: 100%;
+  width: max(100%, var(--history-row-min-w));
   height: 24px;
   padding: 0 10px 0 4px;
   border: none;
@@ -1693,21 +1715,18 @@
 
 .git-graph-lane {
   display: block;
-  flex-shrink: 0;
+  width: var(--graph-lane-w);
 }
 
 .git-history-row__content {
-  display: flex;
-  flex: 1;
+  display: contents;
   min-width: 0;
-  align-items: center;
-  gap: 8px;
 }
 
 .git-history-row__subject {
   display: flex;
   align-items: center;
-  flex: 1;
+  align-self: center;
   gap: 4px;
   min-width: 0;
   overflow: hidden;

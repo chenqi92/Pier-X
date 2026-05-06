@@ -659,21 +659,37 @@ function ColResizer({
   initial: number;
   min: number;
   max: number;
-  variant: "author" | "date" | "hash";
+  variant: "subject" | "author" | "date" | "hash";
   inline?: boolean;
   onPersist: (next: number) => void;
 }) {
   const [active, setActive] = useState(false);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      cleanupRef.current?.();
+    };
+  }, []);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
+    cleanupRef.current?.();
     const surface = surfaceRef.current;
     if (!surface) return;
+    const handle = event.currentTarget;
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      /* pointer capture is best-effort in WebView */
+    }
     const current =
       parseFloat(getComputedStyle(surface).getPropertyValue(cssVar)) || initial;
     dragRef.current = { startX: event.clientX, startWidth: current };
+    surface.dataset.colResizing = "true";
     setActive(true);
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
@@ -689,7 +705,7 @@ function ColResizer({
       surf.style.setProperty(cssVar, `${Math.round(next)}px`);
     };
 
-    const up = () => {
+    const finish = () => {
       const surf = surfaceRef.current;
       if (surf) {
         const final = parseFloat(getComputedStyle(surf).getPropertyValue(cssVar));
@@ -699,22 +715,55 @@ function ColResizer({
       setActive(false);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
+      window.setTimeout(() => {
+        const latestSurface = surfaceRef.current;
+        if (latestSurface) delete latestSurface.dataset.colResizing;
+      }, 0);
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", finish, true);
+      window.removeEventListener("pointercancel", finish, true);
+      window.removeEventListener("mouseup", finish, true);
+      window.removeEventListener("blur", finish, true);
+      document.removeEventListener("pointerup", finish, true);
+      document.removeEventListener("pointercancel", finish, true);
+      try {
+        if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+      } catch {
+        /* best-effort cleanup */
+      }
+      cleanupRef.current = null;
     };
+    cleanupRef.current = finish;
 
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", finish, true);
+    window.addEventListener("pointercancel", finish, true);
+    window.addEventListener("mouseup", finish, true);
+    window.addEventListener("blur", finish, true);
+    document.addEventListener("pointerup", finish, true);
+    document.addEventListener("pointercancel", finish, true);
   };
 
   return (
     <div
       className={`git-col-resizer git-col-resizer--${variant}${inline ? " git-col-resizer--inline" : ""}${active ? " is-active" : ""}`}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
       onPointerDown={onPointerDown}
+      onPointerUp={(event) => event.stopPropagation()}
       role="separator"
       aria-orientation="vertical"
     />
   );
+}
+
+function eventTargetsHistoryResizer(event: ReactMouseEvent<HTMLElement>) {
+  const target = event.target;
+  if (!(target instanceof Element)) return false;
+  if (target.closest(".git-col-resizer")) return true;
+  return target.closest(".git-history-list-surface")?.getAttribute("data-col-resizing") === "true";
 }
 
 // Click target whose children remain text-selectable. A native <button> would
@@ -887,7 +936,7 @@ function GitHistoryVirtualList({
         onScroll?.(event);
       }}
     >
-      <div style={{ height: totalHeight, position: "relative" }}>
+      <div className="git-history-list__spacer" style={{ height: totalHeight, position: "relative" }}>
         {rows.slice(firstIdx, lastIdx).map((row, i) => {
           const idx = firstIdx + i;
           return (
@@ -1008,8 +1057,14 @@ const HistoryRow = memo(function HistoryRow({
         ]
           .filter(Boolean)
           .join(" ")}
-        onClick={() => onSelect(row.hash, active)}
-        onDoubleClick={() => onDoubleClick(row.hash)}
+        onClick={(event) => {
+          if (eventTargetsHistoryResizer(event)) return;
+          onSelect(row.hash, active);
+        }}
+        onDoubleClick={(event) => {
+          if (eventTargetsHistoryResizer(event)) return;
+          onDoubleClick(row.hash);
+        }}
         onContextMenu={(event) => onContextMenu(event, row)}
         type="button"
         title={titleText}
@@ -1025,6 +1080,18 @@ const HistoryRow = memo(function HistoryRow({
             {refs.length > 3 ? <span className="git-history-row__more">{`+${refs.length - 3}`}</span> : null}
             <span className="git-history-row__message">{row.message}</span>
           </div>
+          {showAuthor || showDate || showHash ? (
+            <ColResizer
+              cssVar="--col-subject-w"
+              initial={colWidthsRef.current.subject}
+              max={HISTORY_COL_MAX.subject}
+              min={HISTORY_COL_MIN.subject}
+              onPersist={(value) => onPersistCol("subject", value)}
+              surfaceRef={surfaceRef}
+              variant="subject"
+              inline
+            />
+          ) : null}
           {showAuthor ? (
             <span className="git-history-row__author" title={row.author}>
               <span
@@ -1153,10 +1220,10 @@ function readChangesLayout(): { staged: number; working: number; commit: number 
 
 const HISTORY_COLS_STORAGE_KEY = "pierx.git.history.cols.v1";
 
-type HistoryColWidths = { author: number; date: number; hash: number };
-const HISTORY_COL_DEFAULTS: HistoryColWidths = { author: 96, date: 120, hash: 64 };
-const HISTORY_COL_MIN: HistoryColWidths = { author: 60, date: 80, hash: 50 };
-const HISTORY_COL_MAX: HistoryColWidths = { author: 240, date: 220, hash: 110 };
+type HistoryColWidths = { subject: number; author: number; date: number; hash: number };
+const HISTORY_COL_DEFAULTS: HistoryColWidths = { subject: 480, author: 96, date: 120, hash: 64 };
+const HISTORY_COL_MIN: HistoryColWidths = { subject: 180, author: 60, date: 80, hash: 50 };
+const HISTORY_COL_MAX: HistoryColWidths = { subject: 1200, author: 240, date: 220, hash: 110 };
 
 function readHistoryColWidths(): HistoryColWidths {
   try {
@@ -1164,6 +1231,8 @@ function readHistoryColWidths(): HistoryColWidths {
     if (!raw) return HISTORY_COL_DEFAULTS;
     const parsed = JSON.parse(raw) as Partial<HistoryColWidths>;
     return {
+      subject:
+        typeof parsed.subject === "number" ? parsed.subject : HISTORY_COL_DEFAULTS.subject,
       author:
         typeof parsed.author === "number" ? parsed.author : HISTORY_COL_DEFAULTS.author,
       date: typeof parsed.date === "number" ? parsed.date : HISTORY_COL_DEFAULTS.date,
@@ -1368,34 +1437,25 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
     currentRepoPathRef.current = currentRepoPath;
   }, [browserPath, currentRepoPath]);
 
-  // History list: apply persisted column widths and observe surface
-  // width to drop columns at narrow sizes (Hash → Date → Author).
+  // History list: apply persisted column widths and keep every column
+  // available. Narrow sidebars use horizontal scrolling instead of hiding
+  // Hash / Date / Author, so the user can drag across to inspect details.
   useLayoutEffect(() => {
     const surface = historyListSurfaceRef.current;
     if (!surface) return;
     const widths = historyColWidthsRef.current;
+    surface.style.setProperty("--col-subject-w", `${widths.subject}px`);
     surface.style.setProperty("--col-author-w", `${widths.author}px`);
     surface.style.setProperty("--col-date-w", `${widths.date}px`);
     surface.style.setProperty("--col-hash-w", `${widths.hash}px`);
+    surface.dataset.cols = "4";
   }, [selectedTab]);
 
   useEffect(() => {
     if (selectedTab !== "history") return;
     const surface = historyListSurfaceRef.current;
-    if (!surface || typeof ResizeObserver === "undefined") return;
-    const apply = (width: number) => {
-      let cols = 4;
-      if (width < 280) cols = 1;
-      else if (width < 360) cols = 2;
-      else if (width < 480) cols = 3;
-      surface.dataset.cols = String(cols);
-    };
-    apply(surface.getBoundingClientRect().width);
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) apply(entry.contentRect.width);
-    });
-    ro.observe(surface);
-    return () => ro.disconnect();
+    if (!surface) return;
+    surface.dataset.cols = "4";
   }, [selectedTab]);
 
   const activeCommitDetail = commitDetail && commitDetail.hash === historySelectedHash ? commitDetail : null;
@@ -3137,6 +3197,7 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
                   (historyLoading && graphRows.length ? " is-reloading" : "")
                 }
                 ref={(el) => { historyListSurfaceRef.current = el; }}
+                style={{ "--graph-lane-w": `${graphLaneWidth}px` } as CSSProperties}
               >
                 {graphRows.length ? (
                   <>

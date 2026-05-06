@@ -19,12 +19,16 @@
 //!     the panel.
 //!
 //! `sysinfo` reads the equivalent kernel interfaces directly (Win32
-//! NtQuery* APIs, Apple `libproc`, `/proc/*` on Linux) without
-//! forking. A single in-process `System` handle survives across
-//! probes so per-process CPU% / network rate deltas accumulate over
-//! the polling cadence and don't need a synthetic 200 ms sleep on
-//! every call.
+//! NtQuery* APIs, Apple `libproc`, `/proc/*` on Linux). A single
+//! in-process `System` handle survives across probes so per-process
+//! CPU% / network rate deltas accumulate over the polling cadence and
+//! don't need a synthetic 200 ms sleep on every call. Port ownership
+//! is the one best-effort exception: the OS APIs sysinfo exposes don't
+//! include PID→port mappings, so we parse `netstat -ano` on Windows or
+//! `ss -tunlp` on Unix.
 
+use std::collections::HashMap;
+use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -42,6 +46,7 @@ fn process_refresh() -> ProcessRefreshKind {
     ProcessRefreshKind::nothing()
         .with_cpu()
         .with_memory()
+        .with_cmd(sysinfo::UpdateKind::OnlyIfNotSet)
         .with_exe(sysinfo::UpdateKind::OnlyIfNotSet)
 }
 
@@ -160,6 +165,7 @@ pub fn collect_snapshot(include_disks: bool) -> ServerSnapshot {
         .map(|(pid, p)| (*pid, p))
         .collect();
     let total_mem_for_pct = if mem_total_bytes > 0 { mem_total_bytes as f64 } else { 1.0 };
+    let ports_by_pid = collect_process_ports();
     let to_row = |(pid, p): (Pid, &sysinfo::Process)| -> ProcessRow {
         let mem_pct = (p.memory() as f64 / total_mem_for_pct) * 100.0;
         // Join argv with single spaces. We don't try to shell-escape
@@ -173,11 +179,19 @@ pub fn collect_snapshot(include_disks: bool) -> ServerSnapshot {
             .join(" ");
         ProcessRow {
             pid: pid.as_u32().to_string(),
+            ppid: p
+                .parent()
+                .map(|parent| parent.as_u32().to_string())
+                .unwrap_or_default(),
             command: process_display_name(p),
             cpu_pct: format!("{:.1}", p.cpu_usage()),
             mem_pct: format!("{:.1}", mem_pct),
             elapsed: format_elapsed(p.run_time()),
             cmd_line,
+            ports: ports_by_pid
+                .get(&pid.as_u32().to_string())
+                .cloned()
+                .unwrap_or_default(),
         }
     };
     all_procs.sort_unstable_by(|a, b| {
@@ -186,6 +200,7 @@ pub fn collect_snapshot(include_disks: bool) -> ServerSnapshot {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let top_processes: Vec<ProcessRow> = all_procs.iter().take(8).copied().map(to_row).collect();
+    let processes: Vec<ProcessRow> = all_procs.iter().copied().map(to_row).collect();
     all_procs.sort_unstable_by_key(|(_, p)| std::cmp::Reverse(p.memory()));
     let top_processes_mem: Vec<ProcessRow> =
         all_procs.iter().take(8).copied().map(to_row).collect();
@@ -302,7 +317,101 @@ pub fn collect_snapshot(include_disks: bool) -> ServerSnapshot {
         net_tx_bps,
         top_processes,
         top_processes_mem,
+        processes,
     }
+}
+
+fn collect_process_ports() -> HashMap<String, Vec<String>> {
+    #[cfg(windows)]
+    {
+        collect_windows_process_ports()
+    }
+    #[cfg(not(windows))]
+    {
+        collect_unix_process_ports()
+    }
+}
+
+#[cfg(windows)]
+fn collect_windows_process_ports() -> HashMap<String, Vec<String>> {
+    let output = match Command::new("netstat").arg("-ano").output() {
+        Ok(output) if output.status.success() => output,
+        _ => return HashMap::new(),
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut by_pid: HashMap<String, Vec<String>> = HashMap::new();
+    for line in text.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.len() < 4 {
+            continue;
+        }
+        let proto = tokens[0].to_ascii_lowercase();
+        if proto != "tcp" && proto != "udp" {
+            continue;
+        }
+        let (local_addr, state, pid) = if proto == "tcp" {
+            if tokens.len() < 5 {
+                continue;
+            }
+            (tokens[1], tokens[tokens.len() - 2], tokens[tokens.len() - 1])
+        } else {
+            (tokens[1], "", tokens[tokens.len() - 1])
+        };
+        if proto == "tcp" && !state.eq_ignore_ascii_case("LISTENING") {
+            continue;
+        }
+        if !pid.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let label = format!("{}:{}", proto, local_addr);
+        let entry = by_pid.entry(pid.to_string()).or_default();
+        if !entry.contains(&label) {
+            entry.push(label);
+        }
+    }
+    for ports in by_pid.values_mut() {
+        ports.sort();
+    }
+    by_pid
+}
+
+#[cfg(not(windows))]
+fn collect_unix_process_ports() -> HashMap<String, Vec<String>> {
+    let output = match Command::new("ss").args(["-H", "-tunlp"]).output() {
+        Ok(output) if output.status.success() => output,
+        _ => return HashMap::new(),
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut by_pid: HashMap<String, Vec<String>> = HashMap::new();
+    for line in text.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.len() < 5 {
+            continue;
+        }
+        let proto = tokens[0].to_ascii_lowercase();
+        if proto != "tcp" && proto != "udp" {
+            continue;
+        }
+        let local_addr = tokens.get(4).copied().unwrap_or("");
+        let users = tokens.last().copied().unwrap_or("");
+        let Some(pid_idx) = users.find("pid=") else {
+            continue;
+        };
+        let pid_rest = &users[pid_idx + 4..];
+        let pid: String = pid_rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if pid.is_empty() {
+            continue;
+        }
+        let label = format!("{}:{}", proto, local_addr);
+        let entry = by_pid.entry(pid).or_default();
+        if !entry.contains(&label) {
+            entry.push(label);
+        }
+    }
+    for ports in by_pid.values_mut() {
+        ports.sort();
+    }
+    by_pid
 }
 
 fn process_display_name(p: &sysinfo::Process) -> String {

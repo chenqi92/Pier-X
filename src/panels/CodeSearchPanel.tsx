@@ -7,6 +7,7 @@
 // "Go to line" carry the user the rest of the way.
 
 import {
+  Filter,
   Folder,
   Loader2,
   Search,
@@ -98,10 +99,12 @@ function CodeSearchBody({ tab }: Props) {
   const [caseInsensitive, setCaseInsensitive] = useState(true);
   const [regex, setRegex] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
+  const [glob, setGlob] = useState("");
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<CodeSearchOutput | null>(null);
+  const searchSeqRef = useRef(0);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
@@ -114,6 +117,8 @@ function CodeSearchBody({ tab }: Props) {
   const [editorTarget, setEditorTarget] = useState<{
     path: string;
     name: string;
+    line: number;
+    column: number;
   } | null>(null);
 
   const grouped = useMemo(
@@ -141,8 +146,11 @@ function CodeSearchBody({ tab }: Props) {
       setError(t("Type a query first."));
       return;
     }
+    const seq = searchSeqRef.current + 1;
+    searchSeqRef.current = seq;
     setBusy(true);
     setError("");
+    setResult(null);
     try {
       const out = await cmd.codeSearch({
         ...sshArgs,
@@ -151,8 +159,10 @@ function CodeSearchBody({ tab }: Props) {
         caseInsensitive,
         regex,
         wholeWord,
+        glob: glob.trim(),
         maxHits: 500,
       });
+      if (seq !== searchSeqRef.current) return;
       setResult(out);
       // Surface engine state failures as errors, not empty results.
       if (out.engine === "none") {
@@ -177,15 +187,17 @@ function CodeSearchBody({ tab }: Props) {
         );
       }
     } catch (e) {
+      if (seq !== searchSeqRef.current) return;
       setResult(null);
       setError(formatError(e));
     } finally {
-      setBusy(false);
+      if (seq === searchSeqRef.current) setBusy(false);
     }
   }
 
   function openHit(hit: CodeSearchHit) {
-    if (!cwd && !hit.file.startsWith("/")) {
+    const root = result?.cwd || cwd;
+    if (!root && !hit.file.startsWith("/")) {
       setError(
         t(
           "Cannot resolve absolute path for this hit — open the file via SFTP first.",
@@ -193,8 +205,13 @@ function CodeSearchBody({ tab }: Props) {
       );
       return;
     }
-    const absolute = joinPath(cwd, hit.file);
-    setEditorTarget({ path: absolute, name: basename(hit.file) });
+    const absolute = joinPath(root, hit.file);
+    setEditorTarget({
+      path: absolute,
+      name: basename(hit.file),
+      line: hit.line,
+      column: hit.column || 1,
+    });
   }
 
   const engineLabel =
@@ -306,6 +323,30 @@ function CodeSearchBody({ tab }: Props) {
           ) : null}
         </div>
 
+        <div className="cs-cwd-row">
+          <Filter size={11} className="muted" aria-hidden="true" />
+          <input
+            type="text"
+            className="dlg-input mono cs-cwd-input"
+            spellCheck={false}
+            placeholder={t("Glob filter, e.g. src/**/*.ts")}
+            value={glob}
+            onChange={(e) => setGlob(e.currentTarget.value)}
+            disabled={busy}
+            aria-label={t("Glob filter")}
+          />
+          {glob ? (
+            <button
+              type="button"
+              className="cs-input-clear cs-inline-clear"
+              onClick={() => setGlob("")}
+              aria-label={t("Clear glob filter")}
+            >
+              <X size={11} />
+            </button>
+          ) : null}
+        </div>
+
         {error ? (
           <div className="status-note status-note--error mono cs-error">
             {error}
@@ -374,6 +415,8 @@ function CodeSearchBody({ tab }: Props) {
           open
           path={editorTarget.path}
           name={editorTarget.name}
+          initialLine={editorTarget.line}
+          initialColumn={editorTarget.column}
           sshArgs={sshArgs}
           ownerLabel={sshArgs.user}
           onClose={() => setEditorTarget(null)}

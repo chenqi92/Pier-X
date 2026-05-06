@@ -103,6 +103,11 @@ pub struct ServerSnapshot {
     /// top-by-CPU set won't contain them, so no client-side
     /// reshuffle can surface the real memory hogs.
     pub top_processes_mem: Vec<ProcessRow>,
+    /// Full process list when the probe can collect it. Local probes
+    /// populate this from sysinfo; SSH probes fall back to the union of
+    /// their CPU/MEM top slices unless the remote parser grows a richer
+    /// process section.
+    pub processes: Vec<ProcessRow>,
 }
 
 /// One mounted filesystem as reported by `df -hPT`. Sizes stay as
@@ -168,6 +173,9 @@ pub struct ProcessRow {
     /// PID as printed by `ps` (kept as a string because some shells
     /// zero-pad or right-align the column).
     pub pid: String,
+    /// Parent process id. Empty when the source didn't expose it.
+    #[serde(default)]
+    pub ppid: String,
     /// Command name (`comm`). May be truncated by the remote `ps`.
     pub command: String,
     /// CPU usage percentage column, verbatim from `ps` (e.g. `"3.4"`).
@@ -181,6 +189,11 @@ pub struct ProcessRow {
     /// it. Surfaced in the UI as a hover tooltip / detail expand.
     #[serde(default)]
     pub cmd_line: String,
+    /// Listening / owned ports associated with this PID, best-effort.
+    /// Values are preformatted for compact display, e.g.
+    /// `tcp:127.0.0.1:5173`.
+    #[serde(default)]
+    pub ports: Vec<String>,
 }
 
 /// Run a combined probe and return a single snapshot.
@@ -238,6 +251,8 @@ pub async fn probe_with_baseline(
     //   OSREL     — distro / kernel id from `/etc/os-release` + `uname`
     //   NETDEV    — `cat /proc/net/dev` for network throughput
     //   TOPPROC   — `ps -eo pid,comm,pcpu,pmem,etime --sort=-pcpu` head
+    //   PROCALL   — wider process list with PPID for expanded/tree view
+    //   PROCPORTS — best-effort PID→listening-port map from ss/netstat
     //
     // Disk sections are skipped on the fast (5 s) cadence — the gauges
     // for CPU/memory/network are the part that needs a frequent
@@ -261,7 +276,9 @@ pub async fn probe_with_baseline(
          echo '---OSREL---'; (cat /etc/os-release 2>/dev/null; uname -sr 2>/dev/null || true); \
          echo '---NETDEV---'; (cat /proc/net/dev 2>/dev/null || true); \
          echo '---TOPPROC---'; (ps -eo pid,comm,pcpu,pmem,etime --sort=-pcpu --no-headers 2>/dev/null | head -8 || true); \
-         echo '---TOPPROCM---'; (ps -eo pid,comm,pcpu,pmem,etime --sort=-pmem --no-headers 2>/dev/null | head -8 || true)"
+         echo '---TOPPROCM---'; (ps -eo pid,comm,pcpu,pmem,etime --sort=-pmem --no-headers 2>/dev/null | head -8 || true); \
+         echo '---PROCALL---'; (ps -eo pid=,ppid=,pcpu=,pmem=,etime=,comm= --sort=-pcpu 2>/dev/null | head -200 || true); \
+         echo '---PROCPORTS---'; (ss -H -tunlp 2>/dev/null || netstat -tunlp 2>/dev/null || true)"
     );
     let (exit, stdout) = session.exec_command(&cmd).await?;
     if exit != 0 && stdout.is_empty() {
@@ -339,6 +356,31 @@ pub async fn probe_with_baseline(
     }
     if let Some(s) = sections.get("TOPPROCM") {
         snap.top_processes_mem = parse_top_processes(s);
+    }
+    let process_ports = sections
+        .get("PROCPORTS")
+        .map(|s| parse_process_ports(s))
+        .unwrap_or_default();
+    if let Some(s) = sections.get("PROCALL") {
+        snap.processes = parse_all_processes(s);
+        attach_process_ports(&mut snap.processes, &process_ports);
+    }
+    let process_meta: std::collections::HashMap<String, ProcessRow> = snap
+        .processes
+        .iter()
+        .map(|p| (p.pid.clone(), p.clone()))
+        .collect();
+    merge_process_meta(&mut snap.top_processes, &process_meta, &process_ports);
+    merge_process_meta(&mut snap.top_processes_mem, &process_meta, &process_ports);
+    if snap.processes.is_empty() {
+        let mut seen_pids = std::collections::HashSet::new();
+        snap.processes = snap
+            .top_processes
+            .iter()
+            .chain(snap.top_processes_mem.iter())
+            .filter(|p| seen_pids.insert(p.pid.clone()))
+            .cloned()
+            .collect();
     }
 
     // Post-parse sanity check: if every rich field is still at its
@@ -554,6 +596,7 @@ fn parse_top_processes(text: &str) -> Vec<ProcessRow> {
         let command = tokens[1..tokens.len() - 3].join(" ");
         out.push(ProcessRow {
             pid,
+            ppid: String::new(),
             command,
             cpu_pct,
             mem_pct,
@@ -563,9 +606,113 @@ fn parse_top_processes(text: &str) -> Vec<ProcessRow> {
             // and break this parser. Cmdline stays empty for SSH
             // probes; local sysinfo path fills it in.
             cmd_line: String::new(),
+            ports: Vec::new(),
         });
     }
     out
+}
+
+/// Parse `ps -eo pid=,ppid=,pcpu=,pmem=,etime=,comm=` rows used by
+/// the expanded process view. We keep `comm` only (not full args) so
+/// the field count stays deterministic across procps variants.
+fn parse_all_processes(text: &str) -> Vec<ProcessRow> {
+    let mut out: Vec<ProcessRow> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+        if tokens.len() < 6 {
+            continue;
+        }
+        out.push(ProcessRow {
+            pid: tokens[0].to_string(),
+            ppid: tokens[1].to_string(),
+            cpu_pct: tokens[2].to_string(),
+            mem_pct: tokens[3].to_string(),
+            elapsed: tokens[4].to_string(),
+            command: tokens[5..].join(" "),
+            cmd_line: String::new(),
+            ports: Vec::new(),
+        });
+    }
+    out
+}
+
+fn parse_process_ports(text: &str) -> std::collections::HashMap<String, Vec<String>> {
+    let mut by_pid: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+        if tokens.len() < 5 {
+            continue;
+        }
+        let proto = tokens[0].to_ascii_lowercase();
+        if proto != "tcp" && proto != "udp" && proto != "tcp6" && proto != "udp6" {
+            continue;
+        }
+        let (local_addr, pid) = if let Some(pid_idx) = trimmed.find("pid=") {
+            let pid_rest = &trimmed[pid_idx + 4..];
+            let pid: String = pid_rest
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            (tokens.get(4).copied().unwrap_or(""), pid)
+        } else {
+            let pid_prog = tokens.last().copied().unwrap_or("");
+            let pid = pid_prog.split('/').next().unwrap_or("").to_string();
+            (tokens.get(3).copied().unwrap_or(""), pid)
+        };
+        if local_addr.is_empty() || !pid.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let label = format!("{}:{}", proto, local_addr);
+        let entry = by_pid.entry(pid).or_default();
+        if !entry.contains(&label) {
+            entry.push(label);
+        }
+    }
+    for ports in by_pid.values_mut() {
+        ports.sort();
+    }
+    by_pid
+}
+
+fn attach_process_ports(
+    rows: &mut [ProcessRow],
+    ports: &std::collections::HashMap<String, Vec<String>>,
+) {
+    for row in rows {
+        if let Some(found) = ports.get(&row.pid) {
+            row.ports = found.clone();
+        }
+    }
+}
+
+fn merge_process_meta(
+    rows: &mut [ProcessRow],
+    process_meta: &std::collections::HashMap<String, ProcessRow>,
+    ports: &std::collections::HashMap<String, Vec<String>>,
+) {
+    for row in rows {
+        if let Some(meta) = process_meta.get(&row.pid) {
+            row.ppid = meta.ppid.clone();
+            if row.command.is_empty() {
+                row.command = meta.command.clone();
+            }
+            if row.cmd_line.is_empty() {
+                row.cmd_line = meta.cmd_line.clone();
+            }
+        }
+        if let Some(found) = ports.get(&row.pid) {
+            row.ports = found.clone();
+        }
+    }
 }
 
 /// Split the combined stdout into named sections.

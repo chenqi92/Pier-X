@@ -1,9 +1,26 @@
-import { Cpu, HardDrive, KeyRound, MemoryStick, Network, RefreshCw, Square, X } from "lucide-react";
+import {
+  Cpu,
+  HardDrive,
+  KeyRound,
+  ListTree,
+  MemoryStick,
+  MoreHorizontal,
+  Network,
+  RefreshCw,
+  Search,
+  Square,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import * as cmd from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
-import type { BlockDeviceEntryView, ServerSnapshotView, TabState } from "../lib/types";
+import type {
+  BlockDeviceEntryView,
+  ProcessRowView,
+  ServerSnapshotView,
+  TabState,
+} from "../lib/types";
 import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
@@ -347,6 +364,99 @@ function buildBlockTree(blocks: BlockDeviceEntryView[]): BlockTreeNode[] {
   return roots;
 }
 
+type ProcessTreeRow = ProcessRowView & { depth: number };
+
+function parseProcessMetric(value: string): number {
+  const n = Number.parseFloat(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function sortProcessRows(rows: ProcessRowView[], sort: "cpu" | "mem"): ProcessRowView[] {
+  const metric = sort === "mem" ? "memPct" : "cpuPct";
+  return [...rows].sort((a, b) => {
+    const byMetric = parseProcessMetric(b[metric]) - parseProcessMetric(a[metric]);
+    if (byMetric !== 0) return byMetric;
+    return Number.parseInt(a.pid, 10) - Number.parseInt(b.pid, 10);
+  });
+}
+
+function dedupeProcessRows(rows: ProcessRowView[]): ProcessRowView[] {
+  const byPid = new Map<string, ProcessRowView>();
+  for (const row of rows) {
+    const existing = byPid.get(row.pid);
+    if (!existing || (existing.ports.length === 0 && row.ports.length > 0)) {
+      byPid.set(row.pid, row);
+    }
+  }
+  return [...byPid.values()];
+}
+
+function filterProcessRows(rows: ProcessRowView[], query: string): ProcessRowView[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return rows;
+  return rows.filter((row) => {
+    const haystack = [
+      row.pid,
+      row.ppid,
+      row.command,
+      row.cmdLine,
+      ...row.ports,
+    ].join(" ").toLowerCase();
+    return haystack.includes(q);
+  });
+}
+
+function buildProcessTreeRows(rows: ProcessRowView[], sort: "cpu" | "mem"): ProcessTreeRow[] {
+  const sorted = sortProcessRows(rows, sort);
+  const byPid = new Map(sorted.map((row) => [row.pid, row]));
+  const childrenByParent = new Map<string, ProcessRowView[]>();
+  const roots: ProcessRowView[] = [];
+  for (const row of sorted) {
+    if (row.ppid && row.ppid !== "0" && byPid.has(row.ppid)) {
+      const children = childrenByParent.get(row.ppid) ?? [];
+      children.push(row);
+      childrenByParent.set(row.ppid, children);
+    } else {
+      roots.push(row);
+    }
+  }
+  for (const children of childrenByParent.values()) {
+    children.sort((a, b) => sorted.indexOf(a) - sorted.indexOf(b));
+  }
+  const out: ProcessTreeRow[] = [];
+  const walk = (row: ProcessRowView, depth: number, seen: Set<string>) => {
+    if (seen.has(row.pid)) return;
+    const nextSeen = new Set(seen);
+    nextSeen.add(row.pid);
+    out.push({ ...row, depth });
+    const children = childrenByParent.get(row.pid) ?? [];
+    for (const child of children) walk(child, depth + 1, nextSeen);
+  };
+  for (const root of roots) walk(root, 0, new Set());
+  return out;
+}
+
+function processPortsLabel(row: ProcessRowView): string {
+  return row.ports.length > 0 ? row.ports.join(" · ") : "—";
+}
+
+function compactPortLabel(port: string): string {
+  const protoEnd = port.indexOf(":");
+  if (protoEnd <= 0) return port;
+  const proto = port.slice(0, protoEnd);
+  const addr = port.slice(protoEnd + 1);
+  const lastColon = addr.lastIndexOf(":");
+  const localPort = lastColon >= 0 ? addr.slice(lastColon + 1).replace(/]$/, "") : addr;
+  return localPort ? `${proto}:${localPort}` : proto;
+}
+
+function processPortsCompactLabel(row: ProcessRowView): string {
+  if (row.ports.length === 0) return "—";
+  const labels = row.ports.map(compactPortLabel);
+  const head = labels.slice(0, 2).join(" ");
+  return labels.length > 2 ? `${head} +${labels.length - 2}` : head;
+}
+
 export default function ServerMonitorPanel(props: Props) {
   const ready = useDeferredMount();
   return (
@@ -377,6 +487,9 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
   // returns two separate top-8 lists (one per metric) so this flip
   // is a free render swap, no extra probe fired.
   const [procSort, setProcSort] = useState<"cpu" | "mem">("cpu");
+  const [procExpanded, setProcExpanded] = useState(false);
+  const [procTree, setProcTree] = useState(true);
+  const [procSearch, setProcSearch] = useState("");
   // Mirrors `busy` for the polling interval — reading it via ref
   // means we don't have to put `busy` in the effect's deps and pay
   // the interval-teardown-on-every-probe cost.
@@ -706,18 +819,35 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
   const rxRate = snap ? formatRate(snap.netRxBps) : null;
   const txRate = snap ? formatRate(snap.netTxBps) : null;
 
-  // Pick the matching list for the active sort. Fall back from
-  // topProcessesMem to topProcesses when the backend didn't emit a
-  // MEM slice (older cached snapshot, or a remote whose `ps` doesn't
-  // accept `--sort=-pmem`) so the user still sees something useful
-  // rather than an empty table.
-  const procRows = useMemo(() => {
+  // Compact dashboard uses the backend's top slices. Expanded/search
+  // mode switches to the full process list when available so PID/name/
+  // port lookups aren't constrained to whatever happened to be in the
+  // top 8 at probe time.
+  const compactProcRows = useMemo(() => {
     if (!snap) return [];
-    if (procSort === "mem") {
-      return snap.topProcessesMem.length > 0 ? snap.topProcessesMem : snap.topProcesses;
-    }
-    return snap.topProcesses;
+    const topRows = procSort === "mem" && snap.topProcessesMem.length > 0
+      ? snap.topProcessesMem
+      : snap.topProcesses;
+    return topRows.slice(0, 8);
   }, [snap, procSort]);
+  const allProcessRows = useMemo(() => {
+    if (!snap) return [];
+    const full = snap.processes && snap.processes.length > 0
+      ? snap.processes
+      : dedupeProcessRows([...snap.topProcesses, ...snap.topProcessesMem]);
+    return sortProcessRows(full, procSort);
+  }, [snap, procSort]);
+  const filteredProcessRows = useMemo(
+    () => filterProcessRows(allProcessRows, procSearch),
+    [allProcessRows, procSearch],
+  );
+  const showFullProcesses = procExpanded || procSearch.trim().length > 0;
+  const procRows = showFullProcesses
+    ? procTree
+      ? buildProcessTreeRows(filteredProcessRows, procSort)
+      : filteredProcessRows.map((row) => ({ ...row, depth: 0 }))
+    : compactProcRows.map((row) => ({ ...row, depth: 0 }));
+  const canShowProcessTree = allProcessRows.some((row) => row.ppid && row.ppid !== "0");
 
   return (
     <>
@@ -849,11 +979,11 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
             <thead>
               <tr>
                 <th>{t("MOUNT")}</th>
-                <th style={{ width: 64, textAlign: "left" }}>{t("TYPE")}</th>
-                <th style={{ width: 48, textAlign: "right" }}>{t("SIZE")}</th>
-                <th style={{ width: 48, textAlign: "right" }}>{t("USED")}</th>
-                <th style={{ width: 48, textAlign: "right" }}>{t("AVAIL")}</th>
-                <th style={{ width: 40, textAlign: "right" }}>{t("USE%")}</th>
+                <th className="mon-col-disk-type">{t("TYPE")}</th>
+                <th className="mon-col-disk-num">{t("SIZE")}</th>
+                <th className="mon-col-disk-num">{t("USED")}</th>
+                <th className="mon-col-disk-num">{t("AVAIL")}</th>
+                <th className="mon-col-disk-use">{t("USE%")}</th>
               </tr>
             </thead>
             <tbody>
@@ -915,81 +1045,148 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
         <div className="mon-block">
           <div className="mon-block-head">
             <span>{t("TOP PROCESSES")}</span>
-            <div className="mon-block-meta mon-sort-group mono">
-              <span>{t("Sort:")}</span>
+            <span className="mono mon-block-meta">
+              {showFullProcesses
+                ? `${filteredProcessRows.length}/${allProcessRows.length}`
+                : `${compactProcRows.length}/${allProcessRows.length}`}
+            </span>
+          </div>
+          <div className="mon-proc-toolbar">
+            <div className="mon-proc-filter">
+              <Search size={10} aria-hidden="true" />
+              <input
+                value={procSearch}
+                onChange={(e) => setProcSearch(e.currentTarget.value)}
+                placeholder={t("Search PID, port, process...")}
+                spellCheck={false}
+              />
+              {procSearch && (
+                <button
+                  type="button"
+                  className="lg-x"
+                  onClick={() => setProcSearch("")}
+                  title={t("Clear")}
+                  aria-label={t("Clear")}
+                >
+                  <X size={10} />
+                </button>
+              )}
+            </div>
+            <div className="mon-proc-head-tools">
+              <div className="mon-block-meta mon-sort-group mono" aria-label={t("Sort:")}>
+                <button
+                  type="button"
+                  className={"dk-sort" + (procSort === "cpu" ? " active" : "")}
+                  onClick={() => setProcSort("cpu")}
+                >
+                  {t("CPU")}
+                </button>
+                <button
+                  type="button"
+                  className={"dk-sort" + (procSort === "mem" ? " active" : "")}
+                  onClick={() => setProcSort("mem")}
+                >
+                  {t("MEM")}
+                </button>
+              </div>
+              {showFullProcesses && canShowProcessTree && (
+                <button
+                  type="button"
+                  className={"mini-button mon-proc-mode mon-proc-icon-btn" + (procTree ? " active" : "")}
+                  onClick={() => setProcTree((v) => !v)}
+                  title={procTree ? t("Show flat process list") : t("Show process tree")}
+                  aria-label={procTree ? t("Show flat process list") : t("Show process tree")}
+                >
+                  <ListTree size={10} />
+                </button>
+              )}
               <button
                 type="button"
-                className={"dk-sort" + (procSort === "cpu" ? " active" : "")}
-                onClick={() => setProcSort("cpu")}
+                className="mini-button mon-proc-more"
+                onClick={() => setProcExpanded((v) => !v)}
+                title={procExpanded ? t("Show compact process list") : t("Show all processes")}
+                aria-label={procExpanded ? t("Show compact process list") : t("Show all processes")}
               >
-                {t("CPU")}
-              </button>
-              <button
-                type="button"
-                className={"dk-sort" + (procSort === "mem" ? " active" : "")}
-                onClick={() => setProcSort("mem")}
-              >
-                {t("MEM")}
+                <MoreHorizontal size={10} />
+                {procExpanded ? t("Less") : t("More")}
               </button>
             </div>
           </div>
-          <table className="mon-table mon-table--procs">
-            <thead>
-              <tr>
-                <th style={{ width: 54 }}>{t("PID")}</th>
-                <th>{t("COMMAND")}</th>
-                <th style={{ width: 48, textAlign: "right" }}>{t("CPU%")}</th>
-                <th style={{ width: 48, textAlign: "right" }}>{t("MEM%")}</th>
-                <th style={{ width: 36 }} aria-label={t("Actions")} />
-              </tr>
-            </thead>
-            <tbody>
-              {snap && procRows.length > 0 ? (
-                procRows.map((row, i) => {
-                  // Build the hover tooltip from cmd_line when we have
-                  // it (local sysinfo path); else fall back to the
-                  // truncated `comm` from `ps`.
-                  const tooltip = row.cmdLine
-                    ? `${row.cmdLine}\nPID ${row.pid} · ${t("elapsed")} ${row.elapsed}`
-                    : `${row.command} · PID ${row.pid} · ${t("elapsed")} ${row.elapsed}`;
-                  return (
-                    <tr key={`${row.pid}-${i}`} title={tooltip}>
-                      <td className="mono mon-cell-muted">{row.pid}</td>
-                      <td className="mono mon-cell-trunc">{row.command}</td>
-                      <td className="mono mon-cell-right">{row.cpuPct}</td>
-                      <td className="mono mon-cell-right">{row.memPct}</td>
-                      <td className="mono mon-cell-actions">
-                        <button
-                          type="button"
-                          className="mini-button mini-button--ghost"
-                          onClick={() => void killProcess(row, false)}
-                          title={t("Send SIGTERM (graceful)")}
-                          aria-label={t("Send SIGTERM (graceful)")}
-                        >
-                          <Square size={9} />
-                        </button>
-                        <button
-                          type="button"
-                          className="mini-button mini-button--ghost"
-                          onClick={() => void killProcess(row, true)}
-                          title={t("Send SIGKILL (force)")}
-                          aria-label={t("Send SIGKILL (force)")}
-                        >
-                          <X size={9} />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              ) : (
+          <div className={"mon-proc-table-wrap" + (showFullProcesses ? " mon-proc-table-wrap--full" : "")}>
+            <table className="mon-table mon-table--procs">
+              <thead>
                 <tr>
-                  <td colSpan={5} className="mon-empty mono">
-                    {snap ? t("(no process data)") : "—"}
-                  </td>
+                  <th className="mon-col-pid">{t("PID")}</th>
+                  <th>{t("COMMAND")}</th>
+                  <th className="mon-col-ports">{t("PORTS")}</th>
+                  <th className="mon-col-num">{t("CPU%")}</th>
+                  <th className="mon-col-num">{t("MEM%")}</th>
+                  <th className="mon-col-actions" aria-label={t("Actions")} />
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {snap && procRows.length > 0 ? (
+                  procRows.map((row, i) => {
+                    // Build the hover tooltip from cmd_line when we have
+                    // it (local sysinfo path); else fall back to the
+                    // truncated `comm` from `ps`.
+                    const portsLabel = processPortsLabel(row);
+                    const portsCompactLabel = processPortsCompactLabel(row);
+                    const ppidLabel = row.ppid ? ` · PPID ${row.ppid}` : "";
+                    const portsHint = row.ports.length > 0 ? `\n${t("PORTS")}: ${portsLabel}` : "";
+                    const tooltip = row.cmdLine
+                      ? `${row.cmdLine}\nPID ${row.pid}${ppidLabel} · ${t("elapsed")} ${row.elapsed}${portsHint}`
+                      : `${row.command} · PID ${row.pid}${ppidLabel} · ${t("elapsed")} ${row.elapsed}${portsHint}`;
+                    return (
+                      <tr key={`${row.pid}-${i}`} title={tooltip}>
+                        <td className="mono mon-cell-muted">{row.pid}</td>
+                        <td className="mono mon-cell-trunc">
+                          <span className="mon-proc-name">
+                            {Array.from({ length: Math.min(row.depth, 8) }).map((_, d) => (
+                              <span key={d} className="mon-proc-indent-unit" aria-hidden />
+                            ))}
+                            {row.depth > 0 && <span className="mon-proc-branch mono" aria-hidden>└</span>}
+                            <span className="mon-cell-trunc">{row.command}</span>
+                          </span>
+                        </td>
+                        <td className="mono mon-cell-trunc mon-proc-ports">{portsCompactLabel}</td>
+                        <td className="mono mon-cell-right">{row.cpuPct}</td>
+                        <td className="mono mon-cell-right">{row.memPct}</td>
+                        <td className="mono mon-cell-actions">
+                          <span className="mon-proc-actions">
+                            <button
+                              type="button"
+                              className="mini-button mini-button--ghost"
+                              onClick={() => void killProcess(row, false)}
+                              title={t("Send SIGTERM (graceful)")}
+                              aria-label={t("Send SIGTERM (graceful)")}
+                            >
+                              <Square size={9} />
+                            </button>
+                            <button
+                              type="button"
+                              className="mini-button mini-button--ghost"
+                              onClick={() => void killProcess(row, true)}
+                              title={t("Send SIGKILL (force)")}
+                              aria-label={t("Send SIGKILL (force)")}
+                            >
+                              <X size={9} />
+                            </button>
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="mon-empty mono">
+                      {snap ? t("(no process data)") : "—"}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/*

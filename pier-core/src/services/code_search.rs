@@ -54,6 +54,10 @@ pub enum SearchEngine {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchOutput {
+    /// Resolved working directory after `cd`. This is especially
+    /// important when the input cwd was empty and the backend fell
+    /// back to `$HOME`; relative hits can still be opened through SFTP.
+    pub cwd: String,
     /// Tool that produced `hits` (or the reason there are no hits).
     pub engine: SearchEngine,
     /// Up to `max_hits` matches.
@@ -83,6 +87,9 @@ pub struct SearchOpts {
     pub regex: bool,
     /// `-w` on both engines.
     pub whole_word: bool,
+    /// Optional file glob. Mapped to ripgrep's `-g` and, for
+    /// `git grep`, to a trailing pathspec.
+    pub glob: String,
     /// Hard cap on hits returned to the UI. Soft floor of 1 (we
     /// always send at least one row when there's a match);
     /// soft ceiling of 5000 to keep the response budget tight.
@@ -128,6 +135,17 @@ fn build_command(opts: &SearchOpts) -> String {
     }
 
     let pattern = shell_quote(&opts.query);
+    let glob = opts.glob.trim();
+    let rg_glob = if glob.is_empty() {
+        String::new()
+    } else {
+        format!(" -g {}", shell_quote(glob))
+    };
+    let git_pathspec = if glob.is_empty() {
+        String::new()
+    } else {
+        format!(" -- {}", shell_quote(glob))
+    };
     let cap = opts.max_hits.max(1).min(5000);
     // Request +1 row so the parser can detect truncation without
     // ambiguity (cap rows = exactly cap, +1 row = truncated).
@@ -135,25 +153,33 @@ fn build_command(opts: &SearchOpts) -> String {
 
     format!(
         "cd {cwd} 2>/dev/null || {{ echo 'ENGINE:CWD_MISSING'; exit 3; }}\n\
+         printf 'CWD:%s\\n' \"$PWD\"\n\
          if command -v rg >/dev/null 2>&1; then\n\
          \x20\x20echo 'ENGINE:rg'\n\
-         \x20\x20rg --no-heading --color=never -n --column --max-columns=400{common} -e {pat} . 2>/dev/null | head -n {head_cap}\n\
+         \x20\x20rg --no-heading --color=never -n --column --max-columns=400{common}{rg_glob} -e {pat} . 2>/dev/null | head -n {head_cap}\n\
          elif git rev-parse --git-dir >/dev/null 2>&1; then\n\
          \x20\x20echo 'ENGINE:git-grep'\n\
-         \x20\x20git grep -n --column -I{common} -e {pat} 2>/dev/null | head -n {head_cap}\n\
+         \x20\x20git grep -n --column -I{common} -e {pat}{git_pathspec} 2>/dev/null | head -n {head_cap}\n\
          else\n\
          \x20\x20echo 'ENGINE:none'\n\
          fi\n",
         cwd = cwd_expr,
         common = common,
+        rg_glob = rg_glob,
         pat = pattern,
+        git_pathspec = git_pathspec,
         head_cap = head_cap,
     )
 }
 
 fn parse_output(stdout: &str, max_hits: usize, exit_code: i32) -> SearchOutput {
     let mut lines = stdout.lines();
-    let header = lines.next().unwrap_or("").trim();
+    let first = lines.next().unwrap_or("").trim();
+    let (cwd, header) = if let Some(cwd) = first.strip_prefix("CWD:") {
+        (cwd.to_string(), lines.next().unwrap_or("").trim())
+    } else {
+        (String::new(), first)
+    };
     let engine = match header {
         "ENGINE:rg" => SearchEngine::Rg,
         "ENGINE:git-grep" => SearchEngine::GitGrep,
@@ -164,6 +190,7 @@ fn parse_output(stdout: &str, max_hits: usize, exit_code: i32) -> SearchOutput {
 
     let mut hits: Vec<SearchHit> = Vec::new();
     let mut truncated = false;
+    let cap = max_hits.max(1).min(5000);
 
     if matches!(engine, SearchEngine::Rg | SearchEngine::GitGrep) {
         for raw in lines {
@@ -171,7 +198,7 @@ fn parse_output(stdout: &str, max_hits: usize, exit_code: i32) -> SearchOutput {
             if trimmed.is_empty() {
                 continue;
             }
-            if hits.len() >= max_hits {
+            if hits.len() >= cap {
                 truncated = true;
                 break;
             }
@@ -182,6 +209,7 @@ fn parse_output(stdout: &str, max_hits: usize, exit_code: i32) -> SearchOutput {
     }
 
     SearchOutput {
+        cwd,
         engine,
         hits,
         truncated,
@@ -229,6 +257,17 @@ mod tests {
         assert_eq!(out.hits[0].line, 12);
         assert_eq!(out.hits[0].column, 7);
         assert_eq!(out.hits[0].text, "fn main() {");
+    }
+
+    #[test]
+    fn parse_captures_resolved_cwd() {
+        let stdout = "CWD:/home/alice/project\n\
+                      ENGINE:rg\n\
+                      ./src/lib.rs:2:1:needle\n";
+        let out = parse_output(stdout, 100, 0);
+        assert_eq!(out.cwd, "/home/alice/project");
+        assert_eq!(out.engine, SearchEngine::Rg);
+        assert_eq!(out.hits.len(), 1);
     }
 
     #[test]
@@ -285,6 +324,7 @@ mod tests {
             case_insensitive: false,
             regex: false,
             whole_word: false,
+            glob: String::new(),
             max_hits: 200,
         });
         // shell_quote leaves shell-safe tokens unquoted.
@@ -301,6 +341,7 @@ mod tests {
             case_insensitive: true,
             regex: true,
             whole_word: true,
+            glob: String::new(),
             max_hits: 0, // floor → 1
         });
         assert!(cmd.contains("cd \"$HOME\""), "{cmd}");
@@ -318,9 +359,28 @@ mod tests {
             case_insensitive: false,
             regex: false,
             whole_word: false,
+            glob: String::new(),
             max_hits: 100,
         });
         // shell_quote wraps in '...' and escapes embedded '.
         assert!(cmd.contains("'it'\\''s a $needle'"), "{cmd}");
+    }
+
+    #[test]
+    fn build_command_threads_glob_to_engines() {
+        let cmd = build_command(&SearchOpts {
+            cwd: "/srv/app".into(),
+            query: "TODO".into(),
+            case_insensitive: false,
+            regex: false,
+            whole_word: false,
+            glob: "src/**/*.ts".into(),
+            max_hits: 100,
+        });
+        assert!(cmd.contains(" -g 'src/**/*.ts' -e TODO "), "{cmd}");
+        assert!(
+            cmd.contains("git grep -n --column -I -F -e TODO -- 'src/**/*.ts'"),
+            "{cmd}"
+        );
     }
 }

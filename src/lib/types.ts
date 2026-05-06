@@ -827,6 +827,10 @@ export type ServerSnapshotView = {
    *  client-side resorted, so genuine memory hogs (Java heaps, DB
    *  caches) that sit near 0% CPU still surface. */
   topProcessesMem: ProcessRowView[];
+  /** Full process list when the backend can provide it. Local probes
+   *  include all non-thread processes; older / remote probes may fall
+   *  back to the top-process union. */
+  processes: ProcessRowView[];
   /** Per-filesystem breakdown from `df -hPT`, with Docker volumes and
    *  pseudo filesystems (tmpfs / overlay / devtmpfs) filtered out.
    *  Empty on a fast-tier (no-disk) probe — the panel keeps the prior
@@ -877,6 +881,8 @@ export type BlockDeviceEntryView = {
 
 export type ProcessRowView = {
   pid: string;
+  /** Parent process id, empty when unavailable. */
+  ppid: string;
   command: string;
   cpuPct: string;
   memPct: string;
@@ -885,6 +891,8 @@ export type ProcessRowView = {
    *  carry it (current SSH path) or sysinfo couldn't read
    *  `/proc/<pid>/cmdline`. UI shows this as a hover tooltip. */
   cmdLine: string;
+  /** Best-effort owned/listening ports, preformatted for display. */
+  ports: string[];
 };
 
 export type DetectedServiceView = {

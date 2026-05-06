@@ -739,6 +739,7 @@ export type CodeSearchHit = {
 };
 
 export type CodeSearchOutput = {
+  cwd: string;
   engine: CodeSearchEngine;
   hits: CodeSearchHit[];
   truncated: boolean;
@@ -758,6 +759,7 @@ export type CodeSearchParams = {
   caseInsensitive?: boolean;
   regex?: boolean;
   wholeWord?: boolean;
+  glob?: string;
   maxHits?: number;
 };
 
@@ -775,6 +777,7 @@ export const codeSearch = (params: CodeSearchParams) =>
     caseInsensitive: params.caseInsensitive ?? false,
     regex: params.regex ?? false,
     wholeWord: params.wholeWord ?? false,
+    glob: params.glob ?? "",
     maxHits: params.maxHits ?? 500,
   });
 

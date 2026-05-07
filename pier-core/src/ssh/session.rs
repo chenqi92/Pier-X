@@ -858,6 +858,25 @@ impl SshSession {
         runtime::shared().block_on(self.set_sudo_password(password));
     }
 
+    /// True when this session has a non-empty sudo password attached.
+    /// Used by service modules (nginx, web_server) to decide whether
+    /// they should still prepend `sudo -n ` to commands as a NOPASSWD
+    /// fallback, or trust [`Self::exec_with_sudo`] to wrap with
+    /// `sudo -S` and pipe the password instead.
+    pub async fn has_sudo_password(&self) -> bool {
+        self.sudo_password
+            .read()
+            .await
+            .as_ref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Sync convenience for [`Self::has_sudo_password`].
+    pub fn has_sudo_password_blocking(&self) -> bool {
+        runtime::shared().block_on(self.has_sudo_password())
+    }
+
     /// Run `command` remotely. If a sudo password has been
     /// attached via [`Self::set_sudo_password`], the command is
     /// wrapped in `sudo -S -p ''` and the password is piped via
@@ -874,6 +893,11 @@ impl SshSession {
         let pw = { self.sudo_password.read().await.clone() };
         match pw {
             Some(pw) if !pw.is_empty() => {
+                // Audit: log only the first 80 chars of the wrapped
+                // command and never the password. Goes to the log
+                // file the user can inspect via Settings → Privacy.
+                let preview: String = command.chars().take(80).collect();
+                log::info!("[audit] exec_with_sudo: {preview}");
                 let (wrapped, stdin) = sudo::wrap_command(command, &pw);
                 self.exec_command_with_stdin(&wrapped, &stdin).await
             }

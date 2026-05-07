@@ -15,6 +15,7 @@ import {
   Search,
   Server,
   Settings as SettingsIcon,
+  ShieldCheck,
   Sun,
   Terminal as TerminalIcon,
   Trash2,
@@ -41,6 +42,7 @@ import {
 } from "../lib/logger";
 import type { ComponentType, SVGProps } from "react";
 import IconButton from "./IconButton";
+import SudoPasswordDialog from "./SudoPasswordDialog";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import {
@@ -55,6 +57,8 @@ import {
   MONO_FONT_OPTIONS,
 } from "../stores/useSettingsStore";
 import type { Locale } from "../stores/useSettingsStore";
+import { useConnectionStore } from "../stores/useConnectionStore";
+import { useSudoStore } from "../stores/useSudoStore";
 
 type Props = {
   open: boolean;
@@ -79,6 +83,7 @@ type Page =
   | "SshKeys"
   | "Diagnostics"
   | "Privacy"
+  | "Security"
   | "General"
   | "About";
 
@@ -102,6 +107,7 @@ const PAGE_LABEL: Record<Page, string> = {
   SshKeys: "SSH keys",
   Diagnostics: "Diagnostics",
   Privacy: "Privacy",
+  Security: "Security",
   General: "General",
   About: "About",
 };
@@ -131,6 +137,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { key: "Diagnostics", icon: FileText },
       { key: "Privacy", icon: Lock },
+      { key: "Security", icon: ShieldCheck },
       { key: "General", icon: SettingsIcon },
       { key: "About", icon: Info },
     ],
@@ -1152,6 +1159,323 @@ function PrivacyPanel() {
   );
 }
 
+// ── Security panel ───────────────────────────────────────────────
+// Settings → Security. Inventories every saved SSH connection and
+// shows whether a privilege-escalation password is currently armed
+// for it (in-memory L1 cache OR persisted in the OS keychain).
+// "Forget" purges both layers for that host. The panel does NOT
+// expose passwords themselves — only their presence — so even a
+// shoulder-surfing screenshot can't leak credentials.
+
+type SecurityHostRow = {
+  /** `user@host:port`, the same key `useSudoStore` indexes by. */
+  storeKey: string;
+  /** UI display name (saved-connection label, falls back to the
+   *  raw `user@host`). */
+  label: string;
+  /** Stable identity tuple — used to drive the keychain lookup
+   *  and to call `forgetElevationPassword`. */
+  user: string;
+  host: string;
+  port: number;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex: number | null;
+  /** True when the L1 (in-memory) cache holds a password for this
+   *  host this session. */
+  inMemory: boolean;
+  /** Set to `"yes"` / `"no"` once the keychain probe completes;
+   *  `"unknown"` while the per-row probe is in flight. */
+  inKeychain: "yes" | "no" | "unknown";
+};
+
+function SecurityPanel() {
+  const { t } = useI18n();
+  const connections = useConnectionStore((s) => s.connections);
+  const refreshConnections = useConnectionStore((s) => s.refresh);
+  const sudoMemory = useSudoStore((s) => s.passwords);
+
+  const [keychainState, setKeychainState] = useState<
+    Record<string, "yes" | "no" | "unknown">
+  >({});
+  const [busyHost, setBusyHost] = useState<string>("");
+  // Inline "set sudo password" prompt for hosts that don't yet have
+  // one. The user picks a row whose state is "not set", clicks Set,
+  // types the password, and we persist via setElevationPassword.
+  // Avoids forcing them to either edit the saved connection or wait
+  // for an EACCES from a panel just to arm sudo.
+  const [setPromptHost, setSetPromptHost] = useState<SecurityHostRow | null>(
+    null,
+  );
+
+  // Pull the connection list once when the page opens (it's cached
+  // in the store, but the user may have edited connections without
+  // forcing a refresh).
+  useEffect(() => {
+    void refreshConnections();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Probe the keychain for each connection. Runs once on mount and
+   *  whenever the connection list changes; per-row results stream
+   *  in so the table renders progressively. */
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      const next: Record<string, "yes" | "no" | "unknown"> = {};
+      for (const c of connections) {
+        const key = `${c.user}@${c.host}:${c.port}`;
+        next[key] = "unknown";
+      }
+      setKeychainState(next);
+      for (const c of connections) {
+        if (cancelled) return;
+        const key = `${c.user}@${c.host}:${c.port}`;
+        try {
+          const stored = await cmd.getElevationPassword(c.user, c.host, c.port);
+          if (cancelled) return;
+          setKeychainState((prev) => ({
+            ...prev,
+            [key]: stored && stored.length > 0 ? "yes" : "no",
+          }));
+        } catch {
+          if (cancelled) return;
+          setKeychainState((prev) => ({ ...prev, [key]: "no" }));
+        }
+      }
+    };
+    void probe();
+    return () => {
+      cancelled = true;
+    };
+  }, [connections]);
+
+  const rows: SecurityHostRow[] = useMemo(() => {
+    return connections.map((c) => {
+      const storeKey = `${c.user}@${c.host}:${c.port}`;
+      return {
+        storeKey,
+        label: c.name?.trim()
+          ? `${c.name} — ${c.user}@${c.host}`
+          : `${c.user}@${c.host}`,
+        user: c.user,
+        host: c.host,
+        port: c.port,
+        authMode: "",
+        password: "",
+        keyPath: "",
+        savedConnectionIndex: c.index,
+        inMemory: Boolean(sudoMemory[storeKey]),
+        inKeychain: keychainState[storeKey] ?? "unknown",
+      };
+    });
+  }, [connections, sudoMemory, keychainState]);
+
+  const armedCount = rows.filter(
+    (r) => r.inMemory || r.inKeychain === "yes",
+  ).length;
+
+  async function forget(row: SecurityHostRow) {
+    setBusyHost(row.storeKey);
+    try {
+      await useSudoStore.getState().clear(
+        {
+          host: row.host,
+          port: row.port,
+          user: row.user,
+          authMode: row.authMode,
+          password: row.password,
+          keyPath: row.keyPath,
+          savedConnectionIndex: row.savedConnectionIndex,
+        },
+        true,
+      );
+      // Refresh keychain probe just for this row so the badge flips
+      // from "yes" to "no" without a full list scan.
+      setKeychainState((prev) => ({ ...prev, [row.storeKey]: "no" }));
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setBusyHost("");
+    }
+  }
+
+  async function forgetAll() {
+    if (
+      !window.confirm(
+        t(
+          "Forget every saved sudo password? This clears the in-memory cache and deletes keychain entries for all listed hosts.",
+        ),
+      )
+    ) {
+      return;
+    }
+    setBusyHost("__all__");
+    try {
+      // Clear memory in one shot.
+      useSudoStore.getState().clearAll();
+      // Walk the keychain layer per-host. We deliberately only
+      // delete entries whose hosts we currently see — there's no
+      // enumerate API on the keyring crate, so an entry for a
+      // host the user has since deleted from connections survives
+      // until the user re-adds and forgets it from this page.
+      for (const row of rows) {
+        if (row.inKeychain === "yes") {
+          try {
+            await cmd.forgetElevationPassword(row.user, row.host, row.port);
+          } catch (e) {
+            console.warn("forget elevation password failed", e);
+          }
+        }
+      }
+      const next: Record<string, "yes" | "no" | "unknown"> = {};
+      for (const row of rows) next[row.storeKey] = "no";
+      setKeychainState(next);
+    } finally {
+      setBusyHost("");
+    }
+  }
+
+  return (
+    <>
+      <SectionTitle>{t("Saved sudo passwords")}</SectionTitle>
+      <div
+        className="settings__row-desc"
+        style={{ marginBottom: "var(--sp-1)" }}
+      >
+        {t(
+          "Pier-X stores per-host elevation passwords in your OS keychain only when you opt in via the \"Remember\" checkbox in the sudo prompt. Use this page to review what's saved or forget a host's password.",
+        )}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--sp-2)",
+          marginBottom: "var(--sp-2)",
+        }}
+      >
+        <span className="settings__row-desc">
+          {t("{n} of {total} hosts armed", {
+            n: armedCount,
+            total: rows.length,
+          })}
+        </span>
+        <div style={{ flex: 1 }} />
+        <button
+          type="button"
+          className="mini-button mini-button--ghost"
+          onClick={forgetAll}
+          disabled={armedCount === 0 || busyHost === "__all__"}
+        >
+          {busyHost === "__all__" ? t("Forgetting…") : t("Forget all")}
+        </button>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="settings__row-desc">
+          {t("No saved SSH connections yet — open New Connection to add one.")}
+        </div>
+      ) : (
+        <div className="privacy-storage">
+          {rows.map((row) => {
+            const armed = row.inMemory || row.inKeychain === "yes";
+            return (
+              <div className="privacy-storage-row" key={row.storeKey}>
+                <span className="privacy-storage-key mono">{row.label}</span>
+                <span
+                  className="privacy-storage-val"
+                  style={{
+                    display: "inline-flex",
+                    gap: "var(--sp-2)",
+                    alignItems: "center",
+                  }}
+                >
+                  {row.inMemory ? (
+                    <span className="badge" title={t("Cached in memory for this session.")}>
+                      {t("memory")}
+                    </span>
+                  ) : null}
+                  {row.inKeychain === "yes" ? (
+                    <span
+                      className="badge"
+                      title={t("Persisted in the OS keychain.")}
+                    >
+                      {t("keychain")}
+                    </span>
+                  ) : null}
+                  {!armed ? (
+                    <span className="settings__row-desc">{t("not set")}</span>
+                  ) : null}
+                  {row.inKeychain === "unknown" && !row.inMemory ? (
+                    <span className="settings__row-desc">{t("checking…")}</span>
+                  ) : null}
+                </span>
+                <span className="privacy-storage-actions">
+                  {!armed ? (
+                    <button
+                      type="button"
+                      className="mini-button mini-button--ghost"
+                      onClick={() => setSetPromptHost(row)}
+                      disabled={busyHost === row.storeKey}
+                    >
+                      {t("Set")}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="mini-button mini-button--ghost"
+                      onClick={() => void forget(row)}
+                      disabled={busyHost === row.storeKey}
+                    >
+                      {busyHost === row.storeKey ? t("Forgetting…") : t("Forget")}
+                    </button>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <SudoPasswordDialog
+        open={setPromptHost !== null}
+        hostLabel={setPromptHost ? `${setPromptHost.user}@${setPromptHost.host}` : ""}
+        onSubmit={(password, remember) => {
+          const row = setPromptHost;
+          setSetPromptHost(null);
+          if (!row) return;
+          void useSudoStore
+            .getState()
+            .setPersistent(
+              {
+                host: row.host,
+                port: row.port,
+                user: row.user,
+                authMode: row.authMode,
+                password: row.password,
+                keyPath: row.keyPath,
+                savedConnectionIndex: row.savedConnectionIndex,
+              },
+              password,
+              remember,
+            )
+            .then(() => {
+              // Optimistically reflect the new state without waiting
+              // for the full keychain re-probe; the next prop drill
+              // will overwrite this if reality disagrees.
+              setKeychainState((prev) => ({
+                ...prev,
+                [row.storeKey]: remember ? "yes" : prev[row.storeKey] ?? "no",
+              }));
+            });
+        }}
+        onCancel={() => setSetPromptHost(null)}
+      />
+    </>
+  );
+}
+
 // ── SSH keys panel ───────────────────────────────────────────────
 // Settings → SSH keys. Read-only inventory of `~/.ssh/id_*` files —
 // surfaces the file path, file type (from .pub first line), and
@@ -2063,6 +2387,13 @@ export default function SettingsDialog({
             {page === "Privacy" && (
               <div className="settings__page">
                 <PrivacyPanel />
+              </div>
+            )}
+
+            {/* ── Security ────────────────────────────────── */}
+            {page === "Security" && (
+              <div className="settings__page">
+                <SecurityPanel />
               </div>
             )}
 

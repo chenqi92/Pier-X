@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CircleDot, GitBranch, Loader2, Network, Terminal } from "lucide-react";
+import { CircleDot, GitBranch, Loader2, Network, ShieldCheck, Terminal } from "lucide-react";
 import type { RightTool, TabState } from "../lib/types";
 import { effectiveShellUser, effectiveSshTarget } from "../lib/types";
 import { buildEgressChain, describeHop, formatChain } from "../lib/egressChain";
@@ -8,6 +8,7 @@ import { useConnectionStore } from "../stores/useConnectionStore";
 import { useEgressStore } from "../stores/useEgressStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useStatusStore } from "../stores/useStatusStore";
+import { useSudoStore, sudoKeyFor } from "../stores/useSudoStore";
 import { useTaskStore } from "../stores/useTaskStore";
 
 type Props = {
@@ -70,6 +71,31 @@ export default function StatusBar({ version, coreInfo, activeTab, activeTool }: 
       tooltip: hops.map(describeHop).join("\n") + `\n→ ${targetLabel}`,
     };
   }, [activeTab, connections, egressProfiles]);
+
+  // Subscribe to the sudo store keyed off the active tab's SSH
+  // target so the shield badge re-renders when the user types a
+  // password into any panel's `SudoPasswordDialog` or when the
+  // hydrate effect lifts a saved password from the keychain. The
+  // badge gives users at-a-glance confirmation that elevation is
+  // armed for this host without having to re-trigger a panel
+  // action just to see "no prompt this time → yes, sudo is on".
+  const sudoBadgeKey = useMemo(() => {
+    if (!activeTab) return "";
+    const t = effectiveSshTarget(activeTab);
+    if (!t) return "";
+    return sudoKeyFor({
+      host: t.host,
+      port: t.port,
+      user: t.user,
+      authMode: t.authMode,
+      password: t.password,
+      keyPath: t.keyPath,
+      savedConnectionIndex: t.savedConnectionIndex,
+    });
+  }, [activeTab]);
+  const sudoArmed = useSudoStore((s) =>
+    sudoBadgeKey ? Boolean(s.passwords[sudoBadgeKey]) : false,
+  );
 
   const branch = useStatusStore((s) => s.branch);
   const ahead = useStatusStore((s) => s.ahead);
@@ -138,6 +164,42 @@ export default function StatusBar({ version, coreInfo, activeTab, activeTool }: 
           <Network size={10} />
           <span>{egressBadge.compact}</span>
         </span>
+      ) : null}
+      {sudoArmed && activeTab ? (
+        <button
+          type="button"
+          className="sb-item accent"
+          title={t(
+            "Sudo password is armed for this host — click to forget it (clears memory + keychain).",
+          )}
+          style={{
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+            padding: 0,
+            color: "inherit",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+          onClick={() => {
+            const target = effectiveSshTarget(activeTab);
+            if (!target) return;
+            const params = {
+              host: target.host,
+              port: target.port,
+              user: target.user,
+              authMode: target.authMode,
+              password: target.password,
+              keyPath: target.keyPath,
+              savedConnectionIndex: target.savedConnectionIndex,
+            };
+            void useSudoStore.getState().clear(params, true);
+          }}
+        >
+          <ShieldCheck size={10} />
+          <span>{t("sudo")}</span>
+        </button>
       ) : null}
       <span className="sb-spacer" />
       {tasks.length > 0 && (

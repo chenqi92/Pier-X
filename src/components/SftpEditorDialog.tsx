@@ -96,6 +96,12 @@ export type SftpEditorSshArgs = {
   password: string;
   keyPath: string;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password — when set, the editor can transparently
+   *  open / save root-only files via the backend's `sudo cat`/`sudo
+   *  tee` fallback path. Pass `null` (or leave undefined) for hosts
+   *  without an armed sudo password and the editor falls back to
+   *  surfacing the raw EACCES from SFTP. */
+  sudoPassword?: string | null;
 };
 
 type Props = {

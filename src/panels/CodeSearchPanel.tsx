@@ -28,6 +28,7 @@ import { localizeError } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import SftpEditorDialog from "../components/SftpEditorDialog";
+import { sudoKeyFor, useSudoStore } from "../stores/useSudoStore";
 
 const SEARCH_ICON = RIGHT_TOOL_META.search.icon;
 
@@ -126,6 +127,19 @@ function CodeSearchBody({ tab }: Props) {
     [result],
   );
 
+  const codeSearchSudoPw = useSudoStore((s) =>
+    sshTarget
+      ? s.passwords[sudoKeyFor({
+          host: sshTarget.host,
+          port: sshTarget.port,
+          user: sshTarget.user,
+          authMode: sshTarget.authMode,
+          password: sshTarget.password,
+          keyPath: sshTarget.keyPath,
+          savedConnectionIndex: sshTarget.savedConnectionIndex,
+        })] ?? null
+      : null,
+  );
   const sshArgs = {
     host: sshTarget?.host ?? "",
     port: sshTarget?.port ?? 22,
@@ -134,6 +148,7 @@ function CodeSearchBody({ tab }: Props) {
     password: sshTarget?.password ?? "",
     keyPath: sshTarget?.keyPath ?? "",
     savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
+    sudoPassword: codeSearchSudoPw,
   };
 
   async function runSearch() {

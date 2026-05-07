@@ -2,6 +2,7 @@ use pier_core::connections::{
     self, ConnectionStore, DbCredentialPatch, NewDbCredential, ResolvedDbCredential,
 };
 use pier_core::credentials;
+use pier_core::logging as pier_logging;
 use pier_core::egress::{EgressKind, EgressProfile};
 use pier_core::markdown;
 use pier_core::services::docker;
@@ -1020,6 +1021,14 @@ struct SavedSshConnection {
     /// Resolved against `egress_profile_list`. `None` = direct.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     egress_id: Option<String>,
+    /// When true, the SSH terminal session immediately runs
+    /// `sudo -S -p '' -i bash` after the shell prompt and pipes
+    /// the keychain-stored elevation password — user lands in a
+    /// root shell. Off by default. UI: NewConnectionDialog
+    /// "Auto-elevate to root on connect" checkbox (visible only
+    /// when an elevation password has been saved).
+    #[serde(default, skip_serializing_if = "is_false")]
+    auto_elevate: bool,
 }
 
 /// Frontend-safe projection of [`DbCredential`]. Passwords are
@@ -2277,7 +2286,12 @@ fn map_saved_connection(index: usize, config: &SshConfig) -> SavedSshConnection 
             .as_ref()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
+        auto_elevate: config.auto_elevate,
     }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn db_kind_str(k: DbKind) -> &'static str {
@@ -2703,6 +2717,68 @@ fn create_ssh_terminal_from_config(
     // so `HISTCONTROL=ignorespace` (default in modern distros)
     // skips it from history.
     let _ = terminal.write(&pier_core::terminal::remote_init_payload());
+
+    // Auto-elevate on connect: if the saved connection is flagged
+    // and a sudo password is in the keychain, write `sudo -S -p '' -i bash`
+    // followed by the password+newline. The bash that's currently
+    // executing the OSC 7 init becomes the parent of a new login
+    // root bash; once `exit` is typed, the user falls back to the
+    // original user shell. We then re-send the OSC 7 init to arm
+    // cwd reporting in the new root shell too.
+    //
+    // Audit: every auto-elevate attempt lands in the log file.
+    if config.auto_elevate {
+        let key = credentials::elevation_credential_id(
+            &config.user,
+            &config.host,
+            config.port,
+        );
+        match credentials::get(&key) {
+            Ok(Some(pw)) if !pw.is_empty() => {
+                pier_logging::write_event(
+                    "INFO",
+                    "audit",
+                    &format!(
+                        "auto-elevate ARMED for {}@{}:{} — issuing sudo -i",
+                        config.user, config.host, config.port
+                    ),
+                );
+                // First the elevation line (read by user's shell).
+                // Leading SPACE → HISTCONTROL=ignorespace drops it
+                // from .bash_history. The `exec` replaces the bash
+                // process so `exit` doesn't return to a stub shell.
+                let _ = terminal.write(b" exec sudo -S -p '' -i bash\n");
+                // Then the password as the next line — sudo's `-S`
+                // reads stdin until \n. After auth, sudo runs the
+                // login shell which doesn't see this line.
+                let _ = terminal.write(format!("{pw}\n").as_bytes());
+                // Finally, re-run the OSC 7 init so the root shell
+                // also reports cwd. Sent with a leading space so
+                // root's history doesn't keep it.
+                let _ = terminal.write(&pier_core::terminal::remote_init_payload());
+            }
+            Ok(_) => {
+                pier_logging::write_event(
+                    "WARN",
+                    "audit",
+                    &format!(
+                        "auto-elevate skipped for {}@{}:{} — no keychain entry; user must arm via NewConnectionDialog or panel prompt",
+                        config.user, config.host, config.port
+                    ),
+                );
+            }
+            Err(e) => {
+                pier_logging::write_event(
+                    "WARN",
+                    "audit",
+                    &format!(
+                        "auto-elevate keychain lookup failed for {}@{}:{}: {e}",
+                        config.user, config.host, config.port
+                    ),
+                );
+            }
+        }
+    }
 
     store_terminal_session(
         state,
@@ -3541,6 +3617,7 @@ fn ssh_connection_save(
     group: Option<String>,
     env_tag: Option<String>,
     egress_id: Option<String>,
+    auto_elevate: Option<bool>,
 ) -> Result<(), String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
@@ -3607,6 +3684,7 @@ fn ssh_connection_save(
     config.egress_id = egress_id
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    config.auto_elevate = auto_elevate.unwrap_or(false);
 
     let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
     store.add(config);
@@ -3662,6 +3740,7 @@ fn ssh_connection_update(
     group: Option<String>,
     env_tag: Option<String>,
     egress_id: Option<String>,
+    auto_elevate: Option<bool>,
 ) -> Result<(), String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
@@ -3798,6 +3877,10 @@ fn ssh_connection_update(
         }
         None => existing.egress_id.clone(),
     };
+    // Auto-elevate flag: explicit Some(value) overwrites; None keeps
+    // whatever the previous save had so non-elevation-aware callers
+    // can't toggle it back to false by accident.
+    config.auto_elevate = auto_elevate.unwrap_or(existing.auto_elevate);
 
     let new_auth = config.auth.clone();
     store.connections[index] = config;
@@ -4087,6 +4170,11 @@ fn egress_clear_credential(credential_id: String) -> Result<(), String> {
 /// when the user ticks "记住此主机的提权密码" in the prompt — so
 /// passwords on disk are explicitly opt-in. Empty `password` clears
 /// the entry, matching `forget_elevation_password`.
+///
+/// Audit: every armed/cleared decision lands in the log file (see
+/// Settings → Privacy → Log file) without the password value, so a
+/// shared workstation owner can review what hosts have been armed
+/// and from when. The actual secret is still keychain-only.
 #[tauri::command]
 fn set_elevation_password(
     user: String,
@@ -4101,8 +4189,18 @@ fn set_elevation_password(
     }
     let key = credentials::elevation_credential_id(&user, &host, port);
     if password.is_empty() {
+        pier_logging::write_event(
+            "INFO",
+            "audit",
+            &format!("elevation password CLEARED for {user}@{host}:{port}"),
+        );
         return credentials::delete(&key).map_err(|e| e.to_string());
     }
+    pier_logging::write_event(
+        "INFO",
+        "audit",
+        &format!("elevation password ARMED for {user}@{host}:{port}"),
+    );
     credentials::set(&key, &password).map_err(|e| e.to_string())
 }
 
@@ -4129,6 +4227,11 @@ fn get_elevation_password(
 #[tauri::command]
 fn forget_elevation_password(user: String, host: String, port: u16) -> Result<(), String> {
     let key = credentials::elevation_credential_id(&user, &host, port);
+    pier_logging::write_event(
+        "INFO",
+        "audit",
+        &format!("elevation password FORGOTTEN for {user}@{host}:{port}"),
+    );
     credentials::delete(&key).map_err(|e| e.to_string())
 }
 
@@ -5393,19 +5496,48 @@ fn terminal_completions_remote(
     impl SftpDirReader {
         fn resolve(&self, dir: &Path) -> String {
             let raw = dir.to_string_lossy();
-            if raw != "." {
+            // Absolute paths pass through unchanged — SFTP can list
+            // them directly without canonicalization.
+            if raw.starts_with('/') {
                 return raw.into_owned();
             }
-            // Only ever "." reaches here; consult / populate the cache.
+            // Anything else is relative: `.`, `./`, `./sub`, `..`,
+            // `../foo`, or a bare name. Without an OSC-7 cwd the
+            // emulator can't resolve these locally, so we ask the
+            // SFTP server to canonicalize against its current
+            // working directory (which equals the user's home on
+            // a fresh SFTP subsystem channel). Without this branch
+            // a user typing `./ba` in a directory with `backend/`
+            // hits SFTP with the literal `./` and gets nothing —
+            // the same bug that broke Tab completion for SSH tabs.
             let mut guard = self.home_cache.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(cached) = guard.as_ref() {
-                return cached.clone();
+                // Cache the home only — for compound relative
+                // paths (`./foo`, `../bar`) we re-canonicalize
+                // because the SFTP server's answer can differ.
+                if matches!(raw.as_ref(), "." | "./" | "") {
+                    return cached.clone();
+                }
             }
+            // Strip a single leading `./` so the SFTP server's
+            // `canonicalize` call sees the cleanest form (some
+            // servers reject `./foo` outright but accept `foo`).
+            let normalized: String = if raw == "./" || raw == "." {
+                ".".to_string()
+            } else if let Some(rest) = raw.strip_prefix("./") {
+                rest.to_string()
+            } else {
+                raw.into_owned()
+            };
             let resolved = self
                 .client
-                .canonicalize_blocking(".")
-                .unwrap_or_else(|_| ".".to_string());
-            *guard = Some(resolved.clone());
+                .canonicalize_blocking(&normalized)
+                .unwrap_or_else(|_| normalized.clone());
+            // Only cache the bare-home lookup; per-subdir results
+            // would explode the cache for no real win.
+            if matches!(normalized.as_str(), ".") {
+                *guard = Some(resolved.clone());
+            }
             resolved
         }
     }
@@ -10516,10 +10648,11 @@ async fn nginx_layout(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<nginx::NginxLayout, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10528,6 +10661,7 @@ async fn nginx_layout(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         nginx::list_layout_blocking(&session).map_err(|e| e.to_string())
     })
@@ -10545,11 +10679,12 @@ async fn nginx_read_file(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     path: String,
 ) -> Result<NginxReadFileView, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10558,6 +10693,7 @@ async fn nginx_read_file(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         let content = nginx::read_file_blocking(&session, &path)
             .map_err(|e| e.to_string())?;
@@ -10582,12 +10718,13 @@ async fn nginx_save_file(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     path: String,
     content: String,
 ) -> Result<nginx::NginxSaveResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10596,6 +10733,7 @@ async fn nginx_save_file(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         nginx::save_file_validate_reload_blocking(&session, &path, &content)
             .map_err(|e| e.to_string())
@@ -10614,10 +10752,11 @@ async fn nginx_validate(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<nginx::NginxValidateResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10626,6 +10765,7 @@ async fn nginx_validate(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         nginx::validate_blocking(&session).map_err(|e| e.to_string())
     })
@@ -10643,10 +10783,11 @@ async fn nginx_reload(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<nginx::NginxValidateResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10655,6 +10796,7 @@ async fn nginx_reload(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         nginx::reload_blocking(&session).map_err(|e| e.to_string())
     })
@@ -10672,12 +10814,13 @@ async fn nginx_create_file(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     path: String,
     content: String,
 ) -> Result<nginx::NginxValidateResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10686,6 +10829,7 @@ async fn nginx_create_file(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         nginx::create_file_blocking(&session, &path, &content)
             .map_err(|e| e.to_string())
@@ -10704,12 +10848,13 @@ async fn nginx_toggle_site(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     site_name: String,
     enable: bool,
 ) -> Result<nginx::NginxValidateResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10718,6 +10863,7 @@ async fn nginx_toggle_site(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         nginx::toggle_site_blocking(&session, &site_name, enable)
             .map_err(|e| e.to_string())
@@ -10738,10 +10884,11 @@ async fn web_server_detect(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<web_server::WebServerDetection, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10750,6 +10897,7 @@ async fn web_server_detect(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         web_server::detect_blocking(&session).map_err(|e| e.to_string())
     })
@@ -10767,11 +10915,12 @@ async fn web_server_validate(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     kind: web_server::WebServerKind,
 ) -> Result<web_server::WebServerActionResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10780,6 +10929,7 @@ async fn web_server_validate(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         web_server::validate_blocking(&session, kind).map_err(|e| e.to_string())
     })
@@ -10797,11 +10947,12 @@ async fn web_server_layout(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     kind: web_server::WebServerKind,
 ) -> Result<web_server::WebServerLayout, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10810,6 +10961,7 @@ async fn web_server_layout(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         web_server::list_layout_blocking(&session, kind).map_err(|e| e.to_string())
     })
@@ -10827,12 +10979,13 @@ async fn web_server_read_file(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     kind: web_server::WebServerKind,
     path: String,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10841,6 +10994,7 @@ async fn web_server_read_file(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         web_server::read_file_blocking(&session, kind, &path).map_err(|e| e.to_string())
     })
@@ -10858,13 +11012,14 @@ async fn web_server_save_file(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     kind: web_server::WebServerKind,
     path: String,
     content: String,
 ) -> Result<web_server::WebServerSaveResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10873,6 +11028,7 @@ async fn web_server_save_file(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         web_server::save_file_validate_reload_blocking(&session, kind, &path, &content)
             .map_err(|e| e.to_string())
@@ -10891,11 +11047,12 @@ async fn web_server_lint_hints(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     kind: web_server::WebServerKind,
 ) -> Result<web_server::WebServerActionResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10904,6 +11061,7 @@ async fn web_server_lint_hints(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         web_server::lint_hints_blocking(&session, kind).map_err(|e| e.to_string())
     })
@@ -10921,12 +11079,13 @@ async fn web_server_save_files_batch(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     kind: web_server::WebServerKind,
     entries: Vec<web_server::WebServerBatchSaveEntry>,
 ) -> Result<web_server::WebServerBatchSaveResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10935,6 +11094,7 @@ async fn web_server_save_files_batch(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         web_server::save_files_batch_blocking(&session, kind, &entries)
             .map_err(|e| e.to_string())
@@ -10953,13 +11113,14 @@ async fn web_server_toggle_site(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     kind: web_server::WebServerKind,
     site_name: String,
     enable: bool,
 ) -> Result<web_server::WebServerActionResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -10968,6 +11129,7 @@ async fn web_server_toggle_site(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         web_server::toggle_site_blocking(&session, kind, &site_name, enable)
             .map_err(|e| e.to_string())
@@ -10986,6 +11148,7 @@ async fn web_server_create_site(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     kind: web_server::WebServerKind,
     leaf_name: String,
     content: String,
@@ -10993,7 +11156,7 @@ async fn web_server_create_site(
 ) -> Result<web_server::CreateSiteResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -11002,6 +11165,7 @@ async fn web_server_create_site(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         web_server::create_site_file_blocking(&session, kind, &leaf_name, &content, enable_after)
             .map_err(|e| e.to_string())
@@ -11045,11 +11209,12 @@ async fn web_server_reload(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
     kind: web_server::WebServerKind,
 ) -> Result<web_server::WebServerActionResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -11058,6 +11223,7 @@ async fn web_server_reload(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
         )?;
         web_server::reload_blocking(&session, kind).map_err(|e| e.to_string())
     })
@@ -11292,6 +11458,42 @@ fn shell_quote_dir(dir: &str) -> String {
         };
     }
     shell_single_quote(dir)
+}
+
+/// Standard base64 encode (no line breaks, no URL-safe variant).
+/// Inline so we don't pull in the `base64` crate just for one
+/// fallback path. Inputs here are small (editor cap is well under
+/// 100 KB) so the per-byte loop is fine.
+fn encode_base64(input: &[u8]) -> String {
+    const ALPH: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    let mut i = 0;
+    while i + 3 <= input.len() {
+        let n = ((input[i] as u32) << 16)
+            | ((input[i + 1] as u32) << 8)
+            | (input[i + 2] as u32);
+        out.push(ALPH[((n >> 18) & 0x3f) as usize] as char);
+        out.push(ALPH[((n >> 12) & 0x3f) as usize] as char);
+        out.push(ALPH[((n >> 6) & 0x3f) as usize] as char);
+        out.push(ALPH[(n & 0x3f) as usize] as char);
+        i += 3;
+    }
+    let rem = input.len() - i;
+    if rem == 1 {
+        let n = (input[i] as u32) << 16;
+        out.push(ALPH[((n >> 18) & 0x3f) as usize] as char);
+        out.push(ALPH[((n >> 12) & 0x3f) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem == 2 {
+        let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8);
+        out.push(ALPH[((n >> 18) & 0x3f) as usize] as char);
+        out.push(ALPH[((n >> 12) & 0x3f) as usize] as char);
+        out.push(ALPH[((n >> 6) & 0x3f) as usize] as char);
+        out.push('=');
+    }
+    out
 }
 
 /// POSIX shell single-quote escape.
@@ -11923,8 +12125,9 @@ fn sftp_read_text(
     path: String,
     max_bytes: Option<u64>,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<SftpTextFile, String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -11933,9 +12136,65 @@ fn sftp_read_text(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
-    let meta = sftp.stat_blocking(&path).map_err(|e| e.to_string())?;
+    // Try SFTP stat first. On permission-denied with sudo armed,
+    // fall back to a `stat -c` over `exec_with_sudo` so the editor
+    // can open root-only configs (sshd_config, /etc/sudoers.d/*).
+    // The fallback only fills `size` + `permissions` + `modified`;
+    // owner/group come back blank (the UI hides them in that case).
+    let meta = match sftp.stat_blocking(&path) {
+        Ok(m) => m,
+        Err(e) => {
+            let raw = e.to_string();
+            if pier_core::sudo::is_permission_denied(&raw)
+                && session.has_sudo_password_blocking()
+            {
+                // `%s\t%a\t%Y` → size, octal perms, mtime epoch.
+                // Not all coreutils expose the same -c format, but
+                // GNU coreutils + busybox both accept these three.
+                let cmd = format!(
+                    "stat -c '%s\\t%a\\t%Y' {}",
+                    shell_single_quote(&path),
+                );
+                let (code, out) = session
+                    .exec_with_sudo_blocking(&cmd)
+                    .map_err(|e2| e2.to_string())?;
+                if code != 0 {
+                    return Err(raw);
+                }
+                let mut parts = out.trim().split('\t');
+                let size = parts
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let perms = parts
+                    .next()
+                    .and_then(|s| u32::from_str_radix(s, 8).ok());
+                let mtime = parts
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok());
+                pier_core::ssh::sftp::RemoteFileEntry {
+                    name: path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&path)
+                        .to_string(),
+                    path: path.clone(),
+                    is_dir: false,
+                    is_link: false,
+                    size,
+                    permissions: perms,
+                    modified: mtime,
+                    owner: None,
+                    group: None,
+                }
+            } else {
+                return Err(raw);
+            }
+        }
+    };
     let limit = max_bytes
         .unwrap_or(SFTP_TEXT_READ_MAX)
         .min(SFTP_TEXT_READ_MAX);
@@ -11945,7 +12204,31 @@ fn sftp_read_text(
             meta.size, limit
         ));
     }
-    let bytes = sftp.read_file_blocking(&path).map_err(|e| e.to_string())?;
+    let bytes = match sftp.read_file_blocking(&path) {
+        Ok(b) => b,
+        Err(e) => {
+            let raw = e.to_string();
+            if pier_core::sudo::is_permission_denied(&raw)
+                && session.has_sudo_password_blocking()
+            {
+                // Fall back to `cat <path>` via sudo. The editor's
+                // size cap was already enforced above.
+                let cmd = format!("cat {}", shell_single_quote(&path));
+                let (code, out) = session
+                    .exec_with_sudo_blocking(&cmd)
+                    .map_err(|e2| e2.to_string())?;
+                if code != 0 {
+                    return Err(format!(
+                        "sudo cat exited {code}: {}",
+                        out.lines().next().unwrap_or("").trim()
+                    ));
+                }
+                out.into_bytes()
+            } else {
+                return Err(raw);
+            }
+        }
+    };
     let encoding = detect_text_encoding(&bytes);
     // Strip the BOM before lossy-decoding so it doesn't show up
     // as a U+FEFF sentinel in the editor. The `encoding` label
@@ -12063,8 +12346,9 @@ fn sftp_write_text(
     path: String,
     content: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -12073,10 +12357,41 @@ fn sftp_write_text(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
-    sftp.write_file_blocking(&path, content.as_bytes())
-        .map_err(|e| e.to_string())
+    match sftp.write_file_blocking(&path, content.as_bytes()) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let raw = e.to_string();
+            if pier_core::sudo::is_permission_denied(&raw)
+                && session.has_sudo_password_blocking()
+            {
+                // Fall back to `base64 -d | tee <path>` via sudo so
+                // root-owned config files (sshd_config, /etc/hosts,
+                // /etc/sudoers.d/*) save without the user having to
+                // `sudo` from a separate terminal.
+                let b64 = encode_base64(content.as_bytes());
+                let cmd = format!(
+                    "echo {b64} | base64 -d | tee {target} >/dev/null",
+                    b64 = shell_single_quote(&b64),
+                    target = shell_single_quote(&path),
+                );
+                let (code, out) = session
+                    .exec_with_sudo_blocking(&cmd)
+                    .map_err(|e2| e2.to_string())?;
+                if code != 0 {
+                    return Err(format!(
+                        "sudo tee exited {code}: {}",
+                        out.lines().next().unwrap_or("").trim()
+                    ));
+                }
+                Ok(())
+            } else {
+                Err(raw)
+            }
+        }
+    }
 }
 
 /// Progress update emitted to the frontend for in-flight transfers.

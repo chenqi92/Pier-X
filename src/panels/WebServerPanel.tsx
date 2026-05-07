@@ -18,6 +18,7 @@ import {
 } from "../lib/types";
 import NginxPanel from "./NginxPanel";
 import RawWebServerPanel from "./RawWebServerPanel";
+import { sudoKeyFor, useSudoStore } from "../stores/useSudoStore";
 
 // One unified entry for nginx / apache / caddy. nginx routes to the
 // rich NginxPanel; apache and caddy land on a placeholder that exposes
@@ -47,6 +48,41 @@ function WebServerPanelBody({ tab }: Props) {
   const sshTarget = tab ? effectiveSshTarget(tab) : null;
   const canProbe = isSshTargetReady(sshTarget);
 
+  const sudoStoreKey = sshTarget
+    ? sudoKeyFor({
+        host: sshTarget.host,
+        port: sshTarget.port,
+        user: sshTarget.user,
+        authMode: sshTarget.authMode,
+        password: sshTarget.password,
+        keyPath: sshTarget.keyPath,
+        savedConnectionIndex: sshTarget.savedConnectionIndex,
+      })
+    : "";
+  const sudoPassword = useSudoStore((s) =>
+    sudoStoreKey ? s.passwords[sudoStoreKey] ?? null : null,
+  );
+
+  // Hydrate from keychain on host change.
+  useEffect(() => {
+    if (!sshTarget) return;
+    void useSudoStore.getState().hydrate({
+      host: sshTarget.host,
+      port: sshTarget.port,
+      user: sshTarget.user,
+      authMode: sshTarget.authMode,
+      password: sshTarget.password,
+      keyPath: sshTarget.keyPath,
+      savedConnectionIndex: sshTarget.savedConnectionIndex,
+    });
+  }, [
+    sshTarget?.host,
+    sshTarget?.port,
+    sshTarget?.user,
+    sshTarget?.authMode,
+    sshTarget?.savedConnectionIndex,
+  ]);
+
   const sshParams = useMemo(() => {
     if (!sshTarget) return null;
     return {
@@ -57,6 +93,7 @@ function WebServerPanelBody({ tab }: Props) {
       password: sshTarget.password,
       keyPath: sshTarget.keyPath,
       savedConnectionIndex: sshTarget.savedConnectionIndex,
+      sudoPassword: sudoPassword ?? null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -67,6 +104,7 @@ function WebServerPanelBody({ tab }: Props) {
     sshTarget?.password,
     sshTarget?.keyPath,
     sshTarget?.savedConnectionIndex,
+    sudoPassword,
   ]);
 
   const [detection, setDetection] = useState<WebServerDetection | null>(null);

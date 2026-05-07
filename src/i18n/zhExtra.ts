@@ -1,6 +1,49 @@
 export const zhExtra: Record<string, string> = {
   // Sudo / privilege escalation dialog
+  sudo: "sudo",
+  "Sudo password is armed for this host — Docker / firewall / package commands run with elevation.":
+    "该主机已开启 sudo 提权 — Docker、防火墙、软件包命令将以 root 身份运行。",
+  "Sudo password is armed for this host — click to forget it (clears memory + keychain).":
+    "该主机已开启 sudo 提权 — 点击可清除（同时清空内存和密钥串）。",
   "Sudo password required": "需要 sudo 密码",
+  "Sudo password": "Sudo 密码",
+  "Optional — saved to keychain for Docker / firewall / nginx panels":
+    "可选 —— 存入密钥串供 Docker、防火墙、nginx 等面板使用",
+  "Leave blank to keep saved password": "留空保留已保存的密码",
+  "A sudo password is already saved for this host. Pier-X panels (Docker, firewall, nginx, software) use it transparently. Manage / forget from Settings → Security.":
+    "该主机已保存 sudo 密码。Pier-X 各面板（Docker、防火墙、nginx、软件）会自动使用。可在「设置 → 安全」管理或清除。",
+  "Optional. When set, panels that need root (Docker, firewall, nginx, software) wrap their commands in sudo -S and pipe this password from the OS keychain.":
+    "可选。设置后，需要 root 的面板（Docker、防火墙、nginx、软件）会自动用 sudo -S 包装命令并从密钥串读取密码。",
+
+  // Settings → Security
+  Security: "安全",
+  "Saved sudo passwords": "已保存的 sudo 密码",
+  "Pier-X stores per-host elevation passwords in your OS keychain only when you opt in via the \"Remember\" checkbox in the sudo prompt. Use this page to review what's saved or forget a host's password.":
+    "仅当你在 sudo 提示框勾选「记住」时，Pier-X 才会把该主机的提权密码存入操作系统密钥串。在此页可查看已保存的条目或清除某个主机的密码。",
+  "{n} of {total} hosts armed": "{n} / {total} 台主机已激活",
+  "Forget all": "全部清除",
+  "Forgetting…": "清除中…",
+  "Forget every saved sudo password? This clears the in-memory cache and deletes keychain entries for all listed hosts.":
+    "清除所有已保存的 sudo 密码？将清空内存缓存并删除列表中所有主机的密钥串条目。",
+  "No saved SSH connections yet — open New Connection to add one.":
+    "尚未保存 SSH 连接 —— 打开「新建连接」添加一个。",
+  memory: "内存",
+  keychain: "密钥串",
+  "not set": "未设置",
+  "checking…": "检查中…",
+  "Cached in memory for this session.": "已在本会话内存中缓存。",
+  "Persisted in the OS keychain.": "已持久化到操作系统密钥串。",
+  Forget: "清除",
+  Set: "设置",
+
+  // NewConnectionDialog auto-elevate
+  "Auto-elevate to root": "自动切换到 root",
+  "Run sudo -i automatically after the SSH terminal opens":
+    "SSH 终端打开后自动执行 sudo -i",
+  "On connect, Pier-X will pipe the saved sudo password into `sudo -S -p '' -i bash` so the terminal lands directly in a root login shell.":
+    "连接时 Pier-X 会把已保存的 sudo 密码通过 stdin 喂给 `sudo -S -p '' -i bash`，终端直接进入 root 登录 shell。",
+  "Auto-elevate is enabled but no sudo password is saved for this host. Set one in the Sudo password field above first.":
+    "已启用自动提权但当前主机未保存 sudo 密码。请先在上方「Sudo 密码」字段填写。",
   Authenticating: "认证中",
   "Authenticating…": "认证中…",
   "the remote host": "该远端主机",

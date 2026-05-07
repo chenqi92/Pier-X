@@ -62,6 +62,22 @@ pub struct SshConfig {
     /// only persistence and round-trip are guaranteed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress_id: Option<String>,
+    /// When true and an elevation password is in the keychain for
+    /// this `(user, host, port)` triple, the SSH terminal session
+    /// runs `sudo -S -p '' -i bash` immediately after the shell
+    /// prompt appears, so the user lands in a root shell without
+    /// having to type `sudo -i` themselves. Requires that the user
+    /// has previously saved a sudo password (via the prompt's
+    /// "Remember" checkbox or NewConnectionDialog's "Sudo password"
+    /// field). Off by default — connecting as a non-root user is
+    /// a common deliberate choice (audit logs, MFA, …) and
+    /// silently elevating would surprise that workflow.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_elevate: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn default_connect_timeout() -> u64 {
@@ -84,6 +100,7 @@ impl SshConfig {
             tags: Vec::new(),
             group: None,
             env_tag: None,
+            auto_elevate: false,
             databases: Vec::new(),
             egress_id: None,
         }
@@ -393,6 +410,7 @@ mod tests {
             env_tag: Some("prod".into()),
             databases: Vec::new(),
             egress_id: None,
+            auto_elevate: false,
         };
         let json = serde_json::to_string(&original).expect("serialize");
         let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");
@@ -545,6 +563,7 @@ mod tests {
             env_tag: None,
             databases: Vec::new(),
             egress_id: None,
+            auto_elevate: false,
         };
         let json = serde_json::to_string(&c).expect("serialize");
         let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");

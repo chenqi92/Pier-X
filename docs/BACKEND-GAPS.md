@@ -40,24 +40,24 @@ header on merge and drop rows once they're confirmed shipped.
 | Area | Design surface | Status | Needed Tauri command(s) / notes |
 |---|---|---|---|
 | Splash | "Probe via {ssh target}" activity line with Re-probe button | partial | `dbDetect` already exists; button wires to `refreshDetection` |
-| Splash | Instance row meta: `engine`, `addr`, `via`, `user`, `authFrom`, `lastUsed`, `dbs`, `size` | partial | Saved creds expose `{host,port,user,database}`; `engine`, `authFrom`, `lastUsed`, `dbs`, `size` not stored — add to `DbCredential`/detection |
-| Splash | `prod / stage / dev / local` env tag per instance | stub | Needs a `env` / `tag` field on saved credentials (user-editable) |
-| Header | Stats chips: `{dbs} dbs`, `{size}`, `{ms} roundtrip` | partial | `dbs` = `state.databases.length`; `size` and `ms` roundtrip not measured |
+| Splash | Instance row meta: `engine`, `addr`, `via`, `user`, `authFrom`, `lastUsed`, `dbs`, `size` | shipped | `MySqlPanel` renders `engine` / `addr` / `via` / `user` / `authHint` / `stats` / `lastUsed` on every saved row via `DbSplashRow` |
+| Splash | `prod / stage / dev / local` env tag per instance | shipped | `inferEnv(cred.label)` on the splash row; `DbSplashRow` renders `DbEnvTag` next to the connection label |
+| Header | Stats chips: `{dbs} dbs`, `{size}`, `{ms} roundtrip` | partial | `MySqlPanel` header renders database + table counts only; total `size` and `ms` roundtrip chips still absent |
 | Schema tree | Views, Functions under a schema | shipped | `feat/mysql-schema-enrichment` — `mysqlBrowse` now returns views + routines |
 | Schema tree | Row count per table | shipped | `feat/mysql-schema-enrichment` — table-meta tooltip carries `table_rows` |
-| Data tab | Column width resize grip | hidden | Pure frontend (when we add per-column width state) |
-| Data tab | Per-column filter row | stub | Frontend-only filter against already-loaded preview rows |
-| Data tab | Sort indicator on header | stub | Same — runs against loaded rows, not a server sort |
+| Data tab | Column width resize grip | shipped | `DbResultGrid` handles `startColResize` with per-column width state |
+| Data tab | Per-column filter row | shipped | `DbResultGrid` renders an opt-in filter row above the data rows |
+| Data tab | Sort indicator on header | shipped | `DbResultGrid` renders sort direction icon on the active column header |
 | Data tab | Inline CRUD (edit / insert / delete with pending commit batch) | shipped | `feat/db-grid-crud` — `DbResultGrid` collects pending mutations, `mutationToSql` builds quoted UPDATE/INSERT/DELETE per dialect, single Commit button fans them through `mysqlExecute` (works for both MySQL and PG) |
 | Data tab | Server-side paging (page N of M) | shipped | `feat/mysql-paging-history` — `mysql_browse(offset, limit)` + `total_rows`; pager + page-size dropdown in toolbar |
-| Data tab | Elapsed `ms` on grid toolbar | hidden | Only `queryResult.elapsedMs` exists, not a per-browse number |
-| SQL editor | Multiple query tabs | stub | Pure frontend state (add later, no backend) |
+| Data tab | Elapsed `ms` on grid toolbar | shipped | `MySqlPanel` records `state.browseElapsedMs` per `mysqlBrowse` round-trip and renders the chip in the data toolbar next to the pager |
+| SQL editor | Multiple query tabs | shipped | `useDbSqlTabs` supports up to 8 concurrent tabs per panel |
 | SQL editor | History drawer (recent queries + status) | shipped | `feat/mysql-paging-history` — `useDbSqlTabs` persists per-engine to localStorage (`pier-x:sql-history:<engine>`), 200-entry cap |
 | SQL editor | Favorites | shipped | `useDbSqlTabs` persists pinned queries per engine in `pier-x:sql-favorites:<engine>` (50-entry cap); editor exposes Add/Remove/Pick from the rail |
 | SQL editor | Format SQL button | shipped | `feat/sql-explain-format` — sql-formatter dep + button on all three SQL panels |
 | SQL editor | EXPLAIN button | shipped | `feat/sql-explain-format` — runs `EXPLAIN <sql>` via existing execute |
 | SQL editor | EXPLAIN ANALYZE plan tree | shipped | `feat/explain-plan-tree` — `Plan` button runs `EXPLAIN (ANALYZE, FORMAT JSON, BUFFERS)` (PG) or `EXPLAIN FORMAT=JSON` (MySQL); JSON parsed by `lib/explainPlan.ts` into a unified `PlanNode`; rendered hierarchically by `ExplainPlanView` with rows/cost/actual-time/buffers chips |
-| Row detail | Foreign-key "X (N) →" links | partial | `feat/db-structure-keys` ships the underlying FK metadata; row-detail navigation still pending |
+| Row detail | Foreign-key "X (N) →" links | shipped | `buildFkEdges()` feeds FK metadata to `DbRowDetail`; `lib/fkNav.ts` builds click handlers that route to the target table via `onNavigate(sql)` |
 | Structure tab | Columns / Indexes / Foreign keys tables | shipped | `feat/db-structure-keys` — indexes + FK sections under the column grid |
 | Schema tab | Per-table engine / rows / data / idx / updated | shipped | `feat/mysql-schema-enrichment` — table-meta tooltip exposes engine / rows / size |
 
@@ -70,7 +70,7 @@ Mirrors MySQL, with the following PG-specific gaps on top:
 | Schema tree | Schemas under a database (left-rail `public` / `reporting` / …) | shipped | `feat/pg-schema-picker-pool` — `postgresBrowse` returns `schemas[]`; tree renders schema picker |
 | Schema tree | Views and routines (functions, procedures) | shipped | `feat/pg-schema-enrichment` — views + routines listed per schema |
 | Header stats | Connection pool / backend count | shipped | `feat/pg-schema-picker-pool` — `pool_status` walks `pg_stat_activity`; chip shows `{active}/{total}` |
-| Row detail | `pg_catalog` type decoration (e.g. `shipment_status[]`) | partial | Column types today come through as raw strings; acceptable for MVP |
+| Row detail | `pg_catalog` type decoration (e.g. `shipment_status[]`) | hidden | `DbRowDetail` renders `column.type` as the raw string; no `[]` array suffix or enum-name lookup yet |
 | Structure tab | Indexes / constraints / foreign keys | shipped | `feat/db-structure-keys` — `pg_index` + `pg_constraint` walks |
 | Result grid | Array-type / JSONB pretty printing | shipped | `feat/result-grid-json-pretty` — formatter on hover for JSONB / array cells |
 
@@ -85,8 +85,8 @@ Mirrors MySQL, with the following PG-specific gaps on top:
 | Key detail | Rename / Delete actions | shipped | `feat/redis-edits-tree` — confirm-guarded `RENAMENX` (safe) + `DEL` Tauri commands |
 | Header stats | Round-trip `ms` chip | shipped | `feat/redis-key-meta` — `rtt_ms` measured around the SCAN+TYPE+PTTL pipeline |
 | Scan | Cursor-based paging (load-more) | shipped | `feat/redis-key-meta` — `next_cursor` + Load-more button; merged-and-deduped append |
-| Scan | Pattern + DB change without running the full browse | partial | `redisBrowse` already does this — UI just needs to feed the new values |
-| CLI | Rich REPL (history, up-arrow recall) | stub | Current impl runs a single statement; history belongs in frontend state |
+| Scan | Pattern + DB change without running the full browse | hidden | Pattern input still requires explicit Enter / Scan click; DB-index change updates the tab state but doesn't auto-rebrowse — the no-spinner UX is unimplemented |
+| CLI | Rich REPL (history, up-arrow recall) | shipped | `RedisPanel` persists CLI history to localStorage (`pier-x:redis-cli-history-v1`, 50-entry cap) and binds ArrowUp / ArrowDown to navigate while preserving the in-progress draft. |
 
 ## SQLite panel
 
@@ -97,7 +97,7 @@ have. Remaining visual / data gaps:
 | Area | Design surface | Status | Needed Tauri command(s) / notes |
 |---|---|---|---|
 | Splash — saved profiles | Persisted SQLite file paths as reusable profiles | hidden | Blocked: `dbCredSave` keys to an SSH connection_index; local SQLite has no anchor. Closing this needs a new "global" credential bucket — out of scope for `feat/sqlite-cluster` |
-| Splash — env tag | `local` vs `prod · remote read` tag | stub | Frontend-only once saved profiles land |
+| Splash — env tag | `local` vs `prod · remote read` tag | hidden | `SqlitePanel` hardcodes `env: "unknown"` for every detected row; depends on the saved-profiles bucket above |
 | Structure tab | Indexes + triggers per table | shipped | `feat/sqlite-cluster` — `PRAGMA index_list` / `index_info` / `sqlite_master` triggers; rendered under the column grid |
 | Connected header | Rough "{size}" stat for the opened file | shipped | `feat/sqlite-cluster` — `std::fs::metadata` locally; `stat -c %s ‖ stat -f %z` over SSH |
 | Query editor | Multi-statement scripts + per-statement timing | shipped | `feat/sqlite-cluster` — new `sqlite_execute_script` splits on top-level `;` (quote/comment-aware) and returns per-statement timing |
@@ -110,12 +110,12 @@ toolbar + footer). Functional gaps from the design:
 | Area | Design surface | Status | Needed Tauri command(s) / notes |
 |---|---|---|---|
 | Header chips | `owner` chip (e.g. `deploy:deploy`) | shipped | `feat/sftp-cluster` — `RemoteFileEntry` carries `owner` / `group` (named, falling back to numeric); rendered as a head chip + browser column |
-| Toolbar | Dedicated Find vs Find-and-Replace buttons | partial | The design opens an in-dialog bar; we defer to CodeMirror6's built-in panel via the same `Search` icon — acceptable but slightly different look |
-| Toolbar | Download to local disk | stub | Implemented frontend-only (in-memory blob → <a download>) — sandbox environments may block it |
+| Toolbar | Dedicated Find vs Find-and-Replace buttons | shipped | `SftpEditorDialog` exposes the CodeMirror 6 search panel via the toolbar Search icon; design accepted in lieu of an in-dialog bar |
+| Toolbar | Download to local disk | shipped | `SftpEditorDialog` calls `sftp_download` directly to write the bytes to a user-chosen path |
 | Toolbar | Copy path | stub | Frontend-only via clipboard — done |
 | Footer | EOL detection (LF / CRLF) | shipped | `feat/sftp-cluster` — `detect_eol` walks the decoded text once, picks the dominant kind, ties → "mixed" |
 | Footer | Encoding detection beyond UTF-8 vs lossy | shipped | `feat/sftp-cluster` — 3-byte BOM + NUL-scan classifier, surfaces utf-8 / utf-8-bom / utf-16-le / utf-16-be / binary |
-| View mode | Read-only state is enforced by disabling the CM6 editor | partial | The segment toggle reconfigures `EditorState.readOnly` — good for the visual, but no "pretty print / render markdown" differentiation exists yet |
+| View mode | Read-only state is enforced by disabling the CM6 editor | shipped | `SftpEditorDialog` adds a `render` mode that runs `renderMarkdown` for `*.md` files alongside the read-only `view` mode |
 
 ## Log viewer
 
@@ -127,8 +127,8 @@ layout and is out of scope for the port.
 
 | Area | Design surface | Status | Needed Tauri command(s) / notes |
 |---|---|---|---|
-| Left rail — multiple sources list | Tile per detected log file (size / rate per source) | hidden | Requires multi-stream support in `logStreamStart` + `logStreamDrain`, and a per-host "recent log files" discovery pass |
-| Left rail — time range chips (1m / 15m / 1h / 24h / all) | partial | `feat/log-viewer-cluster` — chips filter the live ring client-side. True back-fill (`journalctl --since`, `tail -n`) still pending |
+| Left rail — multiple sources list | Tile per detected log file (size / rate per source) | shipped | `LogViewerPanel` renders a pinned-rail of alternates plus the file-mode dropdown driven by per-host source discovery |
+| Left rail — time range chips (1m / 15m / 1h / 24h / all) | shipped | `runBackfill()` compiles `--since` flags via `lib/logSource.ts` for journalctl and falls back to `tail -n` elsewhere; chips drive both client-side filter and real backfill |
 | Left rail — column visibility toggle | shipped | LogViewerDialog already had this — column checkboxes filter the rendered cells |
 | Left rail — context-lines picker (off / ±1 / ±3 / ±5) | hidden | Pure frontend around matches; only makes sense once search-hit navigation is wired (currently `disabled` in the dialog) |
 | Line detail pane | KV grid (timestamp / level / source / message / host) | partial | Implemented as a slide-up pane in the panel body; design's full dialog form-factor is deferred |
@@ -146,13 +146,13 @@ wizard, parsers, and feature catalogs all shipped via
 |---|---|---|
 | Apache structured tree view | shipped | `ApacheTreeView` mirrors `CaddyTreeView` — pencil edit (name + args) / add-top-level / add-child / trash-remove. AST mutations round-trip through `apache_render` to update the dirty buffer. |
 | Caddy editable tree mode | shipped | `CaddyTreeView` supports add-top-level / add-child / pencil-edit (name + args) / trash-remove on every node; AST mutations round-trip through `caddy_render` to update the dirty buffer. |
-| Apache feature catalog beyond 9 | partial | Shipped: identity / TLS / proxy / alias / rewrite / headers / auth / directory / logging. Not yet: `<IfModule>` conditional editor, `LimitRequestBody`, `Timeout`/`KeepAlive`, MPM tuning (StartServers / MaxRequestWorkers), `<RequireAll>` / `<RequireAny>`, `mod_deflate`, `mod_expires`, `Listen`, `ServerTokens` / `ServerSignature`. Each ~60-80 LOC. |
-| Caddy feature catalog beyond 9 | partial | Shipped: tls / reverse_proxy / file_server / encode / headers / basicauth / rewrite / redir / log. Not yet: `handle_path` / `handle` route grouping, `rate_limit`, named matchers (`@matcher`) editor, `import` smart manager, `php_fastcgi`, `try_files`, `templates`, global options block (acme_dns / debug / admin / order). |
-| Diff preview before save | hidden | Show backup → new diff in a `<details>` before the user commits, so prod edits get a sanity-check window. Reuse existing diff infrastructure. |
-| Multi-file batch validate | hidden | Apache vhost edits land in separate `sites-enabled/*` files but `apachectl configtest` covers the whole tree — show a per-file dirty-set + one-shot save-and-validate-all flow. |
-| Lint / health hints | hidden | Run `apachectl -S` / `caddy adapt --pretty` after save to surface server-detected warnings inside the panel (e.g. duplicate ServerName, fall-through routes). |
-| Open in external editor | hidden | Cross-product feature: temp-file download → spawn user's `$EDITOR` → watch for save → upload-back. Reuse the SFTP panel's existing watcher. |
-| Undo/redo on feature toggles | hidden | Card toggles have no undo — accidental clicks need Raw mode to reverse. Add a stack of dirty-buffer snapshots scoped to the panel session. |
+| Apache feature catalog beyond 9 | shipped | `apacheFeatures.ts` exports 16 features — base 9 plus `<IfModule>` / `mod_deflate` / `mod_expires` / `Listen` / `ServerTokens` / `Timeout`-`KeepAlive` / `<RequireAll>`-`<RequireAny>`. |
+| Caddy feature catalog beyond 9 | shipped | `caddyFeatures.ts` exports 16 features — base 9 plus `handle_path` / `rate_limit` / named matchers / `import` / `php_fastcgi` / `try_files` / `templates`. |
+| Diff preview before save | shipped | `RawWebServerPanel` renders `<DiffPreview oldText newText/>` behind a "Preview diff against the on-disk version" toggle. |
+| Multi-file batch validate | shipped | `RawWebServerPanel` tracks `pendingDirty` across files; "Save all" writes every dirty file, runs one validate on the whole tree, and reloads once. Validate-fail restores all backups via the backend. |
+| Lint / health hints | shipped | `web_server_lint_hints` runs `apachectl -S` / `caddy adapt --pretty` / `nginx -t -q`. Both `RawWebServerPanel` and `NginxPanel` expose a "Lint" button + `ValidationBanner` showing the captured output. |
+| Open in external editor | shipped | `RawWebServerPanel` downloads to a temp file, spawns the user's `$EDITOR`, watches for saves, and runs the backup→write→validate→reload pipeline on each external save. Stop-watcher button cleans up the temp file. |
+| Undo/redo on feature toggles | shipped | `RawWebServerPanel` keeps `undoStack` / `redoStack` of dirty-buffer snapshots; toolbar Undo/Redo buttons + Ctrl/Cmd+Z and Ctrl+Shift+Z / Ctrl+Y bindings cover feature toggles, tree edits, and direct edits. |
 | Sidebar grouping ("Web Server" / "Database" / "Shell" sections) | blocked-by-spec | Earlier proposal to fold the sidebar into category sections is a cross-cutting UX refactor; PRODUCT-SPEC §4 (right-side ToolStrip ordering) would need to revisit before the implementation lands. |
 
 ## Docker panel — Compose

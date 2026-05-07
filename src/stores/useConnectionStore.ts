@@ -21,6 +21,7 @@ type ConnectionStore = {
     group?: string | null;
     envTag?: string | null;
     egressId?: string | null;
+    autoElevate?: boolean;
   }) => Promise<void>;
   update: (params: {
     index: number;
@@ -34,6 +35,7 @@ type ConnectionStore = {
     group?: string | null;
     envTag?: string | null;
     egressId?: string | null;
+    autoElevate?: boolean;
   }) => Promise<void>;
   remove: (index: number) => Promise<void>;
   /** Atomic reorder + group-reassign across the whole list. */

@@ -238,6 +238,11 @@ pub async fn list_layout(session: &SshSession) -> Result<NginxLayout> {
         Vec::new()
     };
 
+    // Identity probe: keep this on the bare `exec_command` so the
+    // returned uid reflects the SSH user, not whatever sudo would
+    // become. Otherwise a non-root user with armed sudo gets
+    // is_root=true reported back to the UI, which then hides the
+    // "you may need root for this action" banner.
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
         _ => false,
@@ -331,7 +336,7 @@ async fn list_dir(
         dir = shell_single_quote(dir),
         pat = shell_single_quote(name_glob),
     );
-    let output = match session.exec_command(&listing_cmd).await {
+    let output = match session.exec_with_sudo(&listing_cmd).await {
         Ok((_, out)) => out,
         Err(_) => return Vec::new(),
     };
@@ -380,7 +385,7 @@ async fn stat_one(
         "test -e {p} && stat -c '%s\\t%Y' {p} 2>/dev/null",
         p = shell_single_quote(path),
     );
-    let (code, out) = session.exec_command(&cmd).await.ok()?;
+    let (code, out) = session.exec_with_sudo(&cmd).await.ok()?;
     if code != 0 {
         return None;
     }
@@ -419,7 +424,7 @@ async fn read_sites_enabled(session: &SshSession) -> Vec<(String, String)> {
          done",
         dir = shell_single_quote(NGINX_SITES_ENABLED_DIR),
     );
-    let Ok((_, out)) = session.exec_command(&cmd).await else {
+    let Ok((_, out)) = session.exec_with_sudo(&cmd).await else {
         return Vec::new();
     };
     let mut pairs = Vec::new();
@@ -460,7 +465,7 @@ pub fn parse_nginx_v_modules(output: &str) -> Vec<String> {
 /// `from_utf8_lossy` upstream in the SSH session.
 pub async fn read_file(session: &SshSession, path: &str) -> Result<String> {
     let cmd = format!("cat {} 2>&1", shell_single_quote(path));
-    let (code, out) = session.exec_command(&cmd).await?;
+    let (code, out) = session.exec_with_sudo(&cmd).await?;
     if code != 0 {
         return Err(crate::ssh::error::SshError::InvalidConfig(format!(
             "read {path} failed (exit {code}): {}",
@@ -502,18 +507,32 @@ pub async fn create_file(
         )));
     }
 
+    // Identity probe: keep this on the bare `exec_command` so the
+    // returned uid reflects the SSH user, not whatever sudo would
+    // become. Otherwise a non-root user with armed sudo gets
+    // is_root=true reported back to the UI, which then hides the
+    // "you may need root for this action" banner.
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
         _ => false,
     };
-    let prefix = if is_root { "" } else { "sudo -n " };
+    // Three-state prefix: when the session has a sudo password
+    // attached, drop the explicit `sudo -n` wrapper and rely on
+    // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
+    // and pipe the password. Pre-existing NOPASSWD setups continue
+    // to work via the `sudo -n ` fallback when no password is set.
+    let prefix = if is_root || session.has_sudo_password().await {
+        ""
+    } else {
+        "sudo -n "
+    };
 
     // Refuse to clobber. `test -e` covers files, dirs, symlinks.
     let exists_check = format!(
         "{prefix}sh -c 'test -e {p} && echo EXISTS || echo MISSING' 2>&1",
         p = shell_single_quote(path),
     );
-    let (_, exists_out) = session.exec_command(&exists_check).await?;
+    let (_, exists_out) = session.exec_with_sudo(&exists_check).await?;
     if exists_out.contains("EXISTS") {
         return Err(crate::ssh::error::SshError::InvalidConfig(format!(
             "{path} already exists — pick another name"
@@ -528,7 +547,7 @@ pub async fn create_file(
         writer.flush().ok();
     }
 
-    let ts = match session.exec_command("date +%s").await {
+    let ts = match session.exec_with_sudo("date +%s").await {
         Ok((0, out)) => out.trim().to_string(),
         _ => "0".to_string(),
     };
@@ -548,7 +567,7 @@ pub async fn create_file(
         target = shell_single_quote(path),
     );
     let cmd = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
-    let (code, out) = session.exec_command(&cmd).await?;
+    let (code, out) = session.exec_with_sudo(&cmd).await?;
     Ok(NginxValidateResult {
         ok: code == 0,
         exit_code: code,
@@ -610,15 +629,29 @@ pub async fn save_file_validate_reload(
     path: &str,
     content: &str,
 ) -> Result<NginxSaveResult> {
+    // Identity probe: keep this on the bare `exec_command` so the
+    // returned uid reflects the SSH user, not whatever sudo would
+    // become. Otherwise a non-root user with armed sudo gets
+    // is_root=true reported back to the UI, which then hides the
+    // "you may need root for this action" banner.
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
         _ => false,
     };
-    let prefix = if is_root { "" } else { "sudo -n " };
+    // Three-state prefix: when the session has a sudo password
+    // attached, drop the explicit `sudo -n` wrapper and rely on
+    // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
+    // and pipe the password. Pre-existing NOPASSWD setups continue
+    // to work via the `sudo -n ` fallback when no password is set.
+    let prefix = if is_root || session.has_sudo_password().await {
+        ""
+    } else {
+        "sudo -n "
+    };
 
     // Use the seconds-since-epoch from the remote so concurrent edits
     // from different clients don't collide on a clock-skew window.
-    let ts = match session.exec_command("date +%s").await {
+    let ts = match session.exec_with_sudo("date +%s").await {
         Ok((0, out)) => out.trim().to_string(),
         _ => "0".to_string(),
     };
@@ -631,7 +664,7 @@ pub async fn save_file_validate_reload(
         src = shell_single_quote(path),
         dst = shell_single_quote(&backup_path),
     );
-    let (backup_code, backup_out) = session.exec_command(&backup_cmd).await?;
+    let (backup_code, backup_out) = session.exec_with_sudo(&backup_cmd).await?;
     if backup_code != 0 {
         return Err(crate::ssh::error::SshError::InvalidConfig(format!(
             "backup {path} → {backup_path} failed: {}",
@@ -661,7 +694,7 @@ pub async fn save_file_validate_reload(
             target = shell_single_quote(path),
         )),
     );
-    let (write_code, write_out) = session.exec_command(&write_cmd).await?;
+    let (write_code, write_out) = session.exec_with_sudo(&write_cmd).await?;
     if write_code != 0 {
         // Best-effort restore so we don't leave the file in a bad state.
         let _ = session
@@ -679,7 +712,7 @@ pub async fn save_file_validate_reload(
 
     // 3) Validate.
     let validate_cmd = format!("{prefix}nginx -t 2>&1");
-    let (validate_code, validate_out) = session.exec_command(&validate_cmd).await?;
+    let (validate_code, validate_out) = session.exec_with_sudo(&validate_cmd).await?;
     let validate = NginxValidateResult {
         ok: validate_code == 0,
         exit_code: validate_code,
@@ -716,7 +749,7 @@ pub async fn save_file_validate_reload(
             nginx -s reload 2>&1; \
          fi'"
     );
-    let (reload_code, reload_out) = session.exec_command(&reload_cmd).await?;
+    let (reload_code, reload_out) = session.exec_with_sudo(&reload_cmd).await?;
     let reloaded = reload_code == 0;
 
     // Trim aged `.pier-bak.*` siblings now that the new content is
@@ -731,7 +764,7 @@ pub async fn save_file_validate_reload(
             q = shell_single_quote(path),
         ))
     );
-    let _ = session.exec_command(&trim_cmd).await;
+    let _ = session.exec_with_sudo(&trim_cmd).await;
 
     Ok(NginxSaveResult {
         validate,
@@ -756,11 +789,25 @@ pub fn save_file_validate_reload_blocking(
 /// Run `nginx -t` only — useful when the user wants to dry-run before
 /// committing or to verify after a manual edit.
 pub async fn validate(session: &SshSession) -> Result<NginxValidateResult> {
+    // Identity probe: keep this on the bare `exec_command` so the
+    // returned uid reflects the SSH user, not whatever sudo would
+    // become. Otherwise a non-root user with armed sudo gets
+    // is_root=true reported back to the UI, which then hides the
+    // "you may need root for this action" banner.
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
         _ => false,
     };
-    let prefix = if is_root { "" } else { "sudo -n " };
+    // Three-state prefix: when the session has a sudo password
+    // attached, drop the explicit `sudo -n` wrapper and rely on
+    // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
+    // and pipe the password. Pre-existing NOPASSWD setups continue
+    // to work via the `sudo -n ` fallback when no password is set.
+    let prefix = if is_root || session.has_sudo_password().await {
+        ""
+    } else {
+        "sudo -n "
+    };
     let (code, out) = session
         .exec_command(&format!("{prefix}nginx -t 2>&1"))
         .await?;
@@ -779,11 +826,25 @@ pub fn validate_blocking(session: &SshSession) -> Result<NginxValidateResult> {
 /// Reload nginx without writing anything — surfaces as a button in the
 /// panel header for the "I edited config out-of-band, kick it" use case.
 pub async fn reload(session: &SshSession) -> Result<NginxValidateResult> {
+    // Identity probe: keep this on the bare `exec_command` so the
+    // returned uid reflects the SSH user, not whatever sudo would
+    // become. Otherwise a non-root user with armed sudo gets
+    // is_root=true reported back to the UI, which then hides the
+    // "you may need root for this action" banner.
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
         _ => false,
     };
-    let prefix = if is_root { "" } else { "sudo -n " };
+    // Three-state prefix: when the session has a sudo password
+    // attached, drop the explicit `sudo -n` wrapper and rely on
+    // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
+    // and pipe the password. Pre-existing NOPASSWD setups continue
+    // to work via the `sudo -n ` fallback when no password is set.
+    let prefix = if is_root || session.has_sudo_password().await {
+        ""
+    } else {
+        "sudo -n "
+    };
     let (code, out) = session
         .exec_command(&format!(
             "{prefix}sh -c 'if command -v systemctl >/dev/null 2>&1; then \
@@ -819,11 +880,25 @@ pub async fn toggle_site(
             "invalid site name: {site_name}"
         )));
     }
+    // Identity probe: keep this on the bare `exec_command` so the
+    // returned uid reflects the SSH user, not whatever sudo would
+    // become. Otherwise a non-root user with armed sudo gets
+    // is_root=true reported back to the UI, which then hides the
+    // "you may need root for this action" banner.
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
         _ => false,
     };
-    let prefix = if is_root { "" } else { "sudo -n " };
+    // Three-state prefix: when the session has a sudo password
+    // attached, drop the explicit `sudo -n` wrapper and rely on
+    // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
+    // and pipe the password. Pre-existing NOPASSWD setups continue
+    // to work via the `sudo -n ` fallback when no password is set.
+    let prefix = if is_root || session.has_sudo_password().await {
+        ""
+    } else {
+        "sudo -n "
+    };
 
     let cmd = if enable {
         format!(
@@ -843,7 +918,7 @@ pub async fn toggle_site(
             )),
         )
     };
-    let (code, out) = session.exec_command(&cmd).await?;
+    let (code, out) = session.exec_with_sudo(&cmd).await?;
     Ok(NginxValidateResult {
         ok: code == 0,
         exit_code: code,

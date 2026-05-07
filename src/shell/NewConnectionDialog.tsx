@@ -1,12 +1,14 @@
-import { Key, Server, Shield, X } from "lucide-react";
+import { Key, Server, Shield, ShieldCheck, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import IconButton from "../components/IconButton";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
+import * as cmd from "../lib/commands";
 import type { SavedSshConnection } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useEgressStore } from "../stores/useEgressStore";
+import { useSudoStore } from "../stores/useSudoStore";
 import EgressProfilesDialog from "./EgressProfilesDialog";
 
 type ConnectionDraft = {
@@ -20,6 +22,7 @@ type ConnectionDraft = {
   group: string;
   envTag: string;
   egressId: string;
+  autoElevate: boolean;
 };
 
 type Props = {
@@ -57,6 +60,7 @@ function toDraft(connection?: SavedSshConnection | null): ConnectionDraft {
     group: connection?.group ?? "",
     envTag: connection?.envTag ?? "",
     egressId: connection?.egressId ?? "",
+    autoElevate: connection?.autoElevate ?? false,
   };
 }
 
@@ -74,6 +78,16 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const [authMode, setAuthMode] = useState<"password" | "agent" | "key">(initialDraft.authKind as "password" | "agent" | "key");
   const [password, setPassword] = useState("");
   const [keyPath, setKeyPath] = useState(initialDraft.keyPath);
+  // Optional sudo / privilege-escalation password. Stored in the OS
+  // keychain under `pier-x.elev.<user>@<host>:<port>` only when set
+  // via this field; the host's interactive panels (Docker / firewall
+  // / nginx / software) prompt on demand otherwise. Editing an
+  // existing connection that already has one shows a "saved" badge
+  // but does NOT pre-fill the input — same disclosure model as the
+  // SSH password above.
+  const [sudoPassword, setSudoPasswordInput] = useState("");
+  const [hasStoredSudoPassword, setHasStoredSudoPassword] = useState(false);
+  const [autoElevate, setAutoElevate] = useState(initialDraft.autoElevate);
   const [group, setGroup] = useState(initialDraft.group);
   const [envTag, setEnvTag] = useState(initialDraft.envTag);
   const [egressId, setEgressId] = useState(initialDraft.egressId);
@@ -120,11 +134,41 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
     setAuthMode(next.authKind as "password" | "agent" | "key");
     setPassword("");
     setKeyPath(next.keyPath);
+    setSudoPasswordInput("");
+    setHasStoredSudoPassword(false);
+    setAutoElevate(next.autoElevate);
     setGroup(next.group);
     setEnvTag(next.envTag);
     setEgressId(next.egressId);
     setError("");
   }, [initialConnection, open]);
+
+  // When editing, probe the keychain for an existing elevation
+  // password so the UI can show a "Saved" badge without leaking the
+  // actual value. Skipped for new connections (nothing to probe).
+  useEffect(() => {
+    if (!open || !initialConnection) {
+      setHasStoredSudoPassword(false);
+      return;
+    }
+    let cancelled = false;
+    void cmd
+      .getElevationPassword(
+        initialConnection.user,
+        initialConnection.host,
+        initialConnection.port,
+      )
+      .then((stored) => {
+        if (cancelled) return;
+        setHasStoredSudoPassword(Boolean(stored && stored.length > 0));
+      })
+      .catch(() => {
+        if (!cancelled) setHasStoredSudoPassword(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, initialConnection]);
 
   if (!open) return null;
 
@@ -167,6 +211,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       group: trimmedGroup ? trimmedGroup : null,
       envTag: trimmedEnvTag ? trimmedEnvTag : null,
       egressId: trimmedEgressId ? trimmedEgressId : "",
+      autoElevate,
     };
 
     if (isEditing && typeof initialDraft.index === "number") {
@@ -176,6 +221,41 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       });
     } else {
       await save(params);
+    }
+
+    // Persist the sudo / elevation password if the user typed one.
+    // Empty input is a no-op (existing keychain entry stays). To
+    // clear an existing entry the user goes to Settings → Security
+    // and clicks Forget. Mirrors the SSH password "leave blank to
+    // keep" semantics so editing the form never accidentally drops
+    // a stored password.
+    if (sudoPassword.trim().length > 0) {
+      try {
+        const trimmedHost = host.trim();
+        const trimmedUser = user.trim();
+        await cmd.setElevationPassword(
+          trimmedUser,
+          trimmedHost,
+          p,
+          sudoPassword,
+        );
+        // Mirror into the in-memory L1 cache so panels active in this
+        // session pick it up without a hydrate round-trip.
+        useSudoStore.getState().set(
+          {
+            host: trimmedHost,
+            port: p,
+            user: trimmedUser,
+            authMode,
+            password: "",
+            keyPath: "",
+            savedConnectionIndex: null,
+          },
+          sudoPassword,
+        );
+      } catch (e) {
+        console.warn("setElevationPassword failed", e);
+      }
     }
   }
 
@@ -448,6 +528,85 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
             {authMode === "agent" && (
               <div className="dlg-note">{t("Agent auth uses the system SSH agent.")}</div>
             )}
+            <div className="dlg-row">
+              <label
+                className="dlg-row-label"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "var(--sp-1)",
+                }}
+              >
+                <ShieldCheck size={11} />
+                {t("Sudo password")}
+              </label>
+              <input
+                className="dlg-input"
+                type="password"
+                onChange={(e) => setSudoPasswordInput(e.currentTarget.value)}
+                placeholder={
+                  hasStoredSudoPassword
+                    ? t("Leave blank to keep saved password")
+                    : t("Optional — saved to keychain for Docker / firewall / nginx panels")
+                }
+                value={sudoPassword}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+            <div className="dlg-note">
+              <ShieldCheck size={11} />
+              <span>
+                {hasStoredSudoPassword
+                  ? t(
+                      "A sudo password is already saved for this host. Pier-X panels (Docker, firewall, nginx, software) use it transparently. Manage / forget from Settings → Security.",
+                    )
+                  : t(
+                      "Optional. When set, panels that need root (Docker, firewall, nginx, software) wrap their commands in sudo -S and pipe this password from the OS keychain.",
+                    )}
+              </span>
+            </div>
+            <div className="dlg-row">
+              <label
+                className="dlg-row-label"
+                style={{ alignSelf: "center" }}
+              >
+                {t("Auto-elevate to root")}
+              </label>
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "var(--sp-2)",
+                  fontSize: "var(--ui-fs-sm)",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={autoElevate}
+                  onChange={(e) => setAutoElevate(e.currentTarget.checked)}
+                />
+                <span>
+                  {t(
+                    "Run sudo -i automatically after the SSH terminal opens",
+                  )}
+                </span>
+              </label>
+            </div>
+            {autoElevate ? (
+              <div className="dlg-note">
+                <ShieldCheck size={11} />
+                <span>
+                  {hasStoredSudoPassword || sudoPassword.trim().length > 0
+                    ? t(
+                        "On connect, Pier-X will pipe the saved sudo password into `sudo -S -p '' -i bash` so the terminal lands directly in a root login shell.",
+                      )
+                    : t(
+                        "Auto-elevate is enabled but no sudo password is saved for this host. Set one in the Sudo password field above first.",
+                      )}
+                </span>
+              </div>
+            ) : null}
             {error && <div className="status-note status-note--error">{error}</div>}
           </div>
         </div>

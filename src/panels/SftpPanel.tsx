@@ -48,6 +48,7 @@ import {
   type SftpBookmark,
 } from "../stores/useSftpBookmarksStore";
 import { useTabStore } from "../stores/useTabStore";
+import { sudoKeyFor, useSudoStore } from "../stores/useSudoStore";
 
 // Module-scope constant for "no bookmarks". Kept out of the
 // zustand selector so two consecutive renders get the *same*
@@ -304,6 +305,19 @@ function SftpPanelBody({ tab }: Props) {
   // Falls back to inert defaults when there's no target — every
   // call site is gated behind `hasSsh` / `sshTarget` first, so the
   // empty values never reach the backend.
+  const sftpSudoPassword = useSudoStore((s) =>
+    sshTarget
+      ? s.passwords[sudoKeyFor({
+          host: sshTarget.host,
+          port: sshTarget.port,
+          user: sshTarget.user,
+          authMode: sshTarget.authMode,
+          password: sshTarget.password,
+          keyPath: sshTarget.keyPath,
+          savedConnectionIndex: sshTarget.savedConnectionIndex,
+        })] ?? null
+      : null,
+  );
   const sshArgs = {
     host: sshTarget?.host ?? "",
     port: sshTarget?.port ?? 22,
@@ -312,6 +326,7 @@ function SftpPanelBody({ tab }: Props) {
     password: sshTarget?.password ?? "",
     keyPath: sshTarget?.keyPath ?? "",
     savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
+    sudoPassword: sftpSudoPassword,
   };
   const sshRequired = t("SSH connection required.");
   const bookmarkHostKey = hasSsh ? hostKey(sshArgs.user, sshArgs.host, sshArgs.port) : "";

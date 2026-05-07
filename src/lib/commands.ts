@@ -443,6 +443,10 @@ export const sshConnectionSave = (params: {
   envTag?: string | null;
   /** Egress profile id (see `EgressProfile`). Null / missing → direct. */
   egressId?: string | null;
+  /** When true, opening an SSH terminal for this connection also
+   *  pipes `sudo -i` + the keychain elevation password. Off by
+   *  default. */
+  autoElevate?: boolean;
 }) => invoke<void>("ssh_connection_save", {
   name: params.name,
   host: params.host,
@@ -454,6 +458,7 @@ export const sshConnectionSave = (params: {
   group: params.group && params.group.trim() ? params.group.trim() : null,
   envTag: params.envTag && params.envTag.trim() ? params.envTag.trim() : null,
   egressId: params.egressId && params.egressId.trim() ? params.egressId.trim() : null,
+  autoElevate: params.autoElevate ?? false,
 });
 
 export const sshConnectionUpdate = (params: {
@@ -473,6 +478,9 @@ export const sshConnectionUpdate = (params: {
   /** Same preserve-on-undefined / clear-on-empty semantics as `group`.
    *  Pass an `EgressProfile.id` to attach a tunnel; `""` to detach. */
   egressId?: string | null;
+  /** When `undefined`, the backend preserves the existing flag.
+   *  Pass `true` / `false` to explicitly toggle. */
+  autoElevate?: boolean;
 }) => invoke<void>("ssh_connection_update", {
   index: params.index,
   name: params.name,
@@ -497,6 +505,7 @@ export const sshConnectionUpdate = (params: {
       : params.egressId && params.egressId.trim()
         ? params.egressId.trim()
         : "",
+  autoElevate: params.autoElevate,
 });
 
 export const sshConnectionDelete = (index: number) =>
@@ -1354,6 +1363,13 @@ export type SshParams = {
   password: string;
   keyPath: string;
   savedConnectionIndex?: number | null;
+  /** Optional sudo / privilege-escalation password attached to the
+   *  per-(host,port,user) SSH session before the backend dispatches
+   *  the command. Backend wraps root-needed commands in
+   *  `sudo -S -p ''` and pipes this value when set; ignored when
+   *  unset (falls back to plain exec / NOPASSWD path). Populated
+   *  by panels via `useSudoStore`. */
+  sudoPassword?: string | null;
 };
 
 export const sqliteRemoteCapable = (params: SshParams) =>
@@ -3011,6 +3027,10 @@ export const sftpReadText = (params: {
   /** Upper bound checked before streaming. Backend caps this at 5 MB. */
   maxBytes?: number | null;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password — used as fallback when SFTP read
+   *  fails with EACCES on a root-only file. Editor opens
+   *  /etc/sshd_config etc. transparently when armed. */
+  sudoPassword?: string | null;
 }) => invoke<SftpTextFile>("sftp_read_text", params);
 
 export const sftpWriteText = (params: {
@@ -3018,6 +3038,9 @@ export const sftpWriteText = (params: {
   path: string;
   content: string;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password — used as fallback when SFTP write
+   *  fails with EACCES on a root-only file (saves via `sudo tee`). */
+  sudoPassword?: string | null;
 }) => invoke<void>("sftp_write_text", params);
 
 export const sftpDownload = (params: {

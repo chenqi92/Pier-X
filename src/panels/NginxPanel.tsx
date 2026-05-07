@@ -49,6 +49,20 @@ import {
   isSshTargetReady,
   type TabState,
 } from "../lib/types";
+import { sudoKeyFor, useSudoStore } from "../stores/useSudoStore";
+import SudoPasswordDialog from "../components/SudoPasswordDialog";
+
+function nginxLooksLikePermissionDenied(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("permission denied") ||
+    m.includes("a password is required") ||
+    m.includes("is not in the sudoers file") ||
+    m.includes("you must be root") ||
+    m.includes("operation not permitted") ||
+    m.includes("eperm")
+  );
+}
 
 type Props = { tab: TabState | null };
 
@@ -67,10 +81,50 @@ export default function NginxPanel(props: Props) {
 
 function NginxPanelBody({ tab }: Props) {
   const { t } = useI18n();
-  const formatError = (error: unknown) => localizeError(error, t);
+  // Localise an error for display; we wrap the resulting string with
+  // sudo-prompt detection a few lines below once `sshTarget` exists.
+  // Every nginx command can fail with a permission-denied error
+  // string — wrap detection into the same helper so each catch
+  // block stays a single line.
+  const formatErrorPlain = (error: unknown) => localizeError(error, t);
 
   const sshTarget = tab ? effectiveSshTarget(tab) : null;
   const canProbe = isSshTargetReady(sshTarget);
+
+  const sudoStoreKey = sshTarget
+    ? sudoKeyFor({
+        host: sshTarget.host,
+        port: sshTarget.port,
+        user: sshTarget.user,
+        authMode: sshTarget.authMode,
+        password: sshTarget.password,
+        keyPath: sshTarget.keyPath,
+        savedConnectionIndex: sshTarget.savedConnectionIndex,
+      })
+    : "";
+  const sudoPassword = useSudoStore((s) =>
+    sudoStoreKey ? s.passwords[sudoStoreKey] ?? null : null,
+  );
+
+  // Hydrate from keychain on host change.
+  useEffect(() => {
+    if (!sshTarget) return;
+    void useSudoStore.getState().hydrate({
+      host: sshTarget.host,
+      port: sshTarget.port,
+      user: sshTarget.user,
+      authMode: sshTarget.authMode,
+      password: sshTarget.password,
+      keyPath: sshTarget.keyPath,
+      savedConnectionIndex: sshTarget.savedConnectionIndex,
+    });
+  }, [
+    sshTarget?.host,
+    sshTarget?.port,
+    sshTarget?.user,
+    sshTarget?.authMode,
+    sshTarget?.savedConnectionIndex,
+  ]);
 
   const sshParams = useMemo(() => {
     if (!sshTarget) return null;
@@ -82,6 +136,7 @@ function NginxPanelBody({ tab }: Props) {
       password: sshTarget.password,
       keyPath: sshTarget.keyPath,
       savedConnectionIndex: sshTarget.savedConnectionIndex,
+      sudoPassword: sudoPassword ?? null,
     };
   }, [
     sshTarget?.host,
@@ -91,7 +146,37 @@ function NginxPanelBody({ tab }: Props) {
     sshTarget?.password,
     sshTarget?.keyPath,
     sshTarget?.savedConnectionIndex,
+    sudoPassword,
   ]);
+
+  // Sudo prompt: fires whenever a backend call rejects with a
+  // permission-denied error string. Each catch block calls
+  // `maybeTriggerSudoPrompt(e)` before localising the error for
+  // display; submitting the dialog stores the password (memory +
+  // optional keychain) and the user re-clicks the failing action.
+  const [sudoPrompt, setSudoPrompt] = useState<{
+    hostLabel: string;
+    errorMessage?: string;
+  } | null>(null);
+
+  const maybeTriggerSudoPrompt = (e: unknown) => {
+    if (!sshTarget) return;
+    const raw = e instanceof Error ? e.message : typeof e === "string" ? e : String(e);
+    if (!nginxLooksLikePermissionDenied(raw)) return;
+    setSudoPrompt({
+      hostLabel: `${sshTarget.user}@${sshTarget.host}`,
+      errorMessage: sudoPassword
+        ? t("Saved sudo password was rejected — please re-enter.")
+        : undefined,
+    });
+  };
+
+  // Display-side wrapper: side-effects the sudo-prompt detector AND
+  // returns the localised string for the caller's setXError(...).
+  const formatError = (e: unknown) => {
+    maybeTriggerSudoPrompt(e);
+    return formatErrorPlain(e);
+  };
 
   const [layout, setLayout] = useState<NginxLayout | null>(null);
   const [layoutBusy, setLayoutBusy] = useState(false);
@@ -461,6 +546,33 @@ function NginxPanelBody({ tab }: Props) {
       </div>
 
       <ModulesSection layout={layout} t={t} />
+
+      <SudoPasswordDialog
+        open={sudoPrompt !== null}
+        hostLabel={sudoPrompt?.hostLabel ?? ""}
+        errorMessage={sudoPrompt?.errorMessage}
+        onSubmit={(password, remember) => {
+          setSudoPrompt(null);
+          if (!sshTarget) return;
+          const params = {
+            host: sshTarget.host,
+            port: sshTarget.port,
+            user: sshTarget.user,
+            authMode: sshTarget.authMode,
+            password: sshTarget.password,
+            keyPath: sshTarget.keyPath,
+            savedConnectionIndex: sshTarget.savedConnectionIndex,
+          };
+          void useSudoStore
+            .getState()
+            .setPersistent(params, password, remember);
+          // The user retries by clicking the failed action again;
+          // panels with one obvious "main" call (Layout / Docker)
+          // could auto-retry, but nginx has many entry points so a
+          // manual retry is less surprising.
+        }}
+        onCancel={() => setSudoPrompt(null)}
+      />
     </div>
   );
 }

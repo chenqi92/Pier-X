@@ -260,6 +260,12 @@ export type SavedSshConnection = {
   /** Optional `EgressProfile.id` this connection routes through.
    *  `null` / undefined means a direct connection (no tunnel). */
   egressId?: string | null;
+  /** When true, the SSH terminal session immediately auto-elevates
+   *  to root via `sudo -i` and pipes the keychain elevation
+   *  password. Off by default. Only meaningful when the user has
+   *  saved an elevation password via NewConnectionDialog or the
+   *  in-panel sudo prompt. */
+  autoElevate?: boolean;
 };
 
 // ── Egress (per-connection outbound tunnel) ─────────────────────

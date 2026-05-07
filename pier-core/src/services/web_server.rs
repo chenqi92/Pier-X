@@ -341,12 +341,26 @@ pub fn lint_hints_blocking(
 }
 
 async fn run_with_sudo(session: &SshSession, cmd: &str) -> Result<WebServerActionResult> {
+    // Identity probe: keep this on the bare `exec_command` so the
+    // returned uid reflects the SSH user, not whatever sudo would
+    // become. Otherwise a non-root user with armed sudo gets
+    // is_root=true reported back to the UI, which then hides the
+    // "you may need root for this action" banner.
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
         _ => false,
     };
-    let prefix = if is_root { "" } else { "sudo -n " };
-    let (code, out) = session.exec_command(&format!("{prefix}{cmd}")).await?;
+    // Three-state prefix: when the session has a sudo password
+    // attached, drop the explicit `sudo -n` wrapper and rely on
+    // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
+    // password. Pre-existing NOPASSWD setups keep working via the
+    // `sudo -n ` fallback when no password is set.
+    let prefix = if is_root || session.has_sudo_password().await {
+        ""
+    } else {
+        "sudo -n "
+    };
+    let (code, out) = session.exec_with_sudo(&format!("{prefix}{cmd}")).await?;
     Ok(WebServerActionResult {
         ok: code == 0,
         exit_code: code,
@@ -453,6 +467,11 @@ pub async fn list_layout(
         WebServerKind::Caddy => probe_caddy(session).await,
     };
 
+    // Identity probe: keep this on the bare `exec_command` so the
+    // returned uid reflects the SSH user, not whatever sudo would
+    // become. Otherwise a non-root user with armed sudo gets
+    // is_root=true reported back to the UI, which then hides the
+    // "you may need root for this action" banner.
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
         _ => false,
@@ -580,7 +599,7 @@ async fn collect_apache_files(
 async fn list_apache_enabled_set(session: &SshSession) -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
     let cmd = "ls -1 /etc/apache2/sites-enabled 2>/dev/null";
-    if let Ok((0, out)) = session.exec_command(cmd).await {
+    if let Ok((0, out)) = session.exec_with_sudo(cmd).await {
         for name in out.lines() {
             let name = name.trim();
             if !name.is_empty() {
@@ -618,7 +637,7 @@ async fn stat_remote(
     // mostly-linux servers so the GNU form is fine; if it fails we
     // fall through to test+wc.
     let cmd = format!("test -f {q} && stat -c %s {q} 2>/dev/null");
-    let (code, out) = session.exec_command(&cmd).await.ok()?;
+    let (code, out) = session.exec_with_sudo(&cmd).await.ok()?;
     if code != 0 {
         return None;
     }
@@ -634,7 +653,7 @@ async fn stat_remote(
 async fn stat_size(session: &SshSession, path: &str) -> u64 {
     let q = crate::services::nginx::shell_single_quote(path);
     let cmd = format!("stat -c %s {q} 2>/dev/null");
-    if let Ok((0, out)) = session.exec_command(&cmd).await {
+    if let Ok((0, out)) = session.exec_with_sudo(&cmd).await {
         return out.trim().parse::<u64>().unwrap_or(0);
     }
     0
@@ -654,7 +673,7 @@ async fn list_dir_remote(
         "find {q_dir} -maxdepth 1 -type f -name {glob} 2>/dev/null | sort",
         glob = crate::services::nginx::shell_single_quote(glob),
     );
-    let Ok((0, listing)) = session.exec_command(&cmd).await else {
+    let Ok((0, listing)) = session.exec_with_sudo(&cmd).await else {
         return;
     };
     for path in listing.lines() {
@@ -679,7 +698,7 @@ async fn exec_listing(session: &SshSession, dir: &str, glob: &str) -> Vec<String
         "find {q_dir} -maxdepth 1 -type f -name {glob} 2>/dev/null | sort",
         glob = crate::services::nginx::shell_single_quote(glob),
     );
-    match session.exec_command(&cmd).await {
+    match session.exec_with_sudo(&cmd).await {
         Ok((0, listing)) => listing
             .lines()
             .map(|s| s.trim().to_string())
@@ -704,7 +723,7 @@ pub async fn read_file(
         "cat {} 2>&1",
         crate::services::nginx::shell_single_quote(path)
     );
-    let (code, out) = session.exec_command(&cmd).await?;
+    let (code, out) = session.exec_with_sudo(&cmd).await?;
     if code != 0 {
         return Err(crate::ssh::error::SshError::InvalidConfig(format!(
             "read {path} failed (exit {code}): {}",
@@ -748,7 +767,7 @@ async fn trim_old_backups(session: &SshSession, prefix: &str, path: &str) {
         "{prefix}sh -c {}",
         crate::services::nginx::shell_single_quote(&inner)
     );
-    let _ = session.exec_command(&cmd).await;
+    let _ = session.exec_with_sudo(&cmd).await;
 }
 
 fn is_path_under_config_root(kind: WebServerKind, path: &str) -> bool {
@@ -776,13 +795,27 @@ pub async fn save_file_validate_reload(
         )));
     }
 
+    // Identity probe: keep this on the bare `exec_command` so the
+    // returned uid reflects the SSH user, not whatever sudo would
+    // become. Otherwise a non-root user with armed sudo gets
+    // is_root=true reported back to the UI, which then hides the
+    // "you may need root for this action" banner.
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
         _ => false,
     };
-    let prefix = if is_root { "" } else { "sudo -n " };
+    // Three-state prefix: when the session has a sudo password
+    // attached, drop the explicit `sudo -n` wrapper and rely on
+    // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
+    // password. Pre-existing NOPASSWD setups keep working via the
+    // `sudo -n ` fallback when no password is set.
+    let prefix = if is_root || session.has_sudo_password().await {
+        ""
+    } else {
+        "sudo -n "
+    };
 
-    let ts = match session.exec_command("date +%s").await {
+    let ts = match session.exec_with_sudo("date +%s").await {
         Ok((0, out)) => out.trim().to_string(),
         _ => "0".to_string(),
     };
@@ -794,7 +827,7 @@ pub async fn save_file_validate_reload(
     // 1) Backup. cp -p preserves mode/owner so a later restore doesn't
     //    ratchet permissions.
     let backup_cmd = format!("{prefix}cp -p {q_path} {q_backup}");
-    let (backup_code, backup_out) = session.exec_command(&backup_cmd).await?;
+    let (backup_code, backup_out) = session.exec_with_sudo(&backup_cmd).await?;
     if backup_code != 0 {
         return Err(crate::ssh::error::SshError::InvalidConfig(format!(
             "backup {path} → {backup_path} failed: {}",
@@ -820,7 +853,7 @@ pub async fn save_file_validate_reload(
         "{prefix}sh -c {}",
         crate::services::nginx::shell_single_quote(&inner)
     );
-    let (write_code, write_out) = session.exec_command(&write_cmd).await?;
+    let (write_code, write_out) = session.exec_with_sudo(&write_cmd).await?;
     if write_code != 0 {
         let _ = session
             .exec_command(&format!("{prefix}mv {q_backup} {q_path}"))
@@ -908,13 +941,27 @@ pub async fn save_files_batch(
         }
     }
 
+    // Identity probe: keep this on the bare `exec_command` so the
+    // returned uid reflects the SSH user, not whatever sudo would
+    // become. Otherwise a non-root user with armed sudo gets
+    // is_root=true reported back to the UI, which then hides the
+    // "you may need root for this action" banner.
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
         _ => false,
     };
-    let prefix = if is_root { "" } else { "sudo -n " };
+    // Three-state prefix: when the session has a sudo password
+    // attached, drop the explicit `sudo -n` wrapper and rely on
+    // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
+    // password. Pre-existing NOPASSWD setups keep working via the
+    // `sudo -n ` fallback when no password is set.
+    let prefix = if is_root || session.has_sudo_password().await {
+        ""
+    } else {
+        "sudo -n "
+    };
 
-    let ts = match session.exec_command("date +%s").await {
+    let ts = match session.exec_with_sudo("date +%s").await {
         Ok((0, out)) => out.trim().to_string(),
         _ => "0".to_string(),
     };
@@ -927,7 +974,7 @@ pub async fn save_files_batch(
         let q_path = crate::services::nginx::shell_single_quote(&entry.path);
         let q_backup = crate::services::nginx::shell_single_quote(&backup_path);
         let backup_cmd = format!("{prefix}cp -p {q_path} {q_backup}");
-        let (bc, bo) = session.exec_command(&backup_cmd).await?;
+        let (bc, bo) = session.exec_with_sudo(&backup_cmd).await?;
         if bc != 0 {
             // Roll back already-completed backups (just unlink them —
             // no source files were touched yet).
@@ -963,7 +1010,7 @@ pub async fn save_files_batch(
             "{prefix}sh -c {}",
             crate::services::nginx::shell_single_quote(&inner)
         );
-        let (wc, wo) = session.exec_command(&write_cmd).await?;
+        let (wc, wo) = session.exec_with_sudo(&write_cmd).await?;
         if wc != 0 {
             // Restore everything completed so far.
             let restore_errors = restore_all(session, prefix, entries, &backup_paths).await;
@@ -1027,7 +1074,7 @@ async fn restore_all(
         let q_path = crate::services::nginx::shell_single_quote(&entry.path);
         let q_backup = crate::services::nginx::shell_single_quote(backup);
         let cmd = format!("{prefix}mv {q_backup} {q_path}");
-        match session.exec_command(&cmd).await {
+        match session.exec_with_sudo(&cmd).await {
             Ok((0, _)) => errors.push(String::new()),
             Ok((_, out)) => errors.push(out.trim().to_string()),
             Err(e) => errors.push(e.to_string()),
@@ -1161,17 +1208,31 @@ pub async fn create_site_file(
 
     let target_path = format!("{target_dir}/{leaf_name}");
 
+    // Identity probe: keep this on the bare `exec_command` so the
+    // returned uid reflects the SSH user, not whatever sudo would
+    // become. Otherwise a non-root user with armed sudo gets
+    // is_root=true reported back to the UI, which then hides the
+    // "you may need root for this action" banner.
     let is_root = match session.exec_command("id -u").await {
         Ok((0, stdout)) => stdout.trim() == "0",
         _ => false,
     };
-    let prefix = if is_root { "" } else { "sudo -n " };
+    // Three-state prefix: when the session has a sudo password
+    // attached, drop the explicit `sudo -n` wrapper and rely on
+    // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
+    // password. Pre-existing NOPASSWD setups keep working via the
+    // `sudo -n ` fallback when no password is set.
+    let prefix = if is_root || session.has_sudo_password().await {
+        ""
+    } else {
+        "sudo -n "
+    };
 
     // Make sure the parent dir exists (caddy's conf.d isn't created by
     // default on every install).
     let q_dir = crate::services::nginx::shell_single_quote(target_dir);
     let mkdir_cmd = format!("{prefix}mkdir -p {q_dir}");
-    let (mkdir_code, mkdir_out) = session.exec_command(&mkdir_cmd).await?;
+    let (mkdir_code, mkdir_out) = session.exec_with_sudo(&mkdir_cmd).await?;
     if mkdir_code != 0 {
         return Err(crate::ssh::error::SshError::InvalidConfig(format!(
             "mkdir {target_dir} failed: {}",
@@ -1184,7 +1245,7 @@ pub async fn create_site_file(
     let exists_check = format!(
         "{prefix}sh -c 'test -e {q_target} && echo EXISTS || echo MISSING' 2>&1"
     );
-    let (_, exists_out) = session.exec_command(&exists_check).await?;
+    let (_, exists_out) = session.exec_with_sudo(&exists_check).await?;
     if exists_out.contains("EXISTS") {
         return Err(crate::ssh::error::SshError::InvalidConfig(format!(
             "{target_path} already exists — pick another name"
@@ -1200,7 +1261,7 @@ pub async fn create_site_file(
         writer.flush().ok();
     }
 
-    let ts = match session.exec_command("date +%s").await {
+    let ts = match session.exec_with_sudo("date +%s").await {
         Ok((0, out)) => out.trim().to_string(),
         _ => "0".to_string(),
     };
@@ -1219,7 +1280,7 @@ pub async fn create_site_file(
         "{prefix}sh -c {}",
         crate::services::nginx::shell_single_quote(&inner)
     );
-    let (write_code, write_out) = session.exec_command(&write_cmd).await?;
+    let (write_code, write_out) = session.exec_with_sudo(&write_cmd).await?;
     if write_code != 0 {
         return Err(crate::ssh::error::SshError::InvalidConfig(format!(
             "write {target_path} failed: {}",

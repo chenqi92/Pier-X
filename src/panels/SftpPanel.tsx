@@ -28,7 +28,7 @@ import type { ComponentType } from "react";
 import * as cmd from "../lib/commands";
 import { SFTP_PROGRESS_EVENT, type SftpProgressEvent } from "../lib/commands";
 import type { SftpBrowseState, SftpEntryView, TabState } from "../lib/types";
-import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
+import { effectiveShellUser, effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import StatusDot from "../components/StatusDot";
@@ -1078,12 +1078,13 @@ function SftpPanelBody({ tab }: Props) {
   }
 
   const totalItems = state?.entries.length ?? 0;
+  const displayUser = sshTarget ? effectiveShellUser(tab, sshTarget) : "";
   const hostName = sshTarget
-    ? `${sshTarget.user}@${sshTarget.host}`
+    ? `${displayUser}@${sshTarget.host}`
     : t("Not connected");
   const hostSub = sshTarget
     ? t("{user}@{host}:{port} · SFTP session", {
-        user: sshTarget.user,
+        user: displayUser,
         host: sshTarget.host,
         port: sshTarget.port,
       })
@@ -1621,7 +1622,7 @@ function SftpPanelBody({ tab }: Props) {
             name={editorTarget.name}
             size={editorTarget.size}
             sshArgs={sshArgs}
-            ownerLabel={sshArgs.user}
+            ownerLabel={displayUser || sshArgs.user}
             onClose={() => setEditorTarget(null)}
             onSaved={() => void browse(currentRemotePath)}
           />

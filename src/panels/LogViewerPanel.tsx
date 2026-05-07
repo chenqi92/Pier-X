@@ -26,7 +26,7 @@ import {
   MODES,
 } from "../lib/logSource";
 import type { LogEventView, LogSource, LogSourceMode, SftpEntryView, TabState } from "../lib/types";
-import { DEFAULT_LOG_SOURCE, effectiveSshTarget } from "../lib/types";
+import { DEFAULT_LOG_SOURCE, effectiveShellUser, effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DismissibleNote from "../components/DismissibleNote";
@@ -768,7 +768,7 @@ function LogViewerPanelBody({ tab }: Props) {
         onClose={() => setDialogOpen(false)}
         events={events}
         source={source}
-        hostLabel={hasSsh ? `${sshArgs.user}@${sshArgs.host}` : ""}
+        hostLabel={hasSsh ? `${effectiveShellUser(tab, sshTarget)}@${sshArgs.host}` : ""}
         streaming={streaming}
         onToggleStreaming={() => (streaming ? void stopStream() : void startStream())}
         onClear={() => setEvents([])}

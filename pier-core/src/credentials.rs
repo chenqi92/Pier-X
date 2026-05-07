@@ -78,6 +78,22 @@ pub fn delete(key: &str) -> Result<(), CredentialError> {
     }
 }
 
+/// Build the stable keyring key for a host's privilege-escalation
+/// (sudo / `su -`) password. Same `(user, host, port)` triple →
+/// same key, so a host accessed under different SSH users keeps
+/// distinct elevation entries (matches how sudoers is configured
+/// per-user).
+///
+/// Shape: `pier-x.elev.{user}@{host}:{port}` — the `pier-x.elev.`
+/// prefix isolates this namespace from the existing
+/// `pier-x.cred-*` SSH credentials and `pier-x.db.*` DB
+/// credentials, so a `clearAll`-style wipe of one class can't
+/// touch the others.
+pub fn elevation_credential_id(user: &str, host: &str, port: u16) -> String {
+    format!("pier-x.elev.{user}@{host}:{port}")
+}
+
+
 #[cfg(test)]
 mod tests {
     // Note: keyring tests are intentionally not run in CI because they

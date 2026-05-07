@@ -40,6 +40,7 @@ function scrubRuntimeFields(tab: TabState): TabState {
         ? "webserver"
         : tab.rightTool,
     terminalSessionId: null,
+    currentShellUser: "",
     sshPassword: "",
     // Nested-ssh state is purely runtime — set by the SSH watcher
     // when it sees an `ssh` child inside an existing PTY. After a
@@ -86,6 +87,7 @@ function scrubRuntimeFields(tab: TabState): TabState {
         sshAuthMode: "password" as const,
         sshKeyPath: "",
         sshSavedConnectionIndex: null,
+        currentShellUser: "",
       }
     : base;
 
@@ -217,6 +219,7 @@ function makeDefaultTab(
     sshKeyPath: partial.sshKeyPath ?? "",
     sshSavedConnectionIndex: partial.sshSavedConnectionIndex ?? null,
     terminalSessionId: partial.terminalSessionId ?? null,
+    currentShellUser: partial.currentShellUser ?? "",
     rightTool: partial.rightTool ?? (partial.backend === "local" ? "markdown" : "monitor"),
     redisHost: partial.redisHost ?? "127.0.0.1",
     redisPort: partial.redisPort ?? 6379,

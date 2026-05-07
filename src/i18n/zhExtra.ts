@@ -1,4 +1,20 @@
 export const zhExtra: Record<string, string> = {
+  // Sudo / privilege escalation dialog
+  "Sudo password required": "需要 sudo 密码",
+  Authenticating: "认证中",
+  "Authenticating…": "认证中…",
+  "the remote host": "该远端主机",
+  "Saved sudo password was rejected — please re-enter.":
+    "已保存的 sudo 密码被拒绝 —— 请重新输入。",
+  "Wrong password — please try again.": "密码错误 —— 请重试。",
+  "This host requires a password for sudo. The password stays in memory for this session and is never written to disk.":
+    "该主机的 sudo 需要密码。密码仅在本次会话内存中保留，不会写入磁盘。",
+  "This host requires a password for sudo. With \"Remember\" checked, the password is saved in your OS keychain so the next session can skip this prompt.":
+    "该主机的 sudo 需要密码。勾选「记住」后，密码会保存到操作系统密钥串，下次会话可直接复用。",
+  "This host requires a password for sudo. The password stays in memory for this session only.":
+    "该主机的 sudo 需要密码。密码仅在本次会话内存中保留。",
+  "Remember the elevation password for this host": "记住此主机的提权密码",
+
   "Import from clipboard": "从剪贴板导入",
   "Detect a SOCKS5/HTTP proxy URL, OpenSSH ProxyJump string, or wg-quick .conf in the clipboard and pre-fill the form.":
     "识别剪贴板中的 SOCKS5/HTTP 代理 URL、OpenSSH ProxyJump 串或 wg-quick .conf，并预填表单。",
@@ -2748,4 +2764,30 @@ export const zhExtra: Record<string, string> = {
   "Hide diff": "隐藏对比",
   "Annotate each node with delta vs previous run":
     "在每个节点上标注与上次运行的差值",
+
+  // Code Search panel
+  "Code Search": "代码搜索",
+  "Search": "搜索",
+  "Searching…": "搜索中…",
+  "Search the terminal's working directory…": "在终端工作目录中搜索…",
+  "Type a query first.": "请先输入搜索内容。",
+  "Type a query and press Enter to search the terminal's current directory.":
+    "输入搜索内容并按回车，在终端当前目录下查找。",
+  "No matches.": "无匹配结果。",
+  "Whole word": "整词匹配",
+  "Search engine": "搜索引擎",
+  "Glob filter": "Glob 过滤器",
+  "Glob filter, e.g. src/**/*.ts": "Glob 过滤器，例如 src/**/*.ts",
+  "Clear glob filter": "清空 Glob 过滤器",
+  "Open in SFTP editor": "在 SFTP 编辑器中打开",
+  "{n} hits": "{n} 条命中",
+  "No search engine on this host — install ripgrep (Software panel) or run inside a git repo.":
+    "该主机上未找到搜索引擎 — 请在「软件」面板安装 ripgrep，或在 git 仓库目录内运行。",
+  "Working directory does not exist on the remote: {cwd}":
+    "远端不存在该工作目录：{cwd}",
+  "Search engine exited with code {code}.": "搜索引擎以错误码 {code} 退出。",
+  "Cannot resolve absolute path for this hit — open the file via SFTP first.":
+    "无法解析此命中的绝对路径 — 请先通过 SFTP 打开该文件。",
+  "Results truncated at {n} hits — refine your query or scope.":
+    "结果已截断至 {n} 条 — 请收紧查询或范围。",
 };

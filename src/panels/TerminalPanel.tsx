@@ -115,6 +115,20 @@ function normalizeTerminalCommandText(text: string): string {
   return text.replace(SHELL_COMPAT_SPACE_RE, " ");
 }
 
+function terminalLineText(snapshot: TerminalSnapshot, row: number): string {
+  const line = snapshot.lines[row];
+  if (!line) return "";
+  return line.segments.map((segment) => segment.text).join("");
+}
+
+function inferPromptUser(snapshot: TerminalSnapshot): string {
+  const line = terminalLineText(snapshot, snapshot.cursorY).trimEnd();
+  if (!/[#$%>]\s*$/.test(line)) return "";
+  const matches = Array.from(line.matchAll(/(?:^|[\s([{<])([A-Za-z_][A-Za-z0-9_.-]*)@[A-Za-z0-9_.-]+(?=[\s)\]}>:/~-])/g));
+  const match = matches[matches.length - 1];
+  return match?.[1] ?? "";
+}
+
 export default function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   const { t, locale } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
@@ -191,6 +205,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   const pendingResizeRef = useRef(false);
   const latestSizeRef = useRef(terminalSize);
   latestSizeRef.current = terminalSize;
+  const lastShellUserRef = useRef(tab.currentShellUser);
   // The original duplicate-create concern (ResizeObserver re-firing
   // the effect mid-handshake and double-injecting the smart-mode
   // hook) is solved by keeping `terminalSize` out of the create
@@ -861,6 +876,11 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           if (disposed) return;
           if (scrollbackOffset > next.scrollbackLen) {
             setScrollbackOffset(next.scrollbackLen);
+          }
+          const shellUser = inferPromptUser(next) || next.currentUser.trim();
+          if (shellUser && shellUser !== lastShellUserRef.current) {
+            lastShellUserRef.current = shellUser;
+            updateTab(tab.id, { currentShellUser: shellUser });
           }
           // Direct setSnapshot — terminal feedback MUST paint on the
           // next frame. Wrapping in startTransition let React defer
@@ -1553,6 +1573,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           sshSavedConnectionIndex: null,
           sshPassword: "",
           nestedSshTarget: null,
+          currentShellUser: "",
         });
       }
       return;
@@ -1614,6 +1635,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       sshSavedConnectionIndex: savedConnectionIndex,
       sshPassword: sameTarget ? current.sshPassword : "",
       nestedSshTarget: null,
+      currentShellUser: target.user,
       rightTool: "monitor",
     });
 
@@ -1738,6 +1760,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           keyPath,
           savedConnectionIndex,
         },
+        currentShellUser: inferredUser,
         rightTool: "monitor",
       });
 
@@ -2361,7 +2384,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           <SquareTerminal size={15} />
           <span>
             {tab.backend === "ssh"
-              ? `${tab.sshUser}@${tab.sshHost}`
+              ? `${tab.currentShellUser || tab.sshUser}@${tab.sshHost}`
               : session?.shell ?? t("Terminal")}
           </span>
         </div>

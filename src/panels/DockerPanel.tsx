@@ -23,7 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as cmd from "../lib/commands";
 import type { DockerContainerView, DockerOverview, TabState } from "../lib/types";
-import { effectiveSshTarget, isSshTargetReady, parseDockerLabels } from "../lib/types";
+import { effectiveShellUser, effectiveSshTarget, isSshTargetReady, parseDockerLabels } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
@@ -37,8 +37,39 @@ import RunContainerDialog from "../shell/RunContainerDialog";
 import { dockerKeyForTab, useDockerStore, type DockerSection } from "../stores/useDockerStore";
 import { softwareKeyForTab, useSoftwareStore } from "../stores/useSoftwareStore";
 import { useSoftwareSnapshot } from "../lib/softwareInstall";
+import { useSudoStore, sudoKeyFor } from "../stores/useSudoStore";
 import { useTabStore } from "../stores/useTabStore";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
+import SudoPasswordDialog from "../components/SudoPasswordDialog";
+
+/** Heuristic: does this error string look like the daemon refused us
+ *  for lack of privilege? Mirrors `pier_core::sudo::is_permission_denied`
+ *  on the backend so the panel can transparently pop the password
+ *  prompt and retry. False positives (e.g. an unrelated error that
+ *  contains the word "permission") are tolerable — the user can
+ *  cancel the prompt and the original error stays on the snapshot. */
+function looksLikePermissionDenied(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("permission denied") ||
+    m.includes("got permission denied while trying to connect to the docker daemon") ||
+    m.includes("connect: permission denied") ||
+    m.includes("a password is required") ||
+    m.includes("is not in the sudoers file") ||
+    m.includes("eacces") ||
+    m.includes("eperm")
+  );
+}
+
+function errorString(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
 
 type Props = { tab: TabState };
 
@@ -190,6 +221,26 @@ function DockerPanelBody({ tab }: Props) {
   // host/user/port before the password is captured, and a probe at
   // that moment surfaces a misleading auth-rejected error.
   const canProbe = isLocal || isSshTargetReady(sshTarget);
+  // Subscribe to the sudo password slot for this host. The store's
+  // `passwords` map is keyed by `user@host:port`; the subscription
+  // re-runs the panel whenever that slot changes (hydrate fills it
+  // from the keychain, manual entry pushes a fresh value). `null` —
+  // no password attached — leaves Docker calls running as the SSH
+  // user, which is correct on hosts where the user is in the
+  // `docker` group.
+  const sudoStoreKey = sshTarget
+    ? sudoKeyFor({
+        host: sshTarget.host,
+        port: sshTarget.port,
+        user: sshTarget.user,
+        authMode: sshTarget.authMode,
+        password: sshTarget.password,
+        keyPath: sshTarget.keyPath,
+        savedConnectionIndex: sshTarget.savedConnectionIndex,
+      })
+    : "";
+  const sudoPassword = useSudoStore((s) => (sudoStoreKey ? s.passwords[sudoStoreKey] ?? null : null));
+
   const sshArgs = {
     host: sshTarget?.host ?? "",
     port: sshTarget?.port ?? 22,
@@ -198,6 +249,7 @@ function DockerPanelBody({ tab }: Props) {
     password: sshTarget?.password ?? "",
     keyPath: sshTarget?.keyPath ?? "",
     savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
+    sudoPassword: sudoPassword ?? null,
   };
 
   const swKey = softwareKeyForTab(tab);
@@ -230,7 +282,92 @@ function DockerPanelBody({ tab }: Props) {
     password: sshArgs.password,
     keyPath: sshArgs.keyPath,
     savedConnectionIndex: sshArgs.savedConnectionIndex,
+    sudoPassword: sshArgs.sudoPassword,
   };
+
+  // ── Sudo escalation prompt (Docker daemon socket EACCES) ───────
+  // When a docker invoke comes back with "permission denied while
+  // trying to connect to the Docker daemon socket", we show the
+  // shared `SudoPasswordDialog`, store the password (in-memory
+  // and optionally in the keychain), and re-run the most recent
+  // refresh path. Subsequent calls automatically include the
+  // password via `sshArgs.sudoPassword`, so the user only sees
+  // the prompt once per session unless their password rotates.
+  const [sudoPrompt, setSudoPrompt] = useState<{
+    hostLabel: string;
+    errorMessage?: string;
+  } | null>(null);
+  // The fingerprint of the current snapshot.error we have already
+  // surfaced as a sudo prompt. Without this guard the dialog would
+  // re-open on every render while the error is still on the
+  // snapshot, even after the user cancelled.
+  const handledErrorRef = useRef("");
+
+  // Hydrate the elevation password from the OS keychain on mount /
+  // when the host changes. Idempotent — `useSudoStore.hydrate` is
+  // a no-op once it has run for the same host this session.
+  useEffect(() => {
+    if (!sshTarget) return;
+    void useSudoStore.getState().hydrate({
+      host: sshTarget.host,
+      port: sshTarget.port,
+      user: sshTarget.user,
+      authMode: sshTarget.authMode,
+      password: sshTarget.password,
+      keyPath: sshTarget.keyPath,
+      savedConnectionIndex: sshTarget.savedConnectionIndex,
+    });
+  }, [
+    sshTarget?.host,
+    sshTarget?.port,
+    sshTarget?.user,
+    sshTarget?.authMode,
+    sshTarget?.savedConnectionIndex,
+  ]);
+
+  // Surface a sudo prompt the moment the snapshot's error string
+  // matches the daemon-socket-permission pattern. `handledErrorRef`
+  // dedupes so cancelling the dialog doesn't re-open it on every
+  // re-render. Covers the dockerRefresh / loadDockerSection paths,
+  // where the store stores the raw `String(e)` from invoke and the
+  // English keyword heuristic still matches.
+  useEffect(() => {
+    if (!hasSsh || !sshTarget) return;
+    if (!error) {
+      handledErrorRef.current = "";
+      return;
+    }
+    if (!looksLikePermissionDenied(error)) return;
+    if (handledErrorRef.current === error) return;
+    handledErrorRef.current = error;
+    const label = `${sshTarget.user}@${sshTarget.host}`;
+    setSudoPrompt({
+      hostLabel: label,
+      errorMessage: sudoPassword
+        ? t("Saved sudo password was rejected — please re-enter.")
+        : undefined,
+    });
+  }, [error, hasSsh, sshTarget?.host, sshTarget?.user, sudoPassword, t]);
+
+  /** Wrap a per-action `setError(formatError(e))` so the catch block
+   *  also pops the sudo prompt when the raw error indicates the
+   *  Docker daemon refused us for lack of privilege. The raw form
+   *  is checked BEFORE `formatError` translates the message to the
+   *  user's locale, so the English keyword heuristic still matches
+   *  in zh-CN. */
+  function handleDockerCatch(e: unknown) {
+    const raw = errorString(e);
+    if (hasSsh && sshTarget && looksLikePermissionDenied(raw)) {
+      const label = `${sshTarget.user}@${sshTarget.host}`;
+      setSudoPrompt({
+        hostLabel: label,
+        errorMessage: sudoPassword
+          ? t("Saved sudo password was rejected — please re-enter.")
+          : undefined,
+      });
+    }
+    setError(formatError(e));
+  }
 
   /**
    * Refresh via the store so concurrent callers (StrictMode's double
@@ -256,6 +393,7 @@ function DockerPanelBody({ tab }: Props) {
                   keyPath: sshArgs.keyPath,
                   all: showAll,
                   savedConnectionIndex: sshArgs.savedConnectionIndex,
+                  sudoPassword: sshArgs.sudoPassword,
                 })
               : null;
           if (!overview) {
@@ -475,10 +613,11 @@ function DockerPanelBody({ tab }: Props) {
             containerId: id,
             action,
             savedConnectionIndex: sshArgs.savedConnectionIndex,
+            sudoPassword: sshArgs.sudoPassword,
           });
       setNotice(`${shortId(id)}: ${localizeRuntimeMessage(result, t)}`);
     } catch (e) {
-      setError(formatError(e));
+      handleDockerCatch(e);
     } finally {
       markContainerBusy(id, false);
       // Reconcile in the background — don't block the UI on a second
@@ -527,12 +666,13 @@ function DockerPanelBody({ tab }: Props) {
         keyPath: sshArgs.keyPath,
         containerId: id,
         savedConnectionIndex: sshArgs.savedConnectionIndex,
+        sudoPassword: sshArgs.sudoPassword,
       });
       setInspectJson(output);
       setInspectCtrId(id);
       setNotice(t("Loaded container inspection for {id}.", { id: shortId(id) }));
     } catch (e) {
-      setError(formatError(e));
+      handleDockerCatch(e);
     } finally {
       setActionBusy(false);
     }
@@ -554,11 +694,12 @@ function DockerPanelBody({ tab }: Props) {
         imageId: id,
         force: false,
         savedConnectionIndex: sshArgs.savedConnectionIndex,
+        sudoPassword: sshArgs.sudoPassword,
       });
       setNotice(t("Removed image {id}.", { id: shortId(id) }));
       await loadDockerSection("images", true);
     } catch (e) {
-      setError(formatError(e));
+      handleDockerCatch(e);
     } finally {
       setActionBusy(false);
     }
@@ -579,11 +720,12 @@ function DockerPanelBody({ tab }: Props) {
         keyPath: sshArgs.keyPath,
         volumeName: name,
         savedConnectionIndex: sshArgs.savedConnectionIndex,
+        sudoPassword: sshArgs.sudoPassword,
       });
       setNotice(t("Removed volume {name}.", { name }));
       await loadDockerSection("volumes", true);
     } catch (e) {
-      setError(formatError(e));
+      handleDockerCatch(e);
     } finally {
       setActionBusy(false);
     }
@@ -604,11 +746,12 @@ function DockerPanelBody({ tab }: Props) {
         keyPath: sshArgs.keyPath,
         networkName: name,
         savedConnectionIndex: sshArgs.savedConnectionIndex,
+        sudoPassword: sshArgs.sudoPassword,
       });
       setNotice(t("Removed network {name}.", { name }));
       await loadDockerSection("networks", true);
     } catch (e) {
-      setError(formatError(e));
+      handleDockerCatch(e);
     } finally {
       setActionBusy(false);
     }
@@ -659,6 +802,7 @@ function DockerPanelBody({ tab }: Props) {
             imageRef: rewritten,
             envPrefix: pullEnv(),
             savedConnectionIndex: sshArgs.savedConnectionIndex,
+            sudoPassword: sshArgs.sudoPassword,
           });
       const lastLine = out.trim().split("\n").pop() ?? "";
       setPullLog(lastLine || t("Pulled {ref}.", { ref: rewritten }));
@@ -666,7 +810,7 @@ function DockerPanelBody({ tab }: Props) {
       await loadDockerSection("images", true);
     } catch (e) {
       setPullLog("");
-      setError(formatError(e));
+      handleDockerCatch(e);
     } finally {
       setPullBusy(false);
     }
@@ -687,11 +831,12 @@ function DockerPanelBody({ tab }: Props) {
             password: sshArgs.password,
             keyPath: sshArgs.keyPath,
             savedConnectionIndex: sshArgs.savedConnectionIndex,
+            sudoPassword: sshArgs.sudoPassword,
           });
       setNotice(out.trim().split("\n").pop() || t("Pruned unused volumes."));
       await loadDockerSection("volumes", true);
     } catch (e) {
-      setError(formatError(e));
+      handleDockerCatch(e);
     } finally {
       setActionBusy(false);
     }
@@ -713,11 +858,12 @@ function DockerPanelBody({ tab }: Props) {
             password: sshArgs.password,
             keyPath: sshArgs.keyPath,
             savedConnectionIndex: sshArgs.savedConnectionIndex,
+            sudoPassword: sshArgs.sudoPassword,
           });
       setNotice(out.trim().split("\n").pop() || t("Pruned unused images."));
       await loadDockerSection("images", true);
     } catch (e) {
-      setError(formatError(e));
+      handleDockerCatch(e);
     } finally {
       setActionBusy(false);
     }
@@ -743,6 +889,7 @@ function DockerPanelBody({ tab }: Props) {
             keyPath: sshArgs.keyPath,
             mountpoint,
             savedConnectionIndex: sshArgs.savedConnectionIndex,
+            sudoPassword: sshArgs.sudoPassword,
           });
       dockerSetVolumeFile(dockerKey, name, out || t("(empty directory)"));
     } catch (e) {
@@ -768,12 +915,13 @@ function DockerPanelBody({ tab }: Props) {
             keyPath: sshArgs.keyPath,
             options,
             savedConnectionIndex: sshArgs.savedConnectionIndex,
+            sudoPassword: sshArgs.sudoPassword,
           });
       setNotice(t("Started container {id}.", { id: id.slice(0, 12) }));
       setRunDialogOpen(false);
       await refresh(true);
     } catch (e) {
-      setError(formatError(e));
+      handleDockerCatch(e);
     } finally {
       setActionBusy(false);
     }
@@ -879,8 +1027,9 @@ function DockerPanelBody({ tab }: Props) {
   );
 
   const hostLabel = hasSsh ? sshArgs.host : isLocal ? t("local") : "—";
+  const displayUser = hasSsh ? effectiveShellUser(tab, sshTarget) : "";
   const hostSub = hasSsh
-    ? `${sshArgs.user}@${sshArgs.host}:${sshArgs.port} · ${t("remote via SSH")}`
+    ? `${displayUser}@${sshArgs.host}:${sshArgs.port} · ${t("remote via SSH")}`
     : isLocal
       ? t("Local Docker socket")
       : t("Not connected");
@@ -1463,6 +1612,35 @@ function DockerPanelBody({ tab }: Props) {
           onOpenInLogPanel={
             logsDialog ? () => openContainerLogsInPanel(logsDialog.id) : undefined
           }
+        />
+
+        <SudoPasswordDialog
+          open={sudoPrompt !== null}
+          hostLabel={sudoPrompt?.hostLabel ?? ""}
+          errorMessage={sudoPrompt?.errorMessage}
+          onSubmit={(password, remember) => {
+            setSudoPrompt(null);
+            if (!sshTarget) return;
+            const params = {
+              host: sshTarget.host,
+              port: sshTarget.port,
+              user: sshTarget.user,
+              authMode: sshTarget.authMode,
+              password: sshTarget.password,
+              keyPath: sshTarget.keyPath,
+              savedConnectionIndex: sshTarget.savedConnectionIndex,
+            };
+            void useSudoStore
+              .getState()
+              .setPersistent(params, password, remember);
+            // Drop the stored error and re-issue the most recent
+            // refresh path so the user sees the panel populate
+            // without having to click around. The next call will
+            // pick up `sudoPassword` via `sshArgs.sudoPassword`.
+            setError("");
+            void refreshActiveTab(true);
+          }}
+          onCancel={() => setSudoPrompt(null)}
         />
 
         {inspectCtrId && inspectJson && createPortal(

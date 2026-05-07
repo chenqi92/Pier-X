@@ -24,13 +24,27 @@ import type {
   FirewallInterfaceCounter,
   TabState,
 } from "../lib/types";
-import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
+import { effectiveShellUser, effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import DismissibleNote from "../components/DismissibleNote";
 import StatusDot from "../components/StatusDot";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
+import SudoPasswordDialog from "../components/SudoPasswordDialog";
+import { useSudoStore, sudoKeyFor } from "../stores/useSudoStore";
+
+function fwLooksLikePermissionDenied(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("permission denied") ||
+    m.includes("a password is required") ||
+    m.includes("is not in the sudoers file") ||
+    m.includes("you must be root") ||
+    m.includes("operation not permitted") ||
+    m.includes("eperm")
+  );
+}
 
 type Props = {
   tab: TabState;
@@ -433,6 +447,50 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
   const [snap, setSnap] = useState<FirewallSnapshotView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Sudo prompt state mirrors the Docker / Software panel pattern. The
+  // firewall probe pipes `iptables-save` which is root-only on most
+  // distros — when the call rejects with a permission-denied error
+  // we pop the prompt, persist the password (in-memory + optional
+  // keychain), and re-issue the probe. Subsequent probes pick up the
+  // stored password automatically via `sshTarget` → `useSudoStore`.
+  const [sudoPrompt, setSudoPrompt] = useState<{
+    hostLabel: string;
+    errorMessage?: string;
+  } | null>(null);
+  const sudoStoreKey = sshTarget
+    ? sudoKeyFor({
+        host: sshTarget.host,
+        port: sshTarget.port,
+        user: sshTarget.user,
+        authMode: sshTarget.authMode,
+        password: sshTarget.password,
+        keyPath: sshTarget.keyPath,
+        savedConnectionIndex: sshTarget.savedConnectionIndex,
+      })
+    : "";
+  const sudoPassword = useSudoStore((s) =>
+    sudoStoreKey ? s.passwords[sudoStoreKey] ?? null : null,
+  );
+
+  // Hydrate from keychain on host change.
+  useEffect(() => {
+    if (!sshTarget) return;
+    void useSudoStore.getState().hydrate({
+      host: sshTarget.host,
+      port: sshTarget.port,
+      user: sshTarget.user,
+      authMode: sshTarget.authMode,
+      password: sshTarget.password,
+      keyPath: sshTarget.keyPath,
+      savedConnectionIndex: sshTarget.savedConnectionIndex,
+    });
+  }, [
+    sshTarget?.host,
+    sshTarget?.port,
+    sshTarget?.user,
+    sshTarget?.authMode,
+    sshTarget?.savedConnectionIndex,
+  ]);
   const [activeTab, setActiveTab] = useState<FwTab>("listening");
   const [search, setSearch] = useState("");
   const [composerPort, setComposerPort] = useState("");
@@ -472,6 +530,7 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
         password: sshTarget.password,
         keyPath: sshTarget.keyPath,
         savedConnectionIndex: sshTarget.savedConnectionIndex,
+        sudoPassword: sudoPassword ?? null,
       });
       const prev = lastSnapRef.current;
       if (prev && prev.capturedAtMs > 0 && s.capturedAtMs > prev.capturedAtMs) {
@@ -493,6 +552,15 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
       setError("");
       return s;
     } catch (e) {
+      const raw = e instanceof Error ? e.message : typeof e === "string" ? e : String(e);
+      if (fwLooksLikePermissionDenied(raw) && sshTarget) {
+        setSudoPrompt({
+          hostLabel: `${sshTarget.user}@${sshTarget.host}`,
+          errorMessage: sudoPassword
+            ? t("Saved sudo password was rejected — please re-enter.")
+            : undefined,
+        });
+      }
       setError(formatError(e));
       return null;
     }
@@ -612,7 +680,7 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
   }, [mappings, search]);
 
   const hostLabel = sshTarget
-    ? `${sshTarget.user}@${sshTarget.host}:${sshTarget.port}`
+    ? `${effectiveShellUser(tab, sshTarget)}@${sshTarget.host}:${sshTarget.port}`
     : t("No connection");
   const hostSub = snap
     ? `${backendLabel(backend)}${backendActive ? "" : ` · ${t("inactive")}`} · ${snap.user || "?"}${isRoot ? " (root)" : ""}`
@@ -1132,6 +1200,33 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
           </div>
         </div>
       )}
+
+      <SudoPasswordDialog
+        open={sudoPrompt !== null}
+        hostLabel={sudoPrompt?.hostLabel ?? ""}
+        errorMessage={sudoPrompt?.errorMessage}
+        onSubmit={(password, remember) => {
+          setSudoPrompt(null);
+          if (!sshTarget) return;
+          const params = {
+            host: sshTarget.host,
+            port: sshTarget.port,
+            user: sshTarget.user,
+            authMode: sshTarget.authMode,
+            password: sshTarget.password,
+            keyPath: sshTarget.keyPath,
+            savedConnectionIndex: sshTarget.savedConnectionIndex,
+          };
+          void useSudoStore
+            .getState()
+            .setPersistent(params, password, remember);
+          setError("");
+          // Re-issue the probe; the next call picks up the password
+          // via the `useSudoStore` subscription.
+          void probe();
+        }}
+        onCancel={() => setSudoPrompt(null)}
+      />
     </>
   );
 }

@@ -30,6 +30,7 @@ use std::time::Duration;
 
 use russh::client::{self, Handle};
 use russh::keys::ssh_key::PublicKey;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use super::channel::SshChannelPty;
@@ -37,6 +38,7 @@ use super::config::{AuthMethod, SshConfig};
 use super::error::{Result, SshError};
 use super::known_hosts::HostKeyVerifier;
 use super::runtime;
+use crate::sudo;
 
 /// Sentinel exit code returned by [`SshSession::exec_command_streaming`]
 /// when a caller-supplied [`CancellationToken`] fires before the remote
@@ -55,6 +57,16 @@ pub const CANCELLED_EXIT_CODE: i32 = -2;
 #[derive(Clone)]
 pub struct SshSession {
     handle: Arc<Handle<ClientHandler>>,
+    /// Optional sudo / privilege-escalation password attached to
+    /// this session by the Tauri layer when a panel needs to run
+    /// commands as root (Docker daemon, firewall, nginx config…).
+    /// When `Some`, [`Self::exec_with_sudo`] wraps each command in
+    /// `sudo -S -p ''` and pipes the password via stdin; when
+    /// `None`, [`Self::exec_with_sudo`] degrades to a plain exec.
+    /// Per-session storage means a single host's panels share one
+    /// password without re-prompting; different SSH users still
+    /// get distinct sessions and therefore distinct slots.
+    sudo_password: Arc<RwLock<Option<String>>>,
 }
 
 // Manual Debug — the russh Handle itself isn't Debug, and even
@@ -204,6 +216,7 @@ impl SshSession {
 
         let mut session = Self {
             handle: Arc::new(handle),
+            sudo_password: Arc::new(RwLock::new(None)),
         };
 
         // Apply the same connect timeout to authentication. Without
@@ -827,6 +840,103 @@ impl SshSession {
     /// Sync convenience for [`Self::exec_command`].
     pub fn exec_command_blocking(&self, command: &str) -> Result<(i32, String)> {
         runtime::shared().block_on(self.exec_command(command))
+    }
+
+    /// Set or clear the sudo / privilege-escalation password
+    /// attached to this session. Subsequent calls to
+    /// [`Self::exec_with_sudo`] will wrap their command in
+    /// `sudo -S -p ''` and pipe this value via stdin; subsequent
+    /// calls to [`Self::exec_command`] are unaffected, so the
+    /// terminal / SFTP code paths keep running as the SSH user.
+    pub async fn set_sudo_password(&self, password: Option<String>) {
+        let mut slot = self.sudo_password.write().await;
+        *slot = password;
+    }
+
+    /// Sync wrapper for [`Self::set_sudo_password`].
+    pub fn set_sudo_password_blocking(&self, password: Option<String>) {
+        runtime::shared().block_on(self.set_sudo_password(password));
+    }
+
+    /// Run `command` remotely. If a sudo password has been
+    /// attached via [`Self::set_sudo_password`], the command is
+    /// wrapped in `sudo -S -p ''` and the password is piped via
+    /// stdin so the prompt never reaches the user. Otherwise this
+    /// is equivalent to [`Self::exec_command`].
+    ///
+    /// Used by panels that act on root-only resources (Docker
+    /// daemon socket, iptables, nginx reload). A first attempt
+    /// without sudo can be detected via
+    /// [`crate::sudo::is_permission_denied`] on the merged output;
+    /// on hit, the panel prompts the user, calls
+    /// `set_sudo_password`, and re-runs through this method.
+    pub async fn exec_with_sudo(&self, command: &str) -> Result<(i32, String)> {
+        let pw = { self.sudo_password.read().await.clone() };
+        match pw {
+            Some(pw) if !pw.is_empty() => {
+                let (wrapped, stdin) = sudo::wrap_command(command, &pw);
+                self.exec_command_with_stdin(&wrapped, &stdin).await
+            }
+            _ => self.exec_command(command).await,
+        }
+    }
+
+    /// Sync convenience for [`Self::exec_with_sudo`].
+    pub fn exec_with_sudo_blocking(&self, command: &str) -> Result<(i32, String)> {
+        runtime::shared().block_on(self.exec_with_sudo(command))
+    }
+
+    /// Run `command` remotely, sending `stdin` as standard input
+    /// before reading output. Returns `(exit_code, merged_stdout
+    /// + stderr)` on the same contract as [`Self::exec_command`].
+    ///
+    /// Used by [`Self::exec_with_sudo`] to pipe the elevation
+    /// password into `sudo -S` without exposing it on the command
+    /// line (where it would show up in `/proc/<pid>/cmdline` and
+    /// in the host's bash history if the user ever copy-pasted).
+    pub async fn exec_command_with_stdin(
+        &self,
+        command: &str,
+        stdin: &str,
+    ) -> Result<(i32, String)> {
+        let mut channel = self.handle.channel_open_session().await?;
+        channel.exec(true, command).await?;
+
+        if !stdin.is_empty() {
+            channel.data(stdin.as_bytes()).await?;
+        }
+        // Always EOF so the remote `sudo -S` reader doesn't block
+        // waiting for more bytes.
+        channel.eof().await?;
+
+        let mut full = Vec::new();
+        let mut line_buf: Vec<u8> = Vec::new();
+        let mut exit_code: i32 = -1;
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                russh::ChannelMsg::Data { data } => {
+                    Self::drain_chunk(&data, &mut full, &mut line_buf, &mut |_| {});
+                }
+                russh::ChannelMsg::ExtendedData { data, ext: _ } => {
+                    Self::drain_chunk(&data, &mut full, &mut line_buf, &mut |_| {});
+                }
+                russh::ChannelMsg::ExitStatus { exit_status } => {
+                    exit_code = exit_status as i32;
+                }
+                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {}
+                _ => {}
+            }
+        }
+        Ok((exit_code, String::from_utf8_lossy(&full).into_owned()))
+    }
+
+    /// Sync convenience for [`Self::exec_command_with_stdin`].
+    pub fn exec_command_with_stdin_blocking(
+        &self,
+        command: &str,
+        stdin: &str,
+    ) -> Result<(i32, String)> {
+        runtime::shared().block_on(self.exec_command_with_stdin(command, stdin))
     }
 
     /// Run `command` remotely and stream every complete output line

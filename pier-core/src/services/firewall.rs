@@ -149,7 +149,12 @@ const PROBE: &str = "LC_ALL=C; export LC_ALL; \
 
 /// Run the firewall probe and return one snapshot.
 pub async fn snapshot(session: &SshSession) -> Result<FirewallSnapshot> {
-    let (exit, stdout) = session.exec_command(PROBE).await?;
+    // Several PROBE sub-steps (`iptables-save`, `ip6tables-save`) are
+    // root-only on most distros; `exec_with_sudo` transparently wraps
+    // the whole script in `sudo -S` when the Tauri layer attached an
+    // elevation password. Without that, the user sees partial data
+    // and the panel still renders — just without the iptables tables.
+    let (exit, stdout) = session.exec_with_sudo(PROBE).await?;
     if exit != 0 && stdout.is_empty() {
         return Err(SshError::InvalidConfig(format!(
             "firewall probe exited {exit} with empty output"

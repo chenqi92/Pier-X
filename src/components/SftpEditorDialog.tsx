@@ -71,6 +71,7 @@ import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { useThemeStore } from "../stores/useThemeStore";
 import { writeClipboardText } from "../lib/clipboard";
 import * as cmd from "../lib/commands";
 import type { SftpExternalEditEvent, SftpTextFile } from "../lib/commands";
@@ -171,6 +172,7 @@ export default function SftpEditorDialog({
   // ── Editor preferences (Settings → Editor) ─────────────────
   // Read defaults from the global settings store; the dialog's
   // wrap / line-numbers toggles are session overrides on top.
+  const resolvedDark = useThemeStore((s) => s.resolvedDark);
   const editorWrapDefault = useSettingsStore((s) => s.editorWrapDefault);
   const editorLineNumbersDefault = useSettingsStore((s) => s.editorLineNumbersDefault);
   const editorTabSize = useSettingsStore((s) => s.editorTabSize);
@@ -479,7 +481,7 @@ export default function SftpEditorDialog({
         ...searchKeymap,
         ...foldKeymap,
       ]),
-      ...buildEditorTheme(),
+      ...buildEditorTheme(resolvedDark),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) {
           const now = u.state.doc.toString();
@@ -1147,7 +1149,7 @@ export default function SftpEditorDialog({
         {!cardMode && (
           <div className="editor-status mono">
             <span className="editor-status-cell">
-              <Server size={9} /> {sshArgs.user}@{sshArgs.host}
+              <Server size={9} /> {ownerLabel || sshArgs.user}@{sshArgs.host}
             </span>
             <span className="sep">·</span>
             <span>{t("Ln {line}, Col {col}", { line: cursor.line, col: cursor.col })}</span>

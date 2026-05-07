@@ -160,6 +160,7 @@ fi
 # (matches what VTE's vte.sh and wezterm's shell-integration.sh do).
 __pierx_osc7() {
   printf '\\033]7;file://%s%s\\033\\\\' \"${HOSTNAME:-localhost}\" \"$PWD\"
+  printf '\\033]1337;CurrentUser=%s\\033\\\\' \"$(id -un 2>/dev/null || whoami 2>/dev/null || printf %s ${USER:-})\"
 }
 case \"${PROMPT_COMMAND:-}\" in
   *__pierx_osc7*) ;;
@@ -212,6 +213,7 @@ fi
 # (oh-my-zsh `omz reload`) doesn't stack duplicates.
 __pierx_osc7() {
   printf '\\e]7;file://%s%s\\e\\\\' \"${HOST:-localhost}\" \"$PWD\"
+  printf '\\e]1337;CurrentUser=%s\\e\\\\' \"$(id -un 2>/dev/null || whoami 2>/dev/null || printf %s ${USER:-})\"
 }
 typeset -ga precmd_functions
 if [[ -z \"${precmd_functions[(r)__pierx_osc7]:-}\" ]]; then
@@ -329,7 +331,7 @@ pub fn remote_init_payload() -> Vec<u8> {
         " ",
         // bash branch
         "if [ -n \"${BASH_VERSION:-}\" ]; then ",
-            "__pierx_osc7() { printf '\\033]7;file://%s%s\\033\\\\' \"${HOSTNAME:-localhost}\" \"$PWD\"; }; ",
+            "__pierx_osc7() { printf '\\033]7;file://%s%s\\033\\\\' \"${HOSTNAME:-localhost}\" \"$PWD\"; printf '\\033]1337;CurrentUser=%s\\033\\\\' \"$(id -un 2>/dev/null || whoami 2>/dev/null || printf %s ${USER:-})\"; }; ",
             "case \"${PROMPT_COMMAND:-}\" in *__pierx_osc7*) ;; ",
                 "'') PROMPT_COMMAND='__pierx_osc7' ;; ",
                 "*) PROMPT_COMMAND='__pierx_osc7;'\"$PROMPT_COMMAND\" ;; ",
@@ -341,7 +343,7 @@ pub fn remote_init_payload() -> Vec<u8> {
             "__pierx_osc7; ",
         // zsh branch
         "elif [ -n \"${ZSH_VERSION:-}\" ]; then ",
-            "__pierx_osc7() { printf '\\e]7;file://%s%s\\e\\\\' \"${HOST:-localhost}\" \"$PWD\"; }; ",
+            "__pierx_osc7() { printf '\\e]7;file://%s%s\\e\\\\' \"${HOST:-localhost}\" \"$PWD\"; printf '\\e]1337;CurrentUser=%s\\e\\\\' \"$(id -un 2>/dev/null || whoami 2>/dev/null || printf %s ${USER:-})\"; }; ",
             "typeset -ga precmd_functions; ",
             "if [[ -z \"${precmd_functions[(r)__pierx_osc7]:-}\" ]]; then precmd_functions+=(__pierx_osc7); fi; ",
             "if [[ -z \"${PIERX_PROMPT_WRAPPED:-}\" ]]; then ",
@@ -448,6 +450,7 @@ mod tests {
         assert!(body.contains("__pierx_osc7"), "missing OSC 7 hook");
         // Path is reported as a file:// URI with $HOSTNAME + $PWD.
         assert!(body.contains("]7;file://"));
+        assert!(body.contains("CurrentUser="));
         // And it must register itself into PROMPT_COMMAND idempotently.
         assert!(body.contains("PROMPT_COMMAND"));
     }
@@ -465,12 +468,16 @@ mod tests {
         assert!(body.contains("__pierx_osc7"));
         assert!(body.contains("precmd_functions"));
         assert!(body.contains("]7;file://"));
+        assert!(body.contains("CurrentUser="));
     }
 
     #[test]
     fn pwsh_init_script_carries_osc9_and_osc7() {
         let s = pwsh_init_script();
-        assert!(s.contains("]9;9;"), "missing OSC 9;9 (Windows Terminal cwd)");
+        assert!(
+            s.contains("]9;9;"),
+            "missing OSC 9;9 (Windows Terminal cwd)"
+        );
         assert!(s.contains("]7;file://"), "missing OSC 7 (cross-tool cwd)");
         assert!(s.contains("__pierxOldPrompt"), "must preserve user prompt");
         assert!(
@@ -502,6 +509,7 @@ mod tests {
         assert!(s.contains("BASH_VERSION"), "must check for bash");
         assert!(s.contains("ZSH_VERSION"), "must check for zsh");
         assert!(s.contains("__pierx_osc7"), "must define the hook");
+        assert!(s.contains("CurrentUser="), "must report shell user");
         // Leading space → HISTCONTROL=ignorespace drops it from history.
         assert!(s.starts_with(' '), "leading space for history-skip");
     }

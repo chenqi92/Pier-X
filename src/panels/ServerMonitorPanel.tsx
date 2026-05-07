@@ -21,7 +21,7 @@ import type {
   ServerSnapshotView,
   TabState,
 } from "../lib/types";
-import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
+import { effectiveShellUser, effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
@@ -777,8 +777,9 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
     : isLocal
       ? t("local")
       : "—";
+  const displayUser = sshTarget ? effectiveShellUser(tab, sshTarget) : "";
   const connName = sshTarget
-    ? `${sshTarget.user}@${sshTarget.host}`
+    ? `${displayUser}@${sshTarget.host}`
     : isLocal
       ? t("Local Host")
       : t("Server Monitor");

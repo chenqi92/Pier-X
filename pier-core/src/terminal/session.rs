@@ -552,9 +552,7 @@ impl PierTerminal {
                         crate::logging::write_event(
                             "INFO",
                             "ssh.watcher",
-                            &format!(
-                                "tab root_pid={root_pid} ssh state changed → {new_target:?}"
-                            ),
+                            &format!("tab root_pid={root_pid} ssh state changed → {new_target:?}"),
                         );
                         (notify)(user_data, NotifyEvent::SshStateChanged as u32);
                         // After a transition, go back into fast-scan
@@ -753,6 +751,21 @@ impl PierTerminal {
             None
         } else {
             Some(guard.emu.cwd.clone())
+        }
+    }
+
+    /// Last-known shell user reported by Pier-X's prompt hook.
+    /// Non-destructive; returns `None` before the first supported
+    /// prompt redraw.
+    pub fn current_user(&self) -> Option<String> {
+        let guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if guard.emu.current_user.is_empty() {
+            None
+        } else {
+            Some(guard.emu.current_user.clone())
         }
     }
 

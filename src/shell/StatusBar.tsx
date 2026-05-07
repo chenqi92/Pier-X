@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleDot, GitBranch, Loader2, Network, Terminal } from "lucide-react";
 import type { RightTool, TabState } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
+import { effectiveShellUser, effectiveSshTarget } from "../lib/types";
 import { buildEgressChain, describeHop, formatChain } from "../lib/egressChain";
 import { useI18n } from "../i18n/useI18n";
 import { useConnectionStore } from "../stores/useConnectionStore";
@@ -55,7 +55,7 @@ export default function StatusBar({ version, coreInfo, activeTab, activeTool }: 
       activeTab.redisActiveCredentialId ??
       null;
     let rootEgressId: string | null | undefined = conn.egressId;
-    let targetLabel = `${sshTarget.user}@${sshTarget.host}:${sshTarget.port}`;
+    let targetLabel = `${effectiveShellUser(activeTab, sshTarget)}@${sshTarget.host}:${sshTarget.port}`;
     if (credId) {
       const cred = (conn.databases ?? []).find((d) => d.id === credId);
       if (cred?.egressId) {

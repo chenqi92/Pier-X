@@ -22,7 +22,7 @@ import * as cmd from "../lib/commands";
 import type { CodeSearchHit, CodeSearchOutput } from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { TabState } from "../lib/types";
-import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
+import { effectiveShellUser, effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
@@ -418,7 +418,7 @@ function CodeSearchBody({ tab }: Props) {
           initialLine={editorTarget.line}
           initialColumn={editorTarget.column}
           sshArgs={sshArgs}
-          ownerLabel={sshArgs.user}
+          ownerLabel={effectiveShellUser(tab, sshTarget) || sshArgs.user}
           onClose={() => setEditorTarget(null)}
         />
       )}

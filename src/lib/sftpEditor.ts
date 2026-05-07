@@ -172,8 +172,11 @@ export function languageLabel(name: string): string {
  *  when the user switches themes mid-session.
  *
  *  All colors route through `var(--…)` so dark/light and accent
- *  swaps apply without re-mounting the editor. */
-export function buildEditorTheme(): Extension[] {
+ *  swaps apply without re-mounting the editor. The `dark` flag
+ *  controls CM6's `.cm-dark`/`.cm-light` class — pass the resolved
+ *  app theme so CM's own base-theme defaults (selection, gutter
+ *  fallbacks) align with our shell. */
+export function buildEditorTheme(dark: boolean = true): Extension[] {
   const theme = EditorView.theme(
     {
       "&": {
@@ -193,10 +196,14 @@ export function buildEditorTheme(): Extension[] {
       ".cm-cursor, .cm-dropCursor": {
         borderLeftColor: "var(--accent)",
       },
-      ".cm-selectionBackground, ::selection":
-        { backgroundColor: "var(--selection-bg)" },
-      "&.cm-focused .cm-selectionBackground, &.cm-focused ::selection":
-        { backgroundColor: "var(--selection-bg-strong)" },
+      // Specificity has to match CM6's own base-theme rules
+      // (`&dark.cm-focused > .cm-scroller > .cm-selectionLayer
+      // .cm-selectionBackground`), otherwise the hardcoded grey/lavender
+      // defaults bleed through and the selection paints near-black.
+      "& .cm-selectionLayer .cm-selectionBackground, ::selection":
+        { background: "var(--selection-bg)" },
+      "&.cm-focused .cm-selectionLayer .cm-selectionBackground, &.cm-focused ::selection":
+        { background: "var(--selection-bg-strong)" },
       ".cm-gutters": {
         backgroundColor: "var(--surface)",
         color: "var(--muted)",
@@ -318,7 +325,7 @@ export function buildEditorTheme(): Extension[] {
         borderRadius: "var(--radius-sm)",
       },
     },
-    { dark: true },
+    { dark },
   );
 
   const highlight = HighlightStyle.define([

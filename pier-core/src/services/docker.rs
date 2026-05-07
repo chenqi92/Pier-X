@@ -148,7 +148,7 @@ pub async fn list_containers(session: &SshSession, all: bool) -> Result<Vec<Cont
     } else {
         "docker ps --no-trunc --format '{{json .}}'"
     };
-    let (exit, stdout) = session.exec_command(cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(cmd).await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker ps exited {exit}: {}",
@@ -194,7 +194,7 @@ pub async fn inspect_container(session: &SshSession, id: &str) -> Result<String>
         )));
     }
     let cmd = format!("docker inspect --type container {id}");
-    let (exit, stdout) = session.exec_command(&cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(&cmd).await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker inspect exited {exit}: {}",
@@ -219,7 +219,7 @@ pub async fn exec(session: &SshSession, args: &[String]) -> Result<(i32, String)
             join_shell_args(args.iter().map(String::as_str))
         )
     };
-    session.exec_command(&cmd).await
+    session.exec_with_sudo(&cmd).await
 }
 
 /// Blocking wrapper for [`exec`].
@@ -415,7 +415,7 @@ pub async fn run_container(session: &SshSession, opts: &RunContainerOptions) -> 
     }
 
     let cmd = parts.join(" ");
-    let (exit, stdout) = session.exec_command(&cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(&cmd).await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker run exited {exit}: {}",
@@ -483,7 +483,7 @@ pub struct ContainerStat {
 /// this module.
 pub async fn list_container_stats(session: &SshSession) -> Result<Vec<ContainerStat>> {
     let cmd = "docker stats --no-stream --format '{{json .}}'";
-    let (exit, stdout) = session.exec_command(cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(cmd).await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker stats exited {exit}: {}",
@@ -533,7 +533,7 @@ pub struct DockerImage {
 /// List images.
 pub async fn list_images(session: &SshSession) -> Result<Vec<DockerImage>> {
     let cmd = "docker images --format '{{json .}}'";
-    let (exit, stdout) = session.exec_command(cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(cmd).await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker images exited {exit}"
@@ -576,7 +576,7 @@ pub async fn pull_image(
     } else {
         format!("{} docker pull {}", prefix, quoted)
     };
-    let (exit, stdout) = session.exec_command(&cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(&cmd).await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker pull exited {exit}: {}",
@@ -605,7 +605,7 @@ pub async fn remove_image(session: &SshSession, id: &str, force: bool) -> Result
     } else {
         format!("docker rmi {id}")
     };
-    let (exit, stdout) = session.exec_command(&cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(&cmd).await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker rmi exited {exit}: {}",
@@ -651,7 +651,7 @@ pub struct DockerVolume {
 /// List volumes.
 pub async fn list_volumes(session: &SshSession) -> Result<Vec<DockerVolume>> {
     let cmd = "docker volume ls --format '{{json .}}'";
-    let (exit, stdout) = session.exec_command(cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(cmd).await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker volume ls exited {exit}"
@@ -732,7 +732,7 @@ pub fn parse_volume_df(stdout: &str) -> Vec<VolumeDiskUsage> {
 
 /// Remove all dangling (unreferenced) volumes — `docker volume prune -f`.
 pub async fn prune_volumes(session: &SshSession) -> Result<String> {
-    let (exit, stdout) = session.exec_command("docker volume prune -f").await?;
+    let (exit, stdout) = session.exec_with_sudo("docker volume prune -f").await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker volume prune exited {exit}: {}",
@@ -750,7 +750,7 @@ pub fn prune_volumes_blocking(session: &SshSession) -> Result<String> {
 /// Remove all unused images — `docker image prune -a -f`. `-a` drops
 /// images not referenced by any container (not just dangling layers).
 pub async fn prune_images(session: &SshSession) -> Result<String> {
-    let (exit, stdout) = session.exec_command("docker image prune -a -f").await?;
+    let (exit, stdout) = session.exec_with_sudo("docker image prune -a -f").await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker image prune exited {exit}: {}",
@@ -773,7 +773,7 @@ pub async fn list_volume_files(session: &SshSession, mountpoint: &str) -> Result
     // Quote to survive shell expansion; block shell metacharacters upfront.
     let quoted = shell_quote(mountpoint);
     let cmd = format!("ls -la --color=never {} 2>&1 | head -n 200", quoted);
-    let (_exit, stdout) = session.exec_command(&cmd).await?;
+    let (_exit, stdout) = session.exec_with_sudo(&cmd).await?;
     Ok(stdout)
 }
 
@@ -785,7 +785,7 @@ pub fn list_volume_files_blocking(session: &SshSession, mountpoint: &str) -> Res
 /// Pull per-volume sizes from the remote via `docker system df -v`.
 pub async fn list_volume_sizes(session: &SshSession) -> Result<Vec<VolumeDiskUsage>> {
     let cmd = "docker system df -v --format '{{json .}}'";
-    let (exit, stdout) = session.exec_command(cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(cmd).await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker system df exited {exit}: {}",
@@ -872,7 +872,7 @@ pub struct DockerNetwork {
 /// List networks.
 pub async fn list_networks(session: &SshSession) -> Result<Vec<DockerNetwork>> {
     let cmd = "docker network ls --format '{{json .}}'";
-    let (exit, stdout) = session.exec_command(cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(cmd).await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker network ls exited {exit}"
@@ -910,7 +910,7 @@ async fn run_simple_action(session: &SshSession, verb: &str, id: &str, force: bo
     } else {
         format!("docker {verb} {id}")
     };
-    let (exit, stdout) = session.exec_command(&cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(&cmd).await?;
     if exit != 0 {
         return Err(SshError::InvalidConfig(format!(
             "docker {verb} exited {exit}: {}",

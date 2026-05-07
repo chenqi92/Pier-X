@@ -1221,6 +1221,9 @@ struct TerminalSnapshot {
     /// `true` while a bracketed-paste sequence is in flight.
     /// The smart-mode UI pauses completion / autosuggest.
     bracketed_paste: bool,
+    /// Last-known shell user emitted by the prompt hook. Empty when
+    /// unavailable; frontend may fall back to prompt parsing.
+    current_user: String,
 }
 
 /// Notify callback invoked by PierTerminal's reader thread. Coalesces
@@ -1623,6 +1626,36 @@ fn sftp_cache_key(host: &str, port: u16, user: &str, auth_mode: &str) -> String 
 /// circuit (keychain-resolved passwords, key files, agent auth)
 /// while still preferring an explicitly-passed credential when the
 /// frontend has one in-memory.
+/// Same as [`get_or_open_ssh_session`], but also attaches a sudo /
+/// privilege-escalation password to the session before returning.
+/// Used by panels (Docker, firewall, nginx, web-server, postgres)
+/// that act on root-owned resources: their `pier_core::services::*`
+/// functions call `session.exec_with_sudo`, which conditionally
+/// wraps in `sudo -S` when the slot is set. `None` clears the slot
+/// — important when a tab swaps from "use sudo" back to "no sudo"
+/// so a stale password isn't kept on the cached session.
+fn get_or_open_ssh_session_with_sudo(
+    state: &tauri::State<'_, AppState>,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+    saved_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<Arc<SshSession>, String> {
+    let session = get_or_open_ssh_session(
+        state, host, port, user, auth_mode, password, key_path, saved_index,
+    )?;
+    // Always overwrite the slot — even with None — so a tab that
+    // previously cached sudo and now wants to run without it
+    // (user toggled "Forget password") can't accidentally pick up
+    // the old value from a sibling panel still using this session.
+    session.set_sudo_password_blocking(sudo_password);
+    Ok(session)
+}
+
 fn get_or_open_ssh_session(
     state: &tauri::State<'_, AppState>,
     host: &str,
@@ -1921,6 +1954,52 @@ where
             password,
             key_path,
             saved_index,
+        )?;
+        match op(&session) {
+            Ok(v) => return Ok(v),
+            Err(e) if attempt == 0 => {
+                evict_ssh_session(state, host, port, user, auth_mode);
+                attempt += 1;
+                let _ = e;
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Same contract as [`run_with_session_retry`], but applies a sudo /
+/// privilege-escalation password to the session before each
+/// attempt. Used by Docker-style panels whose `pier_core` calls
+/// invoke `session.exec_with_sudo`. Passing `None` is equivalent
+/// to [`run_with_session_retry`].
+fn run_with_session_retry_sudo<T, F>(
+    state: &tauri::State<'_, AppState>,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+    saved_index: Option<usize>,
+    sudo_password: Option<String>,
+    mut op: F,
+) -> Result<T, String>
+where
+    F: FnMut(&SshSession) -> Result<T, String>,
+{
+    let mut attempt = 0;
+    loop {
+        let session = get_or_open_ssh_session_with_sudo(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_index,
+            sudo_password.clone(),
         )?;
         match op(&session) {
             Ok(v) => return Ok(v),
@@ -4002,6 +4081,57 @@ fn egress_clear_credential(credential_id: String) -> Result<(), String> {
     credentials::delete(&credential_id).map_err(|error| error.to_string())
 }
 
+/// Persist a sudo / privilege-escalation password for `(user, host,
+/// port)` in the OS keychain. The frontend's `useSudoStore` mirrors
+/// the value in process memory for the session and calls this only
+/// when the user ticks "记住此主机的提权密码" in the prompt — so
+/// passwords on disk are explicitly opt-in. Empty `password` clears
+/// the entry, matching `forget_elevation_password`.
+#[tauri::command]
+fn set_elevation_password(
+    user: String,
+    host: String,
+    port: u16,
+    password: String,
+) -> Result<(), String> {
+    if user.trim().is_empty() || host.trim().is_empty() || port == 0 {
+        return Err(String::from(
+            "Elevation credential needs user, host, and port.",
+        ));
+    }
+    let key = credentials::elevation_credential_id(&user, &host, port);
+    if password.is_empty() {
+        return credentials::delete(&key).map_err(|e| e.to_string());
+    }
+    credentials::set(&key, &password).map_err(|e| e.to_string())
+}
+
+/// Look up the persisted elevation password for `(user, host,
+/// port)`. Returns `None` if the keychain has no entry — the
+/// caller (`useSudoStore.hydrate`) treats that as "user has not
+/// opted in yet, prompt on demand".
+#[tauri::command]
+fn get_elevation_password(
+    user: String,
+    host: String,
+    port: u16,
+) -> Result<Option<String>, String> {
+    if user.trim().is_empty() || host.trim().is_empty() || port == 0 {
+        return Ok(None);
+    }
+    let key = credentials::elevation_credential_id(&user, &host, port);
+    credentials::get(&key).map_err(|e| e.to_string())
+}
+
+/// Drop the persisted elevation password for `(user, host, port)`.
+/// Wired to the "forget" affordance and to "Sign out" / "Disconnect
+/// all" so a shared workstation can be reset in one step.
+#[tauri::command]
+fn forget_elevation_password(user: String, host: String, port: u16) -> Result<(), String> {
+    let key = credentials::elevation_credential_id(&user, &host, port);
+    credentials::delete(&key).map_err(|e| e.to_string())
+}
+
 /// Collect every credential id that may have been written for a
 /// given egress kind, so `egress_profile_delete` can clean them
 /// up without the frontend having to track them separately.
@@ -5164,6 +5294,7 @@ fn terminal_snapshot(
         awaiting_input: snapshot.awaiting_input,
         alt_screen: snapshot.alt_screen,
         bracketed_paste: snapshot.bracketed_paste,
+        current_user: managed.terminal.current_user().unwrap_or_default(),
     })
 }
 
@@ -5885,8 +6016,9 @@ fn docker_overview(
     key_path: String,
     all: bool,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<DockerOverview, String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -5895,6 +6027,7 @@ fn docker_overview(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
 
     // First-open path: containers only. Images / volumes / networks are
@@ -5937,8 +6070,9 @@ fn docker_images(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<Vec<DockerImageView>, String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -5947,6 +6081,7 @@ fn docker_images(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let images = docker::list_images_blocking(&session)
         .map_err(|e| e.to_string())?
@@ -5972,8 +6107,9 @@ fn docker_volumes(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<Vec<DockerVolumeView>, String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -5982,6 +6118,7 @@ fn docker_volumes(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let volumes: Vec<DockerVolumeView> = docker::list_volumes_blocking(&session)
         .map_err(|e| e.to_string())?
@@ -6008,8 +6145,9 @@ fn docker_networks(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<Vec<DockerNetworkView>, String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -6018,6 +6156,7 @@ fn docker_networks(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let networks = docker::list_networks_blocking(&session)
         .map_err(|e| e.to_string())?
@@ -6052,8 +6191,9 @@ fn docker_stats(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<Vec<DockerContainerStatsView>, String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -6062,6 +6202,7 @@ fn docker_stats(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let stats = docker::list_container_stats_blocking(&session).unwrap_or_default();
     Ok(stats
@@ -6094,8 +6235,9 @@ fn docker_volume_usage(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<Vec<DockerVolumeUsageView>, String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -6104,6 +6246,7 @@ fn docker_volume_usage(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let usages = docker::list_volume_sizes_blocking(&session).unwrap_or_default();
     Ok(usages
@@ -6129,8 +6272,9 @@ fn docker_container_action(
     container_id: String,
     action: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<String, String> {
-    run_with_session_retry(
+    run_with_session_retry_sudo(
         &state,
         &host,
         port,
@@ -6139,6 +6283,7 @@ fn docker_container_action(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
         |session| match action.as_str() {
             "start" => docker::start_blocking(session, &container_id)
                 .map_err(|e| e.to_string())
@@ -6609,6 +6754,7 @@ fn firewall_snapshot(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<firewall::FirewallSnapshot, String> {
     // Same SSH session reuse pattern as `server_monitor_probe` —
     // every refresh hits the cached russh handle. One full snapshot
@@ -6617,7 +6763,7 @@ fn firewall_snapshot(
     // 2-second cadence for the Traffic tab.
     let mut attempt = 0;
     let snap = loop {
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -6626,6 +6772,7 @@ fn firewall_snapshot(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password.clone(),
         )?;
         match firewall::snapshot_blocking(&session) {
             Ok(s) => break s,
@@ -6994,8 +7141,9 @@ fn docker_inspect_db_env(
     key_path: String,
     container_id: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<DockerDbEnvView, String> {
-    let env = run_with_session_retry(
+    let env = run_with_session_retry_sudo(
         &state,
         &host,
         port,
@@ -7004,6 +7152,7 @@ fn docker_inspect_db_env(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
         |session| {
             docker::inspect_db_env_blocking(session, &container_id).map_err(|e| e.to_string())
         },
@@ -11173,8 +11322,9 @@ fn docker_inspect(
     key_path: String,
     container_id: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<String, String> {
-    run_with_session_retry(
+    run_with_session_retry_sudo(
         &state,
         &host,
         port,
@@ -11183,6 +11333,7 @@ fn docker_inspect(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
         |session| {
             docker::inspect_container_blocking(session, &container_id).map_err(|e| e.to_string())
         },
@@ -11201,8 +11352,9 @@ fn docker_remove_image(
     image_id: String,
     force: bool,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
-    run_with_session_retry(
+    run_with_session_retry_sudo(
         &state,
         &host,
         port,
@@ -11211,6 +11363,7 @@ fn docker_remove_image(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
         |session| {
             docker::remove_image_blocking(session, &image_id, force).map_err(|e| e.to_string())
         },
@@ -11228,8 +11381,9 @@ fn docker_remove_volume(
     key_path: String,
     volume_name: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
-    run_with_session_retry(
+    run_with_session_retry_sudo(
         &state,
         &host,
         port,
@@ -11238,6 +11392,7 @@ fn docker_remove_volume(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
         |session| docker::remove_volume_blocking(session, &volume_name).map_err(|e| e.to_string()),
     )
 }
@@ -11253,8 +11408,9 @@ fn docker_remove_network(
     key_path: String,
     network_name: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
-    run_with_session_retry(
+    run_with_session_retry_sudo(
         &state,
         &host,
         port,
@@ -11263,6 +11419,7 @@ fn docker_remove_network(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
         |session| {
             docker::remove_network_blocking(session, &network_name).map_err(|e| e.to_string())
         },
@@ -11312,9 +11469,10 @@ fn docker_run_container(
     key_path: String,
     options: DockerRunOptionsView,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<String, String> {
     let opts: docker::RunContainerOptions = options.into();
-    run_with_session_retry(
+    run_with_session_retry_sudo(
         &state,
         &host,
         port,
@@ -11323,6 +11481,7 @@ fn docker_run_container(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
         |session| docker::run_container_blocking(session, &opts).map_err(|e| e.to_string()),
     )
 }
@@ -11337,8 +11496,9 @@ fn docker_prune_volumes(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<String, String> {
-    run_with_session_retry(
+    run_with_session_retry_sudo(
         &state,
         &host,
         port,
@@ -11347,6 +11507,7 @@ fn docker_prune_volumes(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
         |session| docker::prune_volumes_blocking(session).map_err(|e| e.to_string()),
     )
 }
@@ -11361,8 +11522,9 @@ fn docker_prune_images(
     password: String,
     key_path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<String, String> {
-    run_with_session_retry(
+    run_with_session_retry_sudo(
         &state,
         &host,
         port,
@@ -11371,6 +11533,7 @@ fn docker_prune_images(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
         |session| docker::prune_images_blocking(session).map_err(|e| e.to_string()),
     )
 }
@@ -11389,10 +11552,11 @@ fn docker_pull_image(
     // to this `docker pull`; does not modify the remote daemon config.
     env_prefix: Option<Vec<(String, String)>>,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<String, String> {
     let env = env_prefix.unwrap_or_default();
     let env_refs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-    run_with_session_retry(
+    run_with_session_retry_sudo(
         &state,
         &host,
         port,
@@ -11401,6 +11565,7 @@ fn docker_pull_image(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
         |session| {
             docker::pull_image_blocking(session, &image_ref, &env_refs).map_err(|e| e.to_string())
         },
@@ -11440,8 +11605,9 @@ fn docker_volume_files(
     key_path: String,
     mountpoint: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<String, String> {
-    run_with_session_retry(
+    run_with_session_retry_sudo(
         &state,
         &host,
         port,
@@ -11450,6 +11616,7 @@ fn docker_volume_files(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
         |session| {
             docker::list_volume_files_blocking(session, &mountpoint).map_err(|e| e.to_string())
         },
@@ -14133,6 +14300,9 @@ pub fn run() {
             egress_wg_conf_save,
             egress_set_basic_auth,
             egress_clear_credential,
+            set_elevation_password,
+            get_elevation_password,
+            forget_elevation_password,
             egress_vpn_start,
             egress_vpn_stop,
             egress_vpn_status_all,

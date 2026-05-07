@@ -23,6 +23,7 @@ pub mod paths;
 pub(crate) mod process_util;
 pub mod services;
 pub mod ssh;
+pub mod sudo;
 pub mod terminal;
 
 /// Crate version, derived from `Cargo.toml` at compile time.

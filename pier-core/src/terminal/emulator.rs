@@ -136,6 +136,12 @@ pub struct VtEmulator {
     /// fallback" rather than "root".
     pub cwd: String,
 
+    /// Last-known shell user reported by Pier-X's prompt hook.
+    /// Empty when the hook has not fired or the shell does not
+    /// support it. Consumers should use this as display context,
+    /// not as SSH authentication material.
+    pub current_user: String,
+
     /// SSH command detected in terminal output. Set when the user
     /// presses Enter on a line containing `ssh [user@]host`.
     /// The UI reads these and clears `ssh_command_detected`.
@@ -208,6 +214,7 @@ impl VtEmulator {
             window_title: String::new(),
             osc52_clipboard: String::new(),
             cwd: String::new(),
+            current_user: String::new(),
             ssh_command_detected: false,
             ssh_detected_host: String::new(),
             ssh_detected_user: String::new(),
@@ -241,6 +248,7 @@ impl VtEmulator {
             window_title: &mut self.window_title,
             osc52_clipboard: &mut self.osc52_clipboard,
             cwd: &mut self.cwd,
+            current_user: &mut self.current_user,
             ssh_command_detected: &mut self.ssh_command_detected,
             ssh_detected_host: &mut self.ssh_detected_host,
             ssh_detected_user: &mut self.ssh_detected_user,
@@ -425,6 +433,7 @@ struct Performer<'a> {
     window_title: &'a mut String,
     osc52_clipboard: &'a mut String,
     cwd: &'a mut String,
+    current_user: &'a mut String,
     ssh_command_detected: &'a mut bool,
     ssh_detected_host: &'a mut String,
     ssh_detected_user: &'a mut String,
@@ -626,12 +635,28 @@ impl Perform for Performer<'_> {
             b"9" => {
                 if params.len() >= 3 && params[1] == b"9" {
                     if let Ok(raw) = std::str::from_utf8(params[2]) {
-                        let trimmed = raw
-                            .trim()
-                            .trim_start_matches('"')
-                            .trim_end_matches('"');
+                        let trimmed = raw.trim().trim_start_matches('"').trim_end_matches('"');
                         if !trimmed.is_empty() {
                             *self.cwd = trimmed.to_string();
+                        }
+                    }
+                }
+            }
+            // OSC 1337;CurrentUser=<name> — Pier-X-private prompt
+            // metadata emitted by smart.rs. This lets the UI reflect
+            // `su root` / `sudo -s` prompt context without treating it
+            // as SSH credentials.
+            b"1337" => {
+                if params.len() >= 2 {
+                    if let Ok(raw) = std::str::from_utf8(params[1]) {
+                        if let Some(value) = raw.strip_prefix("CurrentUser=") {
+                            let trimmed = value.trim();
+                            if !trimmed.is_empty()
+                                && trimmed.len() <= 128
+                                && trimmed.bytes().all(|b| !b.is_ascii_control())
+                            {
+                                *self.current_user = trimmed.to_string();
+                            }
                         }
                     }
                 }
@@ -1167,6 +1192,13 @@ mod tests {
         // as a cwd.
         emu.process(b"\x1b]9;4;1;50\x07");
         assert_eq!(emu.cwd, "/before");
+    }
+
+    #[test]
+    fn osc1337_current_user_sets_shell_user() {
+        let mut emu = VtEmulator::new(10, 3);
+        emu.process(b"\x1b]1337;CurrentUser=root\x07");
+        assert_eq!(emu.current_user, "root");
     }
 
     #[test]

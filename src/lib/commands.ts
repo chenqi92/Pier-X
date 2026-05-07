@@ -560,6 +560,32 @@ export const egressSetBasicAuth = (
 export const egressClearCredential = (credentialId: string) =>
   invoke<void>("egress_clear_credential", { credentialId });
 
+/** Persist a sudo / privilege-escalation password for `(user, host,
+ *  port)` in the OS keychain. Empty `password` clears the entry.
+ *  Used only when the user opts in via the "remember" checkbox in
+ *  `SudoPasswordDialog`. */
+export const setElevationPassword = (
+  user: string,
+  host: string,
+  port: number,
+  password: string,
+) => invoke<void>("set_elevation_password", { user, host, port, password });
+
+/** Read the persisted elevation password for `(user, host, port)`,
+ *  or `null` when the keychain has no entry. */
+export const getElevationPassword = (
+  user: string,
+  host: string,
+  port: number,
+) => invoke<string | null>("get_elevation_password", { user, host, port });
+
+/** Drop the persisted elevation password for `(user, host, port)`. */
+export const forgetElevationPassword = (
+  user: string,
+  host: string,
+  port: number,
+) => invoke<void>("forget_elevation_password", { user, host, port });
+
 /** Start the system VPN subprocess for a `wireguard` /
  *  `external_vpn` profile. May trigger a sudo / UAC prompt. No-op
  *  for SOCKS5 / HTTP / SshJump profiles. */
@@ -1095,6 +1121,10 @@ export const dockerOverview = (params: {
   keyPath: string;
   all: boolean;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password for privilege escalation. When set,
+   *  the backend wraps `docker` calls in `sudo -S -p ''` so users
+   *  not in the `docker` group can still browse the daemon. */
+  sudoPassword?: string | null;
 }) => invoke<DockerOverview>("docker_overview", params);
 
 export const dockerImages = (params: {
@@ -1105,6 +1135,7 @@ export const dockerImages = (params: {
   password: string;
   keyPath: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<DockerImageView[]>("docker_images", params);
 
 export const dockerVolumes = (params: {
@@ -1115,6 +1146,7 @@ export const dockerVolumes = (params: {
   password: string;
   keyPath: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<DockerVolumeView[]>("docker_volumes", params);
 
 export const dockerNetworks = (params: {
@@ -1125,6 +1157,7 @@ export const dockerNetworks = (params: {
   password: string;
   keyPath: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<DockerNetworkView[]>("docker_networks", params);
 
 export const dockerContainerAction = (params: {
@@ -1137,6 +1170,7 @@ export const dockerContainerAction = (params: {
   containerId: string;
   action: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<string>("docker_container_action", params);
 
 // ── SFTP ────────────────────────────────────────────────────────
@@ -1188,6 +1222,10 @@ export const firewallSnapshot = (params: {
   password: string;
   keyPath: string;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password — `iptables-save` etc. need root.
+   *  Without this the snapshot loses the iptables tables but still
+   *  renders the rest. */
+  sudoPassword?: string | null;
 }) => invoke<FirewallSnapshotView>("firewall_snapshot", params);
 
 // ── Service Detection ───────────────────────────────────────────
@@ -1291,6 +1329,7 @@ export const dockerInspectDbEnv = (params: {
   keyPath: string;
   containerId: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<DockerDbEnv>("docker_inspect_db_env", params);
 
 // ── Remote SQLite ───────────────────────────────────────────────
@@ -2738,6 +2777,7 @@ export const dockerInspect = (params: {
   keyPath: string;
   containerId: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<string>("docker_inspect", params);
 
 export const dockerRemoveImage = (params: {
@@ -2750,6 +2790,7 @@ export const dockerRemoveImage = (params: {
   imageId: string;
   force: boolean;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<void>("docker_remove_image", params);
 
 export const dockerRemoveVolume = (params: {
@@ -2761,6 +2802,7 @@ export const dockerRemoveVolume = (params: {
   keyPath: string;
   volumeName: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<void>("docker_remove_volume", params);
 
 export const dockerRemoveNetwork = (params: {
@@ -2772,6 +2814,7 @@ export const dockerRemoveNetwork = (params: {
   keyPath: string;
   networkName: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<void>("docker_remove_network", params);
 
 export type DockerRunOptions = {
@@ -2798,6 +2841,7 @@ export const dockerRunContainer = (params: {
   keyPath: string;
   options: DockerRunOptions;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<string>("docker_run_container", params);
 
 export const dockerPruneVolumes = (params: {
@@ -2808,6 +2852,7 @@ export const dockerPruneVolumes = (params: {
   password: string;
   keyPath: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<string>("docker_prune_volumes", params);
 
 export const dockerPruneImages = (params: {
@@ -2818,6 +2863,7 @@ export const dockerPruneImages = (params: {
   password: string;
   keyPath: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<string>("docker_prune_images", params);
 
 export const dockerVolumeFiles = (params: {
@@ -2829,6 +2875,7 @@ export const dockerVolumeFiles = (params: {
   keyPath: string;
   mountpoint: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<string>("docker_volume_files", params);
 
 export type DockerContainerStatsView = {
@@ -2855,6 +2902,7 @@ export const dockerStats = (params: {
   password: string;
   keyPath: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<DockerContainerStatsView[]>("docker_stats", params);
 
 /** Slow `docker system df -v` — see `dockerStats` comment. */
@@ -2866,6 +2914,7 @@ export const dockerVolumeUsage = (params: {
   password: string;
   keyPath: string;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<DockerVolumeUsageView[]>("docker_volume_usage", params);
 
 export const dockerPullImage = (params: {
@@ -2880,6 +2929,7 @@ export const dockerPullImage = (params: {
    *  applied only to the pull; does not modify the remote daemon. */
   envPrefix?: [string, string][] | null;
   savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
 }) => invoke<string>("docker_pull_image", params);
 
 export const localDockerPullImage = (

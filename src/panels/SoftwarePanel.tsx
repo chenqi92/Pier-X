@@ -60,7 +60,7 @@ import {
   makeScheduleId,
   type BundleSchedule,
 } from "../lib/bundleSchedule";
-import { effectiveSshTarget, type TabState } from "../lib/types";
+import { effectiveShellUser, effectiveSshTarget, type TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import {
@@ -182,6 +182,7 @@ function SoftwarePanelBody({ tab }: Props) {
   const formatError = (error: unknown) => localizeError(error, t);
 
   const sshTarget = tab ? effectiveSshTarget(tab) : null;
+  const displayUser = tab && sshTarget ? effectiveShellUser(tab, sshTarget) : "";
   const swKey = tab ? softwareKeyForTab(tab) : null;
 
   const snapshot = useSoftwareStore((s) => (swKey ? s.get(swKey) : null));
@@ -405,7 +406,7 @@ function SoftwarePanelBody({ tab }: Props) {
   const [sudoPrompt, setSudoPrompt] = useState<{
     hostLabel: string;
     errorMessage?: string;
-    resolve: (password: string | null) => void;
+    resolve: (result: { password: string; remember: boolean } | null) => void;
   } | null>(null);
   const sudoPromptRef = useRef(sudoPrompt);
   sudoPromptRef.current = sudoPrompt;
@@ -430,6 +431,14 @@ function SoftwarePanelBody({ tab }: Props) {
     sshTarget?.keyPath,
     sshTarget?.savedConnectionIndex,
   ]);
+
+  // Hydrate the elevation password from the OS keychain into the
+  // L1 cache the first time we see this host, so the sudo retry
+  // path can use a saved password without a prompt round-trip.
+  useEffect(() => {
+    if (!sshParams) return;
+    void useSudoStore.getState().hydrate(sshParams);
+  }, [sshParams]);
 
   // Pull the registry once. It's a static const on the backend so we
   // don't refetch when the host changes.
@@ -668,11 +677,13 @@ function SoftwarePanelBody({ tab }: Props) {
    *  Cancel). Used by the sudo-retry wrapper below; never shows two
    *  prompts at once because the panel's lifecycle handlers wait on
    *  this promise before continuing. */
-  function requestSudoPassword(errorMessage?: string): Promise<string | null> {
+  function requestSudoPassword(
+    errorMessage?: string,
+  ): Promise<{ password: string; remember: boolean } | null> {
     const hostLabel = sshTarget
-      ? `${sshTarget.user}@${sshTarget.host}`
+      ? `${displayUser}@${sshTarget.host}`
       : t("the remote host");
-    return new Promise<string | null>((resolve) => {
+    return new Promise<{ password: string; remember: boolean } | null>((resolve) => {
       // If a prior prompt is still open (shouldn't happen — every
       // call awaits the resolver — but be defensive), close it first
       // so the previous awaiter sees a `null` and bails cleanly.
@@ -729,8 +740,10 @@ function SoftwarePanelBody({ tab }: Props) {
       }
       const fresh = await requestSudoPassword(errorMessage);
       if (fresh === null) return report;
-      password = fresh;
-      useSudoStore.getState().set(sshParams, fresh);
+      password = fresh.password;
+      void useSudoStore
+        .getState()
+        .setPersistent(sshParams, fresh.password, fresh.remember);
     }
     return lastReport as R;
   }
@@ -2183,7 +2196,7 @@ function SoftwarePanelBody({ tab }: Props) {
     <div className="sw-panel">
       <div className="sw-panel__header">
         <div className="sw-panel__title mono">
-          <Package size={12} /> {t("Software")} · {sshTarget.user}@{sshTarget.host}
+          <Package size={12} /> {t("Software")} · {displayUser}@{sshTarget.host}
         </div>
         <button
           type="button"
@@ -2618,10 +2631,10 @@ function SoftwarePanelBody({ tab }: Props) {
         open={sudoPrompt !== null}
         hostLabel={sudoPrompt?.hostLabel ?? ""}
         errorMessage={sudoPrompt?.errorMessage}
-        onSubmit={(pw) => {
+        onSubmit={(password, remember) => {
           const cur = sudoPromptRef.current;
           setSudoPrompt(null);
-          cur?.resolve(pw);
+          cur?.resolve({ password, remember });
         }}
         onCancel={() => {
           const cur = sudoPromptRef.current;

@@ -44,6 +44,7 @@ import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import {
+  effectiveShellUser,
   effectiveSshTarget,
   isSshTargetReady,
   type TabState,
@@ -208,11 +209,12 @@ function NginxPanelBody({ tab }: Props) {
     );
   }
 
+  const displayTarget = `${effectiveShellUser(tab, sshTarget)}@${sshTarget.host}`;
   const headerMeta = layout
     ? layout.installed
-      ? `${sshTarget.user}@${sshTarget.host} · ${layout.version || "nginx"}`
-      : `${sshTarget.user}@${sshTarget.host} · ${t("nginx not installed")}`
-    : `${sshTarget.user}@${sshTarget.host}`;
+      ? `${displayTarget} · ${layout.version || "nginx"}`
+      : `${displayTarget} · ${t("nginx not installed")}`
+    : displayTarget;
 
   // Re-render the active file from a freshly-edited node tree.
   // Used when the structured editor wants to update the dirty buffer.

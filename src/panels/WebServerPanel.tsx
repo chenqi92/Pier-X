@@ -11,6 +11,7 @@ import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import {
+  effectiveShellUser,
   effectiveSshTarget,
   isSshTargetReady,
   type TabState,
@@ -146,6 +147,7 @@ function WebServerPanelBody({ tab }: Props) {
   const activeInfo = activeKind
     ? detected.find((d) => d.kind === activeKind) ?? null
     : null;
+  const displayTarget = `${effectiveShellUser(tab, sshTarget)}@${sshTarget.host}`;
 
   // Loading-first-time view.
   if (!detection && detectBusy) {
@@ -154,7 +156,7 @@ function WebServerPanelBody({ tab }: Props) {
         <PanelHeader
           icon={Globe}
           title={t("Web Server")}
-          meta={`${sshTarget.user}@${sshTarget.host}`}
+          meta={displayTarget}
         />
         <div className="status-note mono">{t("Detecting web servers…")}</div>
       </>
@@ -168,7 +170,7 @@ function WebServerPanelBody({ tab }: Props) {
         <PanelHeader
           icon={Globe}
           title={t("Web Server")}
-          meta={`${sshTarget.user}@${sshTarget.host}`}
+          meta={displayTarget}
           actions={
             <button
               type="button"
@@ -202,7 +204,7 @@ function WebServerPanelBody({ tab }: Props) {
         <PanelHeader
           icon={Globe}
           title={t("Web Server")}
-          meta={`${sshTarget.user}@${sshTarget.host}`}
+          meta={displayTarget}
         />
         <div className="ws-empty">
           <div className="ws-empty__title mono">
@@ -308,4 +310,3 @@ function productLabel(kind: WebServerKind, t: (s: string) => string): string {
       return "Caddy";
   }
 }
-

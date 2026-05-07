@@ -1028,6 +1028,9 @@ export type TerminalSnapshot = {
   altScreen: boolean;
   /** `true` while a bracketed-paste sequence is in flight. */
   bracketedPaste: boolean;
+  /** Last-known shell user emitted by Pier-X prompt integration.
+   *  Empty when unavailable; the UI may fall back to prompt parsing. */
+  currentUser: string;
 };
 
 export type TerminalSize = {
@@ -1165,6 +1168,10 @@ export type TabState = {
    *  rehydration story as `lastCwd` but on the remote side; `null`
    *  while the panel hasn't been opened yet. */
   sftpLastPath: string | null;
+  /** Current interactive shell user observed from the terminal
+   *  channel (`root` after `su root`, original login after `exit`).
+   *  Runtime display state only; not SSH authentication material. */
+  currentShellUser: string;
   /** Registry mirror prefix for `docker pull`, e.g.
    *  `"docker.m.daocloud.io"`. Applied only when the image ref does not
    *  already contain a registry domain. Empty → no rewrite. */
@@ -1199,6 +1206,15 @@ export function effectiveSshTarget(tab: TabState): NestedSshTarget | null {
     keyPath: tab.sshKeyPath,
     savedConnectionIndex: tab.sshSavedConnectionIndex,
   };
+}
+
+/** Display user for the interactive terminal channel. This may differ
+ *  from the SSH login user after `su root` / `sudo -s`; callers must
+ *  use it for labels only, not for opening new SSH connections. */
+export function effectiveShellUser(tab: TabState, target: NestedSshTarget | null = effectiveSshTarget(tab)): string {
+  const observed = tab.currentShellUser.trim();
+  if (observed) return observed;
+  return target?.user ?? tab.sshUser;
 }
 
 // Right-side panels (Firewall, ServerMonitor, Docker, SFTP, …) probe

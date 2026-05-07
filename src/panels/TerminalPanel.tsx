@@ -865,8 +865,18 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       });
     };
 
+    // True once we've observed the backend reporting alive=false for
+    // this session. After that we stop arming the safety timer and
+    // stop scheduling new refreshes — a dead PTY isn't going to
+    // produce new bytes, and on a flapping SSH link the per-1.5s
+    // polling stacks IPC pressure on top of whatever the rest of the
+    // app is already doing. The Restart button (which clears
+    // `session`) is the supported recovery path.
+    let channelExited = false;
+
     const refresh = () => {
       if (disposed) return;
+      if (channelExited) return;
       if (inflight) { dirty = true; return; }
       dirty = false;
       inflight = true;
@@ -889,15 +899,19 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           // typing feel seconds-delayed.
           setSnapshot(next);
           setError("");
+          if (!next.alive) {
+            channelExited = true;
+          }
         })
         .catch((e) => {
           if (!disposed) setError(formatError(e));
         })
         .finally(() => {
           inflight = false;
-          if (dirty && !disposed) {
+          if (channelExited || disposed) return;
+          if (dirty) {
             scheduleRefresh();
-          } else if (!disposed) {
+          } else {
             armSafety();
           }
         });

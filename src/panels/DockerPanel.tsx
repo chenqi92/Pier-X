@@ -302,6 +302,15 @@ function DockerPanelBody({ tab }: Props) {
   // re-open on every render while the error is still on the
   // snapshot, even after the user cancelled.
   const handledErrorRef = useRef("");
+  // The dialog's onSubmit closure captures the current render's
+  // `sshArgs.sudoPassword` (= null) and calls `refreshActiveTab`
+  // synchronously. By the time the docker invoke fires, zustand's
+  // L1 store has the new password but the closure has not — the
+  // refresh runs as the unprivileged user and a second EACCES
+  // bounces the dialog back open. Defer the retry to a useEffect
+  // keyed on `sudoPassword` so it executes after React re-renders
+  // with the new value.
+  const pendingSudoRetryRef = useRef(false);
 
   // Hydrate the elevation password from the OS keychain on mount /
   // when the host changes. Idempotent — `useSudoStore.hydrate` is
@@ -348,6 +357,22 @@ function DockerPanelBody({ tab }: Props) {
         : undefined,
     });
   }, [error, hasSsh, sshTarget?.host, sshTarget?.user, sudoPassword, t]);
+
+  // Run a deferred retry once `sudoPassword` actually flips to a
+  // non-null value following a SudoPasswordDialog submit. This is
+  // the second half of the fix for the double-prompt race — see
+  // the `pendingSudoRetryRef` declaration above.
+  useEffect(() => {
+    if (!pendingSudoRetryRef.current) return;
+    if (!sudoPassword) return;
+    pendingSudoRetryRef.current = false;
+    void refreshActiveTab(true);
+    // refreshActiveTab is reconstructed on every render; depending
+    // on it would re-fire this effect every render. We intentionally
+    // depend only on sudoPassword so the retry is tied to the
+    // password actually arriving in the store.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sudoPassword]);
 
   /** Wrap a per-action `setError(formatError(e))` so the catch block
    *  also pops the sudo prompt when the raw error indicates the
@@ -1630,15 +1655,19 @@ function DockerPanelBody({ tab }: Props) {
               keyPath: sshTarget.keyPath,
               savedConnectionIndex: sshTarget.savedConnectionIndex,
             };
+            // Mark a retry as pending BEFORE updating the store —
+            // the zustand `set` call below is synchronous and the
+            // `[sudoPassword]` effect can run as soon as React
+            // schedules its re-render.
+            pendingSudoRetryRef.current = true;
             void useSudoStore
               .getState()
               .setPersistent(params, password, remember);
-            // Drop the stored error and re-issue the most recent
-            // refresh path so the user sees the panel populate
-            // without having to click around. The next call will
-            // pick up `sudoPassword` via `sshArgs.sudoPassword`.
+            // Drop the stored error so the snapshot-error effect
+            // doesn't re-open the dialog before the retry fires.
+            // The retry itself runs from the `[sudoPassword]`
+            // effect once the new password lands in the store.
             setError("");
-            void refreshActiveTab(true);
           }}
           onCancel={() => setSudoPrompt(null)}
         />

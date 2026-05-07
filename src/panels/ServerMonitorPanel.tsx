@@ -495,6 +495,13 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
   // the interval-teardown-on-every-probe cost.
   const busyRef = useRef(false);
   busyRef.current = busy;
+  // Number of consecutive failed probes. Used to back the 5-s tick
+  // off exponentially when the SSH target is flapping — without
+  // this, every monitor tab pinned to a broken host issues a full
+  // handshake every 5 s, each one stuck in the cache-evict + retry
+  // path, which stacks IPC and starves clicks. Cleared on the first
+  // successful probe.
+  const consecFailuresRef = useRef(0);
   const [error, setError] = useState("");
   // Track the missing-keychain condition separately so the recovery
   // button stays available even after a localized error string has
@@ -617,6 +624,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
         return { ...prev, [scopeKey]: next };
       });
       setLastProbed(Date.now());
+      consecFailuresRef.current = 0;
       const elapsed = Date.now() - started;
       const degraded =
         s.cpuPct < 0 && s.memTotalMb < 0 && s.procCount === 0;
@@ -631,6 +639,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
       const msg = formatError(e);
       setError(msg);
       if (isMissingKeychainError(e)) setNeedsPasswordRecovery(true);
+      consecFailuresRef.current = Math.min(consecFailuresRef.current + 1, 8);
       logEvent("ERROR", "monitor.panel", `tab=${tab.id} probe failed: ${msg}`);
     } finally {
       setBusy(false);
@@ -744,6 +753,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
     // PowerShell-startup-induced typing stutter is no longer needed.
     void runProbe(true);
     let lastFullAt = Date.now();
+    let lastTickAt = Date.now();
     const tick = window.setInterval(() => {
       // Re-read busy from the latest closure via a state check —
       // intentionally letting the JS engine grab the freshest value
@@ -751,6 +761,16 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
       // teardown/recreate cycle every time it flips).
       if (busyRef.current) return;
       const now = Date.now();
+      // Exponential back-off on consecutive failures, so a flapping
+      // SSH target doesn't force a full handshake every 5 s. Cadence
+      // is 5 s · 2^min(failures-1, 6) capped at ~5 min — successful
+      // probes reset the counter and drop us back to 5 s.
+      const failures = consecFailuresRef.current;
+      if (failures > 0) {
+        const delayMs = 5_000 * Math.pow(2, Math.min(failures - 1, 6));
+        if (now - lastTickAt < delayMs) return;
+      }
+      lastTickAt = now;
       // Promote this tick to full if 30 s have elapsed since the last
       // full probe; otherwise just refresh the cheap fields.
       const wantFull = now - lastFullAt >= 30_000;

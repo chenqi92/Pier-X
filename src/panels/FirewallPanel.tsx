@@ -471,6 +471,22 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
   const sudoPassword = useSudoStore((s) =>
     sudoStoreKey ? s.passwords[sudoStoreKey] ?? null : null,
   );
+  // Defer the post-submit retry until `sudoPassword` actually
+  // lands in the store and React re-renders, so the next probe
+  // closure captures the new value instead of the rendered-time
+  // null. Without this, the first dialog submit always loses the
+  // race and the user sees a second prompt.
+  const pendingSudoRetryRef = useRef(false);
+  useEffect(() => {
+    if (!pendingSudoRetryRef.current) return;
+    if (!sudoPassword) return;
+    pendingSudoRetryRef.current = false;
+    void probe();
+    // probe is reconstructed every render — depending on it would
+    // fire the effect every render. Only trigger on sudoPassword
+    // arriving.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sudoPassword]);
 
   // Hydrate from keychain on host change.
   useEffect(() => {
@@ -1217,13 +1233,15 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
             keyPath: sshTarget.keyPath,
             savedConnectionIndex: sshTarget.savedConnectionIndex,
           };
+          // Mark a retry as pending so the `[sudoPassword]` effect
+          // runs `probe()` after the new password lands and React
+          // re-renders — required because the closure here still
+          // references the rendered-time `sshArgs.sudoPassword=null`.
+          pendingSudoRetryRef.current = true;
           void useSudoStore
             .getState()
             .setPersistent(params, password, remember);
           setError("");
-          // Re-issue the probe; the next call picks up the password
-          // via the `useSudoStore` subscription.
-          void probe();
         }}
         onCancel={() => setSudoPrompt(null)}
       />

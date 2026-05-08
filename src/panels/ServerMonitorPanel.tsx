@@ -29,6 +29,7 @@ import DismissibleNote from "../components/DismissibleNote";
 import Sparkline from "../components/Sparkline";
 import StatusDot from "../components/StatusDot";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
+import { hasPendingHostKeyPrompts } from "../stores/useHostKeyPromptStore";
 import { logEvent } from "../lib/logger";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
@@ -760,6 +761,11 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
       // since `busy` isn't in the deps (we don't want the interval
       // teardown/recreate cycle every time it flips).
       if (busyRef.current) return;
+      // While a host-key TOFU dialog is open, pier-core holds the
+      // per-target gate across `block_on(ssh_connect)`; firing a probe
+      // here just queues another invoke on that gate and contributes
+      // to the render burst when the user finally decides.
+      if (hasPendingHostKeyPrompts()) return;
       const now = Date.now();
       // Exponential back-off on consecutive failures, so a flapping
       // SSH target doesn't force a full handshake every 5 s. Cadence

@@ -33,6 +33,7 @@ import StatusDot from "../components/StatusDot";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import SudoPasswordDialog from "../components/SudoPasswordDialog";
 import { useSudoStore, sudoKeyFor } from "../stores/useSudoStore";
+import { hasPendingHostKeyPrompts } from "../stores/useHostKeyPromptStore";
 
 function fwLooksLikePermissionDenied(message: string): boolean {
   const m = message.toLowerCase();
@@ -604,7 +605,11 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
   useEffect(() => {
     if (!isActive || activeTab !== "traffic" || !canProbe) return;
     const id = window.setInterval(() => {
-      if (!busyRef.current) void probe();
+      if (busyRef.current) return;
+      // Don't pile probes onto the SSH gate while a host-key prompt
+      // is blocking the connect.
+      if (hasPendingHostKeyPrompts()) return;
+      void probe();
     }, TRAFFIC_POLL_MS);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps

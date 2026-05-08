@@ -16,6 +16,7 @@ import { Copy, KeyRound, ShieldAlert, X } from "lucide-react";
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 import { toast } from "../stores/useToastStore";
+import { useHostKeyPromptStore } from "../stores/useHostKeyPromptStore";
 
 type Pending = cmd.HostKeyPromptEvent;
 
@@ -36,6 +37,12 @@ export default function HostKeyPromptDialog() {
         const off = await listen<Pending>("ssh:host-key-prompt", (evt) => {
           const payload = evt.payload;
           if (!payload || !payload.id || answeredRef.current.has(payload.id)) return;
+          // Pause keep-alive polling panels while the user is staring
+          // at the dialog. See `useHostKeyPromptStore` for why this
+          // matters — the per-target gate would otherwise queue every
+          // panel's invoke and discharge them all into the same React
+          // batch the moment the user clicks Trust.
+          useHostKeyPromptStore.getState().add(payload.id);
           setQueue((prev) =>
             prev.some((p) => p.id === payload.id) ? prev : [...prev, payload],
           );
@@ -63,6 +70,7 @@ export default function HostKeyPromptDialog() {
     } finally {
       setBusy(false);
       setQueue((prev) => prev.filter((p) => p.id !== current.id));
+      useHostKeyPromptStore.getState().remove(current.id);
     }
   }
 

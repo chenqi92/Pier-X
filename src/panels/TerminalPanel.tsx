@@ -41,6 +41,7 @@ import { parseSshCommand } from "../lib/parseSshCommand";
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
+import { hasPendingHostKeyPrompts } from "../stores/useHostKeyPromptStore";
 import { logEvent } from "../lib/logger";
 
 /**
@@ -763,38 +764,12 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
   // ── Persist last cwd so a restart re-cd's the new session ────
   //
-  // OSC 7 / pwd polling lands the shell's working dir in the
-  // backend; we mirror it onto the tab record (debounced via the
-  // tab store's own save timer) so the rehydrate path can prepend
-  // a `cd …` startup command. Polled at 4s — slow enough to be
-  // negligible IPC, fast enough that a `cd /var/log` followed by
-  // an immediate quit usually catches. The "last seen" value is
-  // tracked in a ref so a successful update doesn't re-run the
-  // effect and thrash the interval.
+  // The shell's OSC 7 / OSC 9;9 cwd rides along on every snapshot
+  // (see `next.currentCwd` in the snapshot refresh below), so we
+  // read it from there and skip the dedicated cwd poll. A `cd`
+  // followed by Enter triggers a DataReady → snapshot refresh, so
+  // the cwd update is event-driven in practice.
   const lastCwdSampledRef = useRef<string | null>(tab.lastCwd ?? null);
-  useEffect(() => {
-    if (!session) return;
-    let disposed = false;
-    const sample = async () => {
-      if (disposed) return;
-      try {
-        const cwd = await cmd.terminalCurrentCwd(session.sessionId);
-        if (disposed) return;
-        if (cwd && cwd !== lastCwdSampledRef.current) {
-          lastCwdSampledRef.current = cwd;
-          updateTab(tab.id, { lastCwd: cwd });
-        }
-      } catch {
-        /* osc7 hasn't fired or backend race; try again next tick */
-      }
-    };
-    void sample();
-    const id = window.setInterval(sample, 4000);
-    return () => {
-      disposed = true;
-      window.clearInterval(id);
-    };
-  }, [session?.sessionId, tab.id, updateTab]);
 
   // ── Run startup command once per created session ─────────────
 
@@ -877,6 +852,11 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     const refresh = () => {
       if (disposed) return;
       if (channelExited) return;
+      // Pause refresh while a host-key TOFU dialog is open so we don't
+      // pile snapshot fetches onto the stalled SSH gate. The next
+      // backend event (keystroke, channel data) will re-fire refresh
+      // once the user decides.
+      if (hasPendingHostKeyPrompts()) return;
       if (inflight) { dirty = true; return; }
       dirty = false;
       inflight = true;
@@ -891,6 +871,14 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
           if (shellUser && shellUser !== lastShellUserRef.current) {
             lastShellUserRef.current = shellUser;
             updateTab(tab.id, { currentShellUser: shellUser });
+          }
+          // Persist last-seen cwd onto the tab record so the rehydrate
+          // path can prepend a `cd …` startup command on restart.
+          // Replaces the prior 4 s `terminalCurrentCwd` poll.
+          const nextCwd = next.currentCwd;
+          if (nextCwd && nextCwd !== lastCwdSampledRef.current) {
+            lastCwdSampledRef.current = nextCwd;
+            updateTab(tab.id, { lastCwd: nextCwd });
           }
           // Direct setSnapshot — terminal feedback MUST paint on the
           // next frame. Wrapping in startTransition let React defer

@@ -35,17 +35,44 @@ export default function ResizeHandle({ direction, size, min, max, onResize, clas
   );
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!dragging.current) return;
-      const delta = e.clientX - startX.current;
+    // Coalesce mousemoves to one onResize per animation frame.
+    // Without this, a fast drag fires ~120 mousemoves/s, each
+    // setState re-renders the whole App tree (every panel, the
+    // terminal viewport, sidebars, etc.). Under a heavy first-
+    // connect (terminal handshake + monitor probe + sftp listing)
+    // that storm of re-renders saturates WebView2's compositor
+    // and the window goes white until the drag stops.
+    let pendingX: number | null = null;
+    let rafHandle: number | null = null;
+
+    const flush = () => {
+      rafHandle = null;
+      if (pendingX === null || !dragging.current) return;
+      const delta = pendingX - startX.current;
+      pendingX = null;
       const newSize = direction === "left"
         ? startSize.current + delta
         : startSize.current - delta;
       onResize(Math.max(min, Math.min(max, newSize)));
     };
 
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragging.current) return;
+      pendingX = e.clientX;
+      if (rafHandle !== null) return;
+      rafHandle = window.requestAnimationFrame(flush);
+    };
+
     const handleMouseUp = () => {
       if (!dragging.current) return;
+      // Flush any pending move BEFORE clearing dragging — `flush`
+      // bails out when dragging is false, so reversing this drops
+      // the final pixel of the drag.
+      if (rafHandle !== null) {
+        window.cancelAnimationFrame(rafHandle);
+        rafHandle = null;
+      }
+      if (pendingX !== null) flush();
       dragging.current = false;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
@@ -57,6 +84,7 @@ export default function ResizeHandle({ direction, size, min, max, onResize, clas
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
+      if (rafHandle !== null) window.cancelAnimationFrame(rafHandle);
     };
   }, [direction, min, max, onResize]);
 

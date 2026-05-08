@@ -1233,6 +1233,12 @@ struct TerminalSnapshot {
     /// Last-known shell user emitted by the prompt hook. Empty when
     /// unavailable; frontend may fall back to prompt parsing.
     current_user: String,
+    /// Last-known shell working directory parsed from OSC 7 / OSC 9;9.
+    /// `None` until the shell emits one. Piggy-backs on the snapshot
+    /// so the frontend gets cwd updates on the same DataReady refresh
+    /// that already runs whenever the shell prints output, and we
+    /// don't need a separate poll just for cwd.
+    current_cwd: Option<String>,
 }
 
 /// Notify callback invoked by PierTerminal's reader thread. Coalesces
@@ -5398,6 +5404,7 @@ fn terminal_snapshot(
         alt_screen: snapshot.alt_screen,
         bracketed_paste: snapshot.bracketed_paste,
         current_user: managed.terminal.current_user().unwrap_or_default(),
+        current_cwd: managed.terminal.current_cwd(),
     })
 }
 

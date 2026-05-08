@@ -1037,6 +1037,11 @@ export type TerminalSnapshot = {
   /** Last-known shell user emitted by Pier-X prompt integration.
    *  Empty when unavailable; the UI may fall back to prompt parsing. */
   currentUser: string;
+  /** Last-known shell working directory from OSC 7 / OSC 9;9. `null`
+   *  until the shell has emitted one. Carried on the snapshot so cwd
+   *  updates ride along with the DataReady refresh — there's no need
+   *  for a separate poll. */
+  currentCwd: string | null;
 };
 
 export type TerminalSize = {

@@ -2,7 +2,7 @@
   "name": "pier-x",
   "description": "Pier-X — cross-platform terminal / Git / SSH / database management tool",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,7 +18,8 @@
     "version:set": "node scripts/bump-version.mjs",
     "release:patch": "node scripts/bump-version.mjs patch --push",
     "release:minor": "node scripts/bump-version.mjs minor --push",
-    "release:major": "node scripts/bump-version.mjs major --push"
+    "release:major": "node scripts/bump-version.mjs major --push",
+    "release:package-managers": "node scripts/generate-package-manager-metadata.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

@@ -155,6 +155,11 @@ function main() {
   runGit(`git commit -m "chore(release): v${next}"`, flags.dryRun);
   if (flags.push) {
     runGit(`git push`, flags.dryRun);
+    if (flags.dryRun) {
+      console.log(`\n[dry-run] Would push v${next} bump commit to origin.`);
+      console.log(`Release workflow would then create the v${next} tag and GitHub Release.`);
+      return;
+    }
     console.log(`\nPushed v${next} bump commit to origin.`);
     console.log(`Release workflow will create the v${next} tag and GitHub Release.`);
   } else {

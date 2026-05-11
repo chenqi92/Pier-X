@@ -28,6 +28,59 @@ npm run release:package-managers -- \
 The script computes SHA256 checksums from those files and writes the cask and
 WinGet manifests under `dist-package-managers/`.
 
+## Release automation
+
+The GitHub release workflow publishes three things after Tauri uploads the
+release bundles:
+
+1. It uploads the generated package-manager metadata back to the Pier-X GitHub
+   Release.
+2. If `HOMEBREW_TAP_TOKEN` is configured, it pushes the generated cask and
+   formula to `chenqi92/homebrew-tap`.
+3. If `WINGET_PKGS_TOKEN` is configured, it pushes the generated WinGet
+   manifests to `chenqi92/winget-pkgs` and opens a pull request against
+   `microsoft/winget-pkgs`.
+
+The Homebrew tap is directly user-facing after the workflow pushes it. The
+WinGet package is user-facing only after the pull request is accepted by
+`microsoft/winget-pkgs`.
+
+## GitHub secrets
+
+Add these secrets in the Pier-X repository:
+
+```text
+Settings -> Secrets and variables -> Actions -> New repository secret
+```
+
+### `HOMEBREW_TAP_TOKEN`
+
+Recommended token type: fine-grained personal access token.
+
+Required access:
+
+- Resource owner: `chenqi92`
+- Repository access: only `chenqi92/homebrew-tap`
+- Repository permissions:
+  - Contents: Read and write
+
+The workflow uses this token only to checkout, commit, and push generated files
+to the tap repository.
+
+### `WINGET_PKGS_TOKEN`
+
+Recommended token type: classic personal access token with `public_repo`, or a
+token that can push to `chenqi92/winget-pkgs` and create pull requests from that
+fork to `microsoft/winget-pkgs`.
+
+Required access:
+
+- Push branches to `chenqi92/winget-pkgs`
+- Create pull requests against `microsoft/winget-pkgs`
+
+The workflow creates a branch named `pier-x-v<version>` in the fork, then opens
+or reuses a pull request with head `chenqi92:pier-x-v<version>`.
+
 ## Homebrew
 
 The generated cask is intended for a dedicated tap such as
@@ -57,6 +110,9 @@ brew install chenqi92/tap/pier-x
 Do not claim official Homebrew/homebrew-cask distribution until Pier-X is
 accepted there. The custom tap is the supported path first.
 
+The release workflow updates this tap automatically when `HOMEBREW_TAP_TOKEN`
+is configured.
+
 ## WinGet
 
 The generated manifests use package identifier `Chenqi92.PierX` and NSIS
@@ -82,3 +138,6 @@ winget install Chenqi92.PierX
 
 Until then, the release-attached manifests are a prepared submission artifact,
 not proof that the package is already available from WinGet.
+
+The release workflow opens this pull request automatically when
+`WINGET_PKGS_TOKEN` is configured.

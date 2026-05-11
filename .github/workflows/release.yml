@@ -185,6 +185,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      HOMEBREW_TAP_REPOSITORY: chenqi92/homebrew-tap
+      WINGET_FORK_REPOSITORY: chenqi92/winget-pkgs
+      WINGET_UPSTREAM_REPOSITORY: microsoft/winget-pkgs
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      WINGET_PKGS_TOKEN: ${{ secrets.WINGET_PKGS_TOKEN }}
 
     steps:
       - name: Checkout
@@ -249,3 +255,111 @@ jobs:
             "pier-x-release-sha256-v${version}.txt" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
+
+      - name: Checkout Homebrew tap
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.HOMEBREW_TAP_REPOSITORY }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Publish Homebrew tap
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        shell: bash
+        env:
+          TAG: ${{ needs.detect-and-prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          mkdir -p homebrew-tap/Casks homebrew-tap/Formula
+          cp dist-package-managers/homebrew/Casks/pier-x.rb homebrew-tap/Casks/pier-x.rb
+          cp dist-package-managers/homebrew/Formula/pier-x.rb homebrew-tap/Formula/pier-x.rb
+          rm -f homebrew-tap/Casks/.gitkeep homebrew-tap/Formula/.gitkeep
+
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks Formula
+          if git diff --cached --quiet; then
+            echo "Homebrew tap is already up to date for v${version}."
+            exit 0
+          fi
+          git commit -m "Update Pier-X to v${version}"
+          git push
+
+      - name: Skip Homebrew tap publish
+        if: env.HOMEBREW_TAP_TOKEN == ''
+        run: echo "HOMEBREW_TAP_TOKEN is not configured; skipping Homebrew tap publish."
+
+      - name: Checkout WinGet fork
+        if: env.WINGET_PKGS_TOKEN != ''
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.WINGET_FORK_REPOSITORY }}
+          token: ${{ secrets.WINGET_PKGS_TOKEN }}
+          path: winget-pkgs
+
+      - name: Update WinGet fork
+        if: env.WINGET_PKGS_TOKEN != ''
+        id: update-winget
+        shell: bash
+        env:
+          TAG: ${{ needs.detect-and-prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          branch="pier-x-v${version}"
+          manifest_dir="manifests/c/Chenqi92/PierX/${version}"
+
+          cd winget-pkgs
+          git checkout -B "$branch"
+          rm -rf "$manifest_dir"
+          mkdir -p "$(dirname "$manifest_dir")"
+          cp -R "../dist-package-managers/winget/${manifest_dir}" "$manifest_dir"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$manifest_dir"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "WinGet fork already has Chenqi92.PierX ${version}."
+            exit 0
+          fi
+
+          git commit -m "New version: Chenqi92.PierX version ${version}"
+          git push --force-with-lease origin "$branch"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open WinGet pull request
+        if: env.WINGET_PKGS_TOKEN != '' && steps.update-winget.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_PKGS_TOKEN }}
+          TAG: ${{ needs.detect-and-prepare.outputs.tag }}
+          BRANCH: ${{ steps.update-winget.outputs.branch }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          existing="$(gh pr list \
+            --repo "$WINGET_UPSTREAM_REPOSITORY" \
+            --head "chenqi92:${BRANCH}" \
+            --state open \
+            --json url \
+            --jq '.[0].url // empty')"
+          if [ -n "$existing" ]; then
+            echo "WinGet PR already exists: $existing"
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "$WINGET_UPSTREAM_REPOSITORY" \
+            --base master \
+            --head "chenqi92:${BRANCH}" \
+            --title "New version: Chenqi92.PierX version ${version}" \
+            --body "Updates Chenqi92.PierX to ${version}. Generated from ${GITHUB_REPOSITORY}@${TAG} release assets."
+
+      - name: Skip WinGet PR
+        if: env.WINGET_PKGS_TOKEN == ''
+        run: echo "WINGET_PKGS_TOKEN is not configured; skipping WinGet fork update and pull request."

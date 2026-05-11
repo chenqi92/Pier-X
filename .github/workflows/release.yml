@@ -175,3 +175,77 @@ jobs:
           releaseDraft: false
           prerelease: ${{ needs.detect-and-prepare.outputs.prerelease == 'true' }}
           args: ${{ matrix.args }}
+
+  package-manager-metadata:
+    name: Publish package-manager metadata
+    needs:
+      - detect-and-prepare
+      - publish-tauri
+    if: needs.detect-and-prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.detect-and-prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          mkdir -p release-assets
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "Pier-X_${version}_universal.dmg" \
+            --pattern "Pier-X_${version}_amd64.AppImage" \
+            --pattern "Pier-X_${version}_x64-setup.exe" \
+            --pattern "Pier-X_${version}_arm64-setup.exe" \
+            --dir release-assets
+          ls -lh release-assets
+
+      - name: Generate package-manager metadata
+        shell: bash
+        env:
+          TAG: ${{ needs.detect-and-prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          npm run release:package-managers -- \
+            --version "$version" \
+            --repo "$GITHUB_REPOSITORY" \
+            --assets-dir release-assets \
+            --out-dir dist-package-managers
+
+      - name: Package metadata assets
+        shell: bash
+        env:
+          TAG: ${{ needs.detect-and-prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          cp dist-package-managers/homebrew/Casks/pier-x.rb "pier-x-homebrew-cask-v${version}.rb"
+          cp dist-package-managers/homebrew/Formula/pier-x.rb "pier-x-homebrew-formula-v${version}.rb"
+          cp dist-package-managers/SHA256SUMS.txt "pier-x-release-sha256-v${version}.txt"
+          tar -czf "pier-x-winget-manifests-v${version}.tar.gz" -C dist-package-managers winget
+          find dist-package-managers -type f -print
+
+      - name: Upload package-manager metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.detect-and-prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          gh release upload "$TAG" \
+            "pier-x-homebrew-cask-v${version}.rb" \
+            "pier-x-homebrew-formula-v${version}.rb" \
+            "pier-x-winget-manifests-v${version}.tar.gz" \
+            "pier-x-release-sha256-v${version}.txt" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

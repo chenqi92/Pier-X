@@ -93,19 +93,53 @@ npm run build:debug         # debug build
 cargo build -p pier-core    # backend only
 ```
 
-### Releases
+## Installation
 
-Version sync + tag:
+The current primary install path is the platform bundle attached to
+[GitHub Releases](https://github.com/chenqi92/Pier-X/releases). Each GitHub
+Release also attaches package-manager metadata:
+
+- Homebrew cask: `pier-x-homebrew-cask-v<version>.rb`
+- Homebrew formula: `pier-x-homebrew-formula-v<version>.rb`
+- WinGet manifests: `pier-x-winget-manifests-v<version>.tar.gz`
+- SHA256 checksums: `pier-x-release-sha256-v<version>.txt`
+
+Homebrew support starts with a dedicated tap. Once the generated cask is
+published there, macOS users can install with:
+
+```bash
+brew install --cask chenqi92/tap/pier-x
+```
+
+Linuxbrew users can install the AppImage-backed formula with:
+
+```bash
+brew install chenqi92/tap/pier-x
+```
+
+The generated WinGet manifests can be submitted to `microsoft/winget-pkgs`.
+After they are accepted into the community source, users can install with:
+
+```powershell
+winget install Chenqi92.PierX
+```
+
+See [docs/PACKAGE-MANAGERS.md](docs/PACKAGE-MANAGERS.md) for the maintainer
+workflow.
+
+## Releases
+
+Version sync:
 
 ```bash
 npm run bump 0.2.0          # explicit
 npm run bump patch          # patch / minor / major
-git push && git push --tags
+git push
 ```
 
-Pushing a `v*.*.*` tag triggers:
+Pushing a `main` branch commit that changes `package.json` version triggers:
 
-- **GitHub** (`.github/workflows/release.yml`) — builds Linux, Windows x64, Windows ARM64, and macOS universal Tauri bundles, publishes to GitHub Releases.
+- **GitHub** (`.github/workflows/release.yml`) — builds Linux, Windows x64, Windows ARM64, and macOS universal Tauri bundles, publishes to GitHub Releases, and attaches Homebrew cask / WinGet manifests / SHA256SUMS.
 - **Gitea** (`.gitea/workflows/release.yml`) — builds Linux `.deb` / `.rpm` / `.AppImage` on `ubuntu-22.04`, uploads via the Gitea API.
 
 CI (`.github/workflows/ci.yml`): Tauri shell on macOS + Windows; Rust core on macOS + Windows + Linux (`fmt --check` + `clippy` + `build` + `test`).
@@ -128,9 +162,10 @@ Pier-X/
 ├── pier-core/               # Rust core (terminal / ssh / services / …)
 ├── docs/
 │   ├── PRODUCT-SPEC.md      # Product spec (authoritative)
+│   ├── PACKAGE-MANAGERS.md  # Homebrew / WinGet metadata workflow
 │   └── BACKEND-GAPS.md      # Design → impl gap tracker
 ├── .agents/skills/          # Design system SKILL and repo automation
-├── scripts/bump-version.mjs # Version sync + tag
+├── scripts/bump-version.mjs # Version sync
 └── .github/ · .gitea/       # CI / Release workflows
 ```
 
@@ -139,6 +174,7 @@ Pier-X/
 | File | Purpose |
 |---|---|
 | [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md) | Product spec — single source of truth for "what Pier-X is, which panels exist, default behaviors, non-goals" |
+| [docs/PACKAGE-MANAGERS.md](docs/PACKAGE-MANAGERS.md) | Homebrew tap and WinGet manifest generation, publishing, and submission workflow |
 | [docs/BACKEND-GAPS.md](docs/BACKEND-GAPS.md) | Tracks gaps between the frontend design and wired backend commands |
 | [.agents/skills/pier-design-system/SKILL.md](.agents/skills/pier-design-system/SKILL.md) | Single source of truth for visual tokens (color / typography / spacing / radius / shadow) |
 | [CLAUDE.md](CLAUDE.md) | Code rules and architecture boundaries for AI assistants and contributors |

@@ -93,19 +93,49 @@ npm run build:debug         # 带调试符号的构建
 cargo build -p pier-core    # 仅构建 Rust 核心
 ```
 
-### 发布
+## 安装
 
-版本号同步与打 tag 走脚本：
+当前正式安装方式是从 [GitHub Releases](https://github.com/chenqi92/Pier-X/releases)
+下载对应平台安装包。每次 GitHub Release 会同时附带 Homebrew / WinGet 的元数据：
+
+- Homebrew cask：`pier-x-homebrew-cask-v<version>.rb`
+- Homebrew formula：`pier-x-homebrew-formula-v<version>.rb`
+- WinGet manifests：`pier-x-winget-manifests-v<version>.tar.gz`
+- SHA256：`pier-x-release-sha256-v<version>.txt`
+
+Homebrew 先走独立 tap 路径，发布到 tap 后 macOS 可用：
+
+```bash
+brew install --cask chenqi92/tap/pier-x
+```
+
+Linuxbrew 可用：
+
+```bash
+brew install chenqi92/tap/pier-x
+```
+
+WinGet manifest 生成后可提交到 `microsoft/winget-pkgs`，被社区源接受后可用：
+
+```powershell
+winget install Chenqi92.PierX
+```
+
+维护流程见 [docs/PACKAGE-MANAGERS.md](docs/PACKAGE-MANAGERS.md)。
+
+## 发布
+
+版本号同步走脚本：
 
 ```bash
 npm run bump 0.2.0          # 显式版本
 npm run bump patch          # patch / minor / major
-git push && git push --tags
+git push
 ```
 
-推送 `v*.*.*` 标签触发：
+推送包含 `package.json` 版本变化的 `main` 分支提交后：
 
-- **GitHub**（`.github/workflows/release.yml`）：构建 Linux / Windows x64 / Windows ARM64 / macOS universal Tauri bundle，发布到 GitHub Releases。
+- **GitHub**（`.github/workflows/release.yml`）：构建 Linux / Windows x64 / Windows ARM64 / macOS universal Tauri bundle，发布到 GitHub Releases，并生成 Homebrew cask / WinGet manifests / SHA256SUMS。
 - **Gitea**（`.gitea/workflows/release.yml`）：在 `ubuntu-22.04` runner 上构建 Linux `.deb` / `.rpm` / `.AppImage`，通过 Gitea API 上传到对应 Release。
 
 CI（`.github/workflows/ci.yml`）：Tauri shell 在 macOS + Windows 上构建；Rust 核心在 macOS + Windows + Linux 上 `fmt --check` + `clippy` + `build` + `test`。
@@ -128,9 +158,10 @@ Pier-X/
 ├── pier-core/               # Rust 核心（terminal / ssh / services / …）
 ├── docs/
 │   ├── PRODUCT-SPEC.md      # 产品规范（权威源）
+│   ├── PACKAGE-MANAGERS.md  # Homebrew / WinGet 发布元数据流程
 │   └── BACKEND-GAPS.md      # 设计 → 实现差距追踪
 ├── .agents/skills/          # 设计系统 SKILL 与仓库自动化
-├── scripts/bump-version.mjs # 同步版本号 + 打 tag
+├── scripts/bump-version.mjs # 同步版本号
 └── .github/ · .gitea/       # CI / Release workflows
 ```
 
@@ -139,6 +170,7 @@ Pier-X/
 | 文档 | 作用 |
 |---|---|
 | [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md) | 产品规范——「Pier-X 是什么、有什么面板、默认行为、不做什么」的权威来源 |
+| [docs/PACKAGE-MANAGERS.md](docs/PACKAGE-MANAGERS.md) | Homebrew tap 与 WinGet manifest 的生成、发布、提交流程 |
 | [docs/BACKEND-GAPS.md](docs/BACKEND-GAPS.md) | 前端设计 → 后端命令的差距清单 |
 | [.agents/skills/pier-design-system/SKILL.md](.agents/skills/pier-design-system/SKILL.md) | 视觉令牌（颜色 / 排版 / 间距 / 圆角 / 阴影）唯一来源 |
 | [CLAUDE.md](CLAUDE.md) | 给 AI / 协作者的代码规则与架构边界 |

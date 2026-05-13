@@ -2650,6 +2650,7 @@ fn create_ssh_terminal_from_config(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
     config: SshConfig,
+    saved_index: Option<usize>,
     cols: u16,
     rows: u16,
 ) -> Result<TerminalSessionInfo, String> {
@@ -2657,44 +2658,42 @@ fn create_ssh_terminal_from_config(
     let resolved_rows = rows.max(12);
     let shell = format!("ssh:{}@{}:{}", config.user, config.host, config.port);
 
-    // Reuse a cached SSH session when one already exists for this
-    // target — opening a new terminal tab against a host that an
-    // SFTP / Docker / Software panel already authenticated to should
-    // NOT trigger a second russh handshake. Doing so:
-    //   * doubles handshake CPU + network round-trips
-    //   * races with sshd's MaxStartups limit (default 10:30:100),
-    //     which on a busy host throttles new auth attempts and made
-    //     the new terminal stall on "Launching shell..."
-    //   * pointlessly invalidates the per-target singleflight gate
-    //     in `get_or_open_ssh_session`
-    //
-    // Key format must match `sftp_cache_key`.
-    let auth_mode_key = match &config.auth {
-        AuthMethod::Agent => "agent",
-        AuthMethod::Auto | AuthMethod::AutoChain { .. } => "auto",
-        AuthMethod::PublicKeyFile { .. } => "key",
-        _ => "password",
-    };
-    let cache_key = sftp_cache_key(&config.host, config.port, &config.user, auth_mode_key);
-    let cached = {
-        state
-            .sftp_sessions
-            .lock()
-            .ok()
-            .and_then(|cache| cache.get(&cache_key).cloned())
-    };
-    let session: SshSession = if let Some(arc) = cached {
-        // Clone yields a second Arc-handle to the same russh
-        // connection; the cache keeps the original alive so closing
-        // this terminal tab won't drop the panel-side session.
-        SshSession::clone(&*arc)
-    } else {
-        let fresh = ssh_connect_with_egress(&config)?;
-        if let Ok(mut cache) = state.sftp_sessions.lock() {
-            cache.insert(cache_key, Arc::new(fresh.clone()));
+    // Terminal creation must use the same cache + singleflight gate as
+    // right-side panels. Otherwise React StrictMode / quick tab opens can
+    // run two first-contact handshakes in parallel, producing duplicate
+    // host-key prompts and leaving the first cancelled terminal to consume
+    // the user's Trust decision.
+    let (auth_mode_key, password, key_path) = match (&config.auth, saved_index.is_some()) {
+        (AuthMethod::Agent, _) => ("agent", String::new(), String::new()),
+        (AuthMethod::Auto | AuthMethod::AutoChain { .. }, _) => {
+            ("auto", String::new(), String::new())
         }
-        fresh
+        (AuthMethod::PublicKeyFile { private_key_path, .. }, false) => {
+            ("key", String::new(), private_key_path.clone())
+        }
+        (AuthMethod::PublicKeyFile { .. }, true) => ("key", String::new(), String::new()),
+        (AuthMethod::DirectPassword { password }, false) => {
+            ("password", password.clone(), String::new())
+        }
+        // Saved profiles should be reopened from the stored SshConfig so
+        // keychain passwords, encrypted-key passphrases, and egress settings
+        // remain authoritative instead of being reconstructed from tab state.
+        (AuthMethod::DirectPassword { .. }, true)
+        | (AuthMethod::KeychainPassword { .. }, _) => {
+            ("password", String::new(), String::new())
+        }
     };
+    let session = get_or_open_ssh_session(
+        &state,
+        &config.host,
+        config.port,
+        &config.user,
+        auth_mode_key,
+        &password,
+        &key_path,
+        saved_index,
+    )?;
+    let session = SshSession::clone(&*session);
 
     let (session_id, mut notify_ctx) = allocate_notify_context(&state, app);
     let user_data = &mut *notify_ctx as *mut NotifyContext as *mut c_void;
@@ -5317,7 +5316,7 @@ fn terminal_create_ssh(
     key_path: Option<String>,
 ) -> Result<TerminalSessionInfo, String> {
     let config = build_manual_ssh_config(host, port, user, auth_mode, password, key_path)?;
-    create_ssh_terminal_from_config(state, app, config, cols, rows)
+    create_ssh_terminal_from_config(state, app, config, None, cols, rows)
 }
 
 #[tauri::command]
@@ -5329,7 +5328,7 @@ fn terminal_create_ssh_saved(
     index: usize,
 ) -> Result<TerminalSessionInfo, String> {
     let config = open_saved_ssh_config(index)?;
-    create_ssh_terminal_from_config(state, app, config, cols, rows)
+    create_ssh_terminal_from_config(state, app, config, Some(index), cols, rows)
 }
 
 #[tauri::command]

@@ -6238,7 +6238,36 @@ fn docker_overview_impl(
 }
 
 #[tauri::command]
-fn docker_images(
+async fn docker_images(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<Vec<DockerImageView>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_images_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+    .map_err(|error| format!("docker_images join: {error}"))?
+}
+
+fn docker_images_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -6275,7 +6304,36 @@ fn docker_images(
 }
 
 #[tauri::command]
-fn docker_volumes(
+async fn docker_volumes(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<Vec<DockerVolumeView>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_volumes_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+    .map_err(|error| format!("docker_volumes join: {error}"))?
+}
+
+fn docker_volumes_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -6313,7 +6371,36 @@ fn docker_volumes(
 }
 
 #[tauri::command]
-fn docker_networks(
+async fn docker_networks(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<Vec<DockerNetworkView>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_networks_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+    .map_err(|error| format!("docker_networks join: {error}"))?
+}
+
+fn docker_networks_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -6359,7 +6446,36 @@ struct DockerContainerStatsView {
 }
 
 #[tauri::command]
-fn docker_stats(
+async fn docker_stats(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<Vec<DockerContainerStatsView>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_stats_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+    .map_err(|error| format!("docker_stats join: {error}"))?
+}
+
+fn docker_stats_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -6403,7 +6519,36 @@ struct DockerVolumeUsageView {
 }
 
 #[tauri::command]
-fn docker_volume_usage(
+async fn docker_volume_usage(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<Vec<DockerVolumeUsageView>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_volume_usage_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+    .map_err(|error| format!("docker_volume_usage join: {error}"))?
+}
+
+fn docker_volume_usage_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,

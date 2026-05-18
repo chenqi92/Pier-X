@@ -5303,8 +5303,7 @@ fn terminal_create(
 }
 
 #[tauri::command]
-fn terminal_create_ssh(
-    state: tauri::State<'_, AppState>,
+async fn terminal_create_ssh(
     app: tauri::AppHandle,
     cols: u16,
     rows: u16,
@@ -5315,20 +5314,29 @@ fn terminal_create_ssh(
     password: Option<String>,
     key_path: Option<String>,
 ) -> Result<TerminalSessionInfo, String> {
-    let config = build_manual_ssh_config(host, port, user, auth_mode, password, key_path)?;
-    create_ssh_terminal_from_config(state, app, config, None, cols, rows)
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = build_manual_ssh_config(host, port, user, auth_mode, password, key_path)?;
+        let state: tauri::State<'_, AppState> = app.state();
+        create_ssh_terminal_from_config(state, app.clone(), config, None, cols, rows)
+    })
+    .await
+    .map_err(|error| format!("terminal_create_ssh join: {error}"))?
 }
 
 #[tauri::command]
-fn terminal_create_ssh_saved(
-    state: tauri::State<'_, AppState>,
+async fn terminal_create_ssh_saved(
     app: tauri::AppHandle,
     cols: u16,
     rows: u16,
     index: usize,
 ) -> Result<TerminalSessionInfo, String> {
-    let config = open_saved_ssh_config(index)?;
-    create_ssh_terminal_from_config(state, app, config, Some(index), cols, rows)
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = open_saved_ssh_config(index)?;
+        let state: tauri::State<'_, AppState> = app.state();
+        create_ssh_terminal_from_config(state, app.clone(), config, Some(index), cols, rows)
+    })
+    .await
+    .map_err(|error| format!("terminal_create_ssh_saved join: {error}"))?
 }
 
 #[tauri::command]

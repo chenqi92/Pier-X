@@ -6152,7 +6152,38 @@ fn ssh_key_list() -> Result<Vec<SshKeyEntry>, String> {
 // ── Docker ──────────────────────────────────────────────────────────
 
 #[tauri::command]
-fn docker_overview(
+async fn docker_overview(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    all: bool,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<DockerOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_overview_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            all,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+    .map_err(|error| format!("docker_overview join: {error}"))?
+}
+
+fn docker_overview_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,

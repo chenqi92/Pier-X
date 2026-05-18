@@ -17,7 +17,22 @@ export const useStatusStore = create<StatusState>((set) => ({
   behind: 0,
   terminalCols: null,
   terminalRows: null,
-  setGitStatus: (branch, ahead, behind) => set({ branch, ahead, behind }),
-  clearGitStatus: () => set({ branch: null, ahead: 0, behind: 0 }),
-  setTerminalSize: (terminalCols, terminalRows) => set({ terminalCols, terminalRows }),
+  setGitStatus: (branch, ahead, behind) =>
+    set((state) =>
+      state.branch === branch && state.ahead === ahead && state.behind === behind
+        ? state
+        : { branch, ahead, behind },
+    ),
+  clearGitStatus: () =>
+    set((state) =>
+      state.branch === null && state.ahead === 0 && state.behind === 0
+        ? state
+        : { branch: null, ahead: 0, behind: 0 },
+    ),
+  setTerminalSize: (terminalCols, terminalRows) =>
+    set((state) =>
+      state.terminalCols === terminalCols && state.terminalRows === terminalRows
+        ? state
+        : { terminalCols, terminalRows },
+    ),
 }));

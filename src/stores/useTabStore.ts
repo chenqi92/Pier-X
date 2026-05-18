@@ -165,6 +165,34 @@ function savePersisted(state: PersistedShape) {
   saveTimer = setTimeout(flushSave, 250);
 }
 
+const NON_PERSISTED_PATCH_KEYS = new Set<keyof TabState>([
+  "terminalSessionId",
+  "currentShellUser",
+  "sshPassword",
+  "nestedSshTarget",
+  "redisPassword",
+  "redisTunnelId",
+  "redisTunnelPort",
+  "mysqlPassword",
+  "mysqlTunnelId",
+  "mysqlTunnelPort",
+  "pgPassword",
+  "pgTunnelId",
+  "pgTunnelPort",
+]);
+
+function shouldPersistPatch(patch: Partial<TabState>): boolean {
+  const keys = Object.keys(patch) as Array<keyof TabState>;
+  return keys.length === 0 || keys.some((key) => !NON_PERSISTED_PATCH_KEYS.has(key));
+}
+
+function tabPatchChanges(tab: TabState, patch: Partial<TabState>): boolean {
+  for (const key of Object.keys(patch) as Array<keyof TabState>) {
+    if (!Object.is(tab[key], patch[key])) return true;
+  }
+  return false;
+}
+
 // Module-scope counter for tab id generation. Seeded from any
 // persisted state so rehydrated ids (`tab-5`) don't collide with
 // fresh ones (`tab-1`).
@@ -335,15 +363,23 @@ export const useTabStore = create<TabStore>((set, get) => ({
   },
 
   setActiveTab: (id) => {
+    if (get().activeTabId === id) return;
     set({ activeTabId: id });
     savePersisted(get());
   },
 
   updateTab: (id, patch) => {
-    set((s) => ({
-      tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)),
-    }));
-    savePersisted(get());
+    let changed = false;
+    set((s) => {
+      const tabs = s.tabs.map((t) => {
+        if (t.id !== id) return t;
+        if (!tabPatchChanges(t, patch)) return t;
+        changed = true;
+        return { ...t, ...patch };
+      });
+      return changed ? { tabs } : s;
+    });
+    if (changed && shouldPersistPatch(patch)) savePersisted(get());
   },
 
   moveTab: (fromIndex, toIndex) => {

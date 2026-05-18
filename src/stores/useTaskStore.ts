@@ -62,11 +62,19 @@ export const useTaskStore = create<TaskStore>((set) => ({
   },
 
   update: (id, patch) => {
-    set((s) => ({
-      tasks: s.tasks.map((t) =>
-        t.id === id && t.status === "running" ? { ...t, ...patch } : t,
-      ),
-    }));
+    set((s) => {
+      let changed = false;
+      const keys = Object.keys(patch) as Array<keyof typeof patch>;
+      const tasks = s.tasks.map((t) => {
+        if (t.id !== id || t.status !== "running") return t;
+        if (keys.every((key) => Object.is(t[key], patch[key]))) {
+          return t;
+        }
+        changed = true;
+        return { ...t, ...patch };
+      });
+      return changed ? { tasks } : s;
+    });
   },
 
   finish: (id, { status, result }) => {

@@ -1,5 +1,5 @@
 import type { RightTool, TabState } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
+import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { isBrowsableRepoPath } from "../lib/browserPath";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
@@ -43,6 +43,8 @@ type Props = {
 };
 
 type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "search" | "sftp" | "firewall" | "webserver" | "software";
+
+const DB_DETECTION_TOOLS = new Set<RightTool>(["mysql", "postgres", "redis"]);
 
 function renderSplash(
   kind: SplashTool,
@@ -181,6 +183,7 @@ export default function RightSidebar({
   // when `ssh user@host` is typed inside an existing SSH session.
   const activeSshTarget = activeTab ? effectiveSshTarget(activeTab) : null;
   const hasRemoteContext = activeSshTarget !== null;
+  const activeSshReady = isSshTargetReady(activeSshTarget);
   const unknownTool = t("Unknown tool.");
 
   // Keep-alive: once a tool has been opened for the current tab, its panel
@@ -248,30 +251,41 @@ export default function RightSidebar({
     // session to come up so detect_services hits the cached
     // russh handle instead of racing the terminal's own handshake
     // — same reasoning as the gating in ServerMonitorPanel.
-    if (!activeTab || !activeSshTarget) return;
+    if (!activeTab || !activeSshTarget || !activeSshReady) return;
     if (detectedEntry) return;
     if (activeTab.backend === "ssh" && activeTab.terminalSessionId === null) return;
-    setPending(activeTab.id);
     const tabId = activeTab.id;
-    cmd
-      .detectServices({
-        host: activeSshTarget.host,
-        port: activeSshTarget.port,
-        user: activeSshTarget.user,
-        authMode: activeSshTarget.authMode,
-        password: activeSshTarget.password,
-        keyPath: activeSshTarget.keyPath,
-        savedConnectionIndex: activeSshTarget.savedConnectionIndex,
-      })
-      .then((services) => {
-        const tools: RightTool[] = [];
-        for (const svc of services) {
-          const tool = mapServiceToTool(svc.name);
-          if (tool) tools.push(tool);
-        }
-        setReady(tabId, tools);
-      })
-      .catch(() => setError(tabId));
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      setPending(tabId);
+      cmd
+        .detectServices({
+          host: activeSshTarget.host,
+          port: activeSshTarget.port,
+          user: activeSshTarget.user,
+          authMode: activeSshTarget.authMode,
+          password: activeSshTarget.password,
+          keyPath: activeSshTarget.keyPath,
+          savedConnectionIndex: activeSshTarget.savedConnectionIndex,
+        })
+        .then((services) => {
+          if (cancelled) return;
+          const tools: RightTool[] = [];
+          for (const svc of services) {
+            const tool = mapServiceToTool(svc.name);
+            if (tool) tools.push(tool);
+          }
+          setReady(tabId, tools);
+        })
+        .catch(() => {
+          if (!cancelled) setError(tabId);
+        });
+    }, 600);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
     // The full password value is intentionally NOT in the deps —
     // the in-memory secret can come and go via async resolution and
     // we don't want detection re-firing mid-flight. We DO depend on
@@ -287,6 +301,7 @@ export default function RightSidebar({
     activeSshTarget?.port,
     activeSshTarget?.user,
     activeSshTarget?.authMode,
+    activeSshReady,
     (activeSshTarget?.password.length ?? 0) > 0,
     detectedEntry,
     setPending,
@@ -294,40 +309,51 @@ export default function RightSidebar({
     setError,
   ]);
 
-  // Eager DB instance detection alongside service-chip detection.
-  // Same gating — SSH target available, terminal handshake done
-  // for ssh-backend tabs. Pre-populating the store means the first
-  // time a user opens the MySQL / Postgres / Redis picker they see
-  // the candidate list immediately without waiting on a fresh probe.
-  // Re-uses the picker's 60s TTL: already-fresh entries are skipped.
+  // Eager DB instance detection used to run immediately after every
+  // SSH connect, alongside service chips and the monitor's first full
+  // probe. That stacked three remote command batches on the first
+  // handshake. Keep DB detection lazy: run it when a DB panel becomes
+  // the visible tool, where its splash can show progress.
   useEffect(() => {
-    if (!activeTab || !activeSshTarget) return;
+    if (!activeTab || !activeSshTarget || !activeSshReady) return;
+    if (!DB_DETECTION_TOOLS.has(activeTool)) return;
     if (activeTab.backend === "ssh" && activeTab.terminalSessionId === null) return;
     const entry = useDetectedServicesStore.getState().instancesByTab[activeTab.id];
     const fresh = entry?.status === "ready" && Date.now() - entry.at < 60_000;
     if (fresh || entry?.status === "pending") return;
-    setDbInstancesPending(activeTab.id);
     const tabId = activeTab.id;
-    cmd
-      .dbDetect({
-        host: activeSshTarget.host,
-        port: activeSshTarget.port,
-        user: activeSshTarget.user,
-        authMode: activeSshTarget.authMode,
-        password: activeSshTarget.password,
-        keyPath: activeSshTarget.keyPath,
-        savedConnectionIndex: activeSshTarget.savedConnectionIndex,
-      })
-      .then((report) => {
-        setDbInstances(tabId, {
-          instances: report.instances,
-          mysqlCli: report.mysqlCli,
-          psqlCli: report.psqlCli,
-          redisCli: report.redisCli,
-          sqliteCli: report.sqliteCli,
+    let cancelled = false;
+    setDbInstancesPending(tabId);
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      cmd
+        .dbDetect({
+          host: activeSshTarget.host,
+          port: activeSshTarget.port,
+          user: activeSshTarget.user,
+          authMode: activeSshTarget.authMode,
+          password: activeSshTarget.password,
+          keyPath: activeSshTarget.keyPath,
+          savedConnectionIndex: activeSshTarget.savedConnectionIndex,
+        })
+        .then((report) => {
+          if (cancelled) return;
+          setDbInstances(tabId, {
+            instances: report.instances,
+            mysqlCli: report.mysqlCli,
+            psqlCli: report.psqlCli,
+            redisCli: report.redisCli,
+            sqliteCli: report.sqliteCli,
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setDbInstancesError(tabId);
         });
-      })
-      .catch(() => setDbInstancesError(tabId));
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
     // Mirrors the dep list of the service-chip effect above —
     // boolean presence of password, not its value, so mid-flight
     // re-renders don't re-fire detection.
@@ -340,7 +366,9 @@ export default function RightSidebar({
     activeSshTarget?.port,
     activeSshTarget?.user,
     activeSshTarget?.authMode,
+    activeSshReady,
     (activeSshTarget?.password.length ?? 0) > 0,
+    activeTool,
     setDbInstancesPending,
     setDbInstances,
     setDbInstancesError,

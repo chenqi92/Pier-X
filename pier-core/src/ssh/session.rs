@@ -268,11 +268,15 @@ impl SshSession {
 
         match &config.auth {
             AuthMethod::DirectPassword { password } => {
-                tried.push("password (in-memory)".to_string());
-                self.try_password_auth(&config.user, password).await?;
+                self.try_password_or_keyboard_interactive(
+                    &config.user,
+                    password,
+                    "password (in-memory)",
+                    &mut tried,
+                )
+                .await?;
             }
             AuthMethod::KeychainPassword { credential_id } => {
-                tried.push(format!("password (keychain={credential_id})"));
                 // Look the password up from the OS keyring at
                 // connect time. The plaintext only ever lives in
                 // this stack frame, never on disk and never on
@@ -290,7 +294,13 @@ impl SshSession {
                         )));
                     }
                 };
-                self.try_password_auth(&config.user, &password).await?;
+                self.try_password_or_keyboard_interactive(
+                    &config.user,
+                    &password,
+                    &format!("password (keychain={credential_id})"),
+                    &mut tried,
+                )
+                .await?;
             }
             AuthMethod::PublicKeyFile {
                 private_key_path,
@@ -552,6 +562,43 @@ impl SshSession {
         Err(SshError::AuthRejected {
             tried: vec!["keyboard-interactive (prompt loop exceeded)".to_string()],
         })
+    }
+
+    /// Password saved by Pier-X must behave like the system `ssh`
+    /// client's password prompt. Many PAM-backed servers advertise
+    /// that prompt as `keyboard-interactive` instead of the SSH
+    /// `password` method, so try both with the same secret before
+    /// reporting a rejection.
+    async fn try_password_or_keyboard_interactive(
+        &mut self,
+        user: &str,
+        password: &str,
+        password_label: &str,
+        tried: &mut Vec<String>,
+    ) -> Result<()> {
+        tried.push(password_label.to_string());
+        match self.try_password_auth(user, password).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                log::debug!(
+                    "password auth via {password_label} failed; trying keyboard-interactive: {e}"
+                );
+            }
+        }
+
+        tried.push("keyboard-interactive".to_string());
+        match self
+            .try_keyboard_interactive_with_password(user, password)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                log::debug!("keyboard-interactive password fallback failed: {e}");
+                Err(SshError::AuthRejected {
+                    tried: tried.clone(),
+                })
+            }
+        }
     }
 
     /// Shared body of both password-based auth methods. Tries the

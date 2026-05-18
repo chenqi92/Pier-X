@@ -1490,22 +1490,13 @@ fn map_postgres_query_result(
     }
 }
 
-fn build_ssh_session_from_params(
-    host: &str,
-    port: u16,
-    user: &str,
+fn auth_method_from_params(
     auth_mode: &str,
     password: &str,
     key_path: &str,
     key_passphrase: Option<&str>,
-) -> Result<SshSession, String> {
-    let resolved_host = host.trim();
-    let resolved_user = user.trim();
-    if resolved_host.is_empty() || resolved_user.is_empty() {
-        return Err(String::from("SSH host and user must not be empty."));
-    }
-    let _ = key_passphrase; // currently only AutoChain consumes it
-    let auth = match auth_mode {
+) -> AuthMethod {
+    match auth_mode {
         "key" => AuthMethod::PublicKeyFile {
             private_key_path: key_path.to_string(),
             passphrase_credential_id: None,
@@ -1518,8 +1509,8 @@ fn build_ssh_session_from_params(
         // every method we have evidence for on a SINGLE SSH
         // transport (one TCP/kex, N userauth rounds, OpenSSH-style
         // preference order). Threading `key_path` and `password`
-        // through means a captured interactive password is no longer
-        // dropped silently the way plain `AuthMethod::Auto` did.
+        // through means a captured interactive password is not
+        // dropped silently the way plain `AuthMethod::Auto` would.
         "auto" => AuthMethod::AutoChain {
             explicit_key_path: if key_path.is_empty() {
                 None
@@ -1538,14 +1529,30 @@ fn build_ssh_session_from_params(
         _ => AuthMethod::DirectPassword {
             password: password.to_string(),
         },
-    };
+    }
+}
+
+fn build_ssh_session_from_params(
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+    key_passphrase: Option<&str>,
+) -> Result<SshSession, String> {
+    let resolved_host = host.trim();
+    let resolved_user = user.trim();
+    if resolved_host.is_empty() || resolved_user.is_empty() {
+        return Err(String::from("SSH host and user must not be empty."));
+    }
     let mut config = SshConfig::new(
         String::new(),
         resolved_host.to_string(),
         resolved_user.to_string(),
     );
     config.port = normalize_ssh_port(port);
-    config.auth = auth;
+    config.auth = auth_method_from_params(auth_mode, password, key_path, key_passphrase);
     ssh_connect_with_egress(&config)
 }
 
@@ -1568,37 +1575,30 @@ fn build_ssh_session_saved_or_params(
     key_path: &str,
     key_passphrase: Option<&str>,
 ) -> Result<SshSession, String> {
-    // Prefer the explicit param path whenever the caller hands us a
-    // non-empty credential — that's the most recent intent (a
-    // captured terminal password, a freshly typed dialog entry, etc.)
-    // and bypasses the saved-config's KeychainPassword path which
-    // would otherwise blow up with "saved password missing in
-    // keychain" the moment the OS credential store is empty or out
-    // of sync. Without this short-circuit, panels that route through
-    // `build_ssh_session_saved_or_params` (Docker, SFTP, MySQL/PG/
-    // Redis tunnels) regress whenever the keychain is missing even
-    // though Server Monitor — which uses the params path directly —
-    // happily connects.
-    let have_param_credential = match auth_mode {
+    // For saved connections, keep the persisted SshConfig as the
+    // source of routing truth (egress profile, jump host, stored key
+    // path, etc.). If the frontend supplies a fresh credential
+    // (captured terminal password, retyped password, explicit key),
+    // override only the auth method on that saved config instead of
+    // falling back to an ad-hoc config that would silently drop egress.
+    let have_explicit_param_credential = match auth_mode {
         "password" => !password.is_empty(),
         "key" => !key_path.is_empty(),
-        "agent" | "auto" => true,
+        "auto" => {
+            !password.is_empty()
+                || !key_path.is_empty()
+                || key_passphrase.is_some_and(|p| !p.is_empty())
+        }
+        "agent" => false,
         _ => false,
     };
-    if have_param_credential {
-        return build_ssh_session_from_params(
-            host,
-            port,
-            user,
-            auth_mode,
-            password,
-            key_path,
-            key_passphrase,
-        );
-    }
 
     if let Some(index) = saved_index {
-        if let Ok(config) = open_saved_ssh_config(index) {
+        if let Ok(mut config) = open_saved_ssh_config(index) {
+            if have_explicit_param_credential {
+                config.auth =
+                    auth_method_from_params(auth_mode, password, key_path, key_passphrase);
+            }
             return ssh_connect_with_egress(&config);
         }
     }
@@ -7041,8 +7041,8 @@ fn ssh_cred_cache_forget(
 // ── Service Detection ────────────────────────────────────────────
 
 #[tauri::command]
-fn detect_services(
-    state: tauri::State<'_, AppState>,
+async fn detect_services(
+    app: tauri::AppHandle,
     host: String,
     port: u16,
     user: String,
@@ -7051,32 +7051,37 @@ fn detect_services(
     key_path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<Vec<DetectedServiceView>, String> {
-    // Same shared-cache strategy as `server_monitor_probe`: reuse
-    // the terminal's russh handle when it's already there, prime
-    // the cache otherwise. The detector runs several `which` /
-    // `--version` probes serially over one SSH session, so a fresh
-    // handshake per call is wasteful on slow links.
-    let session = get_or_open_ssh_session(
-        &state,
-        &host,
-        port,
-        &user,
-        &auth_mode,
-        &password,
-        &key_path,
-        saved_connection_index,
-    )?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        // Same shared-cache strategy as `server_monitor_probe`: reuse
+        // the terminal's russh handle when it's already there, prime
+        // the cache otherwise. The detector runs several `which` /
+        // `--version` probes serially over one SSH session, so a fresh
+        // handshake per call is wasteful on slow links.
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
 
-    let services = service_detector::detect_all_blocking(&session);
-    Ok(services
-        .into_iter()
-        .map(|s| DetectedServiceView {
-            name: s.name,
-            version: s.version,
-            status: format!("{:?}", s.status),
-            port: s.port,
-        })
-        .collect())
+        let services = service_detector::detect_all_blocking(&session);
+        Ok(services
+            .into_iter()
+            .map(|s| DetectedServiceView {
+                name: s.name,
+                version: s.version,
+                status: format!("{:?}", s.status),
+                port: s.port,
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| format!("detect_services join: {e}"))?
 }
 
 // ── DB Instance Detection ───────────────────────────────────────
@@ -7087,8 +7092,8 @@ fn detect_services(
 /// already-open SSH session cache. See
 /// [`pier_core::ssh::db_detect`] for the algorithm.
 #[tauri::command]
-fn db_detect(
-    state: tauri::State<'_, AppState>,
+async fn db_detect(
+    app: tauri::AppHandle,
     host: String,
     port: u16,
     user: String,
@@ -7097,18 +7102,23 @@ fn db_detect(
     key_path: String,
     saved_connection_index: Option<usize>,
 ) -> Result<DbDetectionReportView, String> {
-    let session = get_or_open_ssh_session(
-        &state,
-        &host,
-        port,
-        &user,
-        &auth_mode,
-        &password,
-        &key_path,
-        saved_connection_index,
-    )?;
-    let report = db_detect::detect_blocking(&session);
-    Ok(map_db_detection_report(report))
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let report = db_detect::detect_blocking(&session);
+        Ok(map_db_detection_report(report))
+    })
+    .await
+    .map_err(|e| format!("db_detect join: {e}"))?
 }
 
 // ── DB Credential CRUD ──────────────────────────────────────────

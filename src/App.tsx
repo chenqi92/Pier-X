@@ -15,7 +15,6 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { openUrl, openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { getLogFilePath } from "./lib/logger";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
@@ -84,6 +83,21 @@ const SettingsDialog = lazy(() => import("./components/SettingsDialog"));
 const BroadcastDialog = lazy(() => import("./shell/BroadcastDialog"));
 const NewConnectionDialog = lazy(() => import("./shell/NewConnectionDialog"));
 const PortForwardDialog = lazy(() => import("./components/PortForwardDialog"));
+
+async function openExternalUrl(url: string): Promise<void> {
+  const { openUrl } = await import("@tauri-apps/plugin-opener");
+  await openUrl(url);
+}
+
+async function openExternalPath(path: string): Promise<void> {
+  const { openPath } = await import("@tauri-apps/plugin-opener");
+  await openPath(path);
+}
+
+async function revealExternalItem(path: string): Promise<void> {
+  const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+  await revealItemInDir(path);
+}
 
 const MARKDOWN_EXTENSIONS = /\.(md|markdown|mdown|mkdn|mkd|mdx)$/i;
 const PANE_STORAGE_KEY = "pierx:pane-widths";
@@ -395,7 +409,7 @@ function App() {
           // toast so we don't steal focus from whatever the user
           // was about to do.
           if (mode === "manual") {
-            void openUrl(result.releaseUrl || RELEASES_PAGE).catch(() => {});
+            void openExternalUrl(result.releaseUrl || RELEASES_PAGE).catch(() => {});
           }
         } else if (mode === "manual") {
           toast.info(i18n.t("Pier-X is up to date ({current})", { current: result.currentVersion }));
@@ -777,8 +791,8 @@ function App() {
             setSettingsOpen(true);
           } },
           { divider: true },
-          { label: i18n.t("Documentation"), action: () => { void openUrl("https://github.com/chenqi92/Pier-X#readme"); } },
-          { label: i18n.t("Report an issue"), action: () => { void openUrl("https://github.com/chenqi92/Pier-X/issues/new"); } },
+          { label: i18n.t("Documentation"), action: () => { void openExternalUrl("https://github.com/chenqi92/Pier-X#readme"); } },
+          { label: i18n.t("Report an issue"), action: () => { void openExternalUrl("https://github.com/chenqi92/Pier-X/issues/new"); } },
           { divider: true },
           {
             label: i18n.t("Open log file"),
@@ -786,7 +800,7 @@ function App() {
               void (async () => {
                 const p = await getLogFilePath();
                 if (!p) return;
-                await openPath(p).catch((e) => toast.error(String(e)));
+                await openExternalPath(p).catch((e) => toast.error(String(e)));
               })();
             },
           },
@@ -796,7 +810,7 @@ function App() {
               void (async () => {
                 const p = await getLogFilePath();
                 if (!p) return;
-                await revealItemInDir(p).catch((e) => toast.error(String(e)));
+                await revealExternalItem(p).catch((e) => toast.error(String(e)));
               })();
             },
           },
@@ -930,6 +944,7 @@ function App() {
             onPathChange={setBrowserPath}
             onFileSelect={handleFileSelect}
             selectedFilePath={selectedMarkdownPath}
+            coreInfo={coreInfo}
             workspaceRoot={coreInfo?.workspaceRoot}
             onBroadcastToIndices={(indices) => {
               // Resolve saved-connection indices → tab ids by

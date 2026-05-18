@@ -115,25 +115,39 @@ export default function WelcomeView({
     return () => window.clearInterval(id);
   }, []);
 
-  // Quick TCP probe of every saved connection so each row in the
-  // recents/savers list lights up green/red the moment the user
-  // sees the welcome screen. Runs once on mount and refreshes
-  // every 90 s while the welcome view is visible. We deliberately
-  // pick a longer cadence than the dedicated dashboard (60 s) —
-  // the welcome view is a quick-glance entry point, not a
-  // sustained monitoring surface, and a slower refresh keeps
-  // network traffic minimal even on multi-30-host setups.
-  const [probes, setProbes] = useState<Record<number, cmd.HostHealthReport>>({});
-  const allIndices = useMemo(
-    () => connections.map((c) => c.index),
+  const recentCandidates = useMemo(
+    () =>
+      connections
+        .map((c) => ({ conn: c, ts: recents[c.index] ?? 0 }))
+        .filter((r) => r.ts > 0)
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, 12),
+    [connections, recents],
+  );
+  const savedCandidates = useMemo(
+    () => connections.slice(0, 12),
     [connections],
   );
+
+  // Quick TCP probe for only the rows this welcome screen can render.
+  // Full-fleet reachability belongs to HostsHealthPanel; probing every
+  // saved host here made an empty workspace launch noisy on large fleets.
+  const [probes, setProbes] = useState<Record<number, cmd.HostHealthReport>>({});
+  const visibleProbeIndices = useMemo(
+    () =>
+      recentCandidates.length > 0
+        ? recentCandidates.map(({ conn }) => conn.index)
+        : savedCandidates.map((conn) => conn.index),
+    [recentCandidates, savedCandidates],
+  );
+  const visibleProbeKey = visibleProbeIndices.join(",");
   useEffect(() => {
-    if (allIndices.length === 0) return;
+    if (visibleProbeIndices.length === 0) return;
     let cancelled = false;
+    let initialTimer: number | null = null;
     const tick = () => {
       void cmd
-        .hostHealthProbe({ indices: allIndices, timeoutMs: 3000 })
+        .hostHealthProbe({ indices: visibleProbeIndices, timeoutMs: 3000 })
         .then((reports) => {
           if (cancelled) return;
           setProbes((prev) => {
@@ -150,17 +164,14 @@ export default function WelcomeView({
           /* probe failures already surface inside per-row data; silent here */
         });
     };
-    tick();
+    initialTimer = window.setTimeout(tick, 750);
     const id = window.setInterval(tick, 90_000);
     return () => {
       cancelled = true;
+      if (initialTimer !== null) window.clearTimeout(initialTimer);
       window.clearInterval(id);
     };
-    // We re-arm only when the saved-connection list changes — a
-    // stale interval probing a removed host is harmless (the
-    // backend reports `error` for unknown indices) but recreating
-    // the interval also picks up newly-added hosts immediately.
-  }, [allIndices.length]);
+  }, [visibleProbeKey]);
 
   const isMac = navigator.platform.includes("Mac");
   const mod = isMac ? "⌘" : "Ctrl+";
@@ -191,21 +202,19 @@ export default function WelcomeView({
     }
   };
 
-  const recentList = connections
-    .map((c) => ({ conn: c, ts: recents[c.index] ?? 0 }))
-    .filter((r) => r.ts > 0)
+  const recentList = recentCandidates
+    .slice()
     .sort((a, b) => {
       const wa = probeWeight(a.conn.index);
       const wb = probeWeight(b.conn.index);
       if (wa !== wb) return wa - wb;
       return b.ts - a.ts;
-    })
-    .slice(0, 12);
+    });
 
   // Saved-servers fallback list (shown when there are no recents
   // yet) gets the same online-first treatment.
   const savedSorted = useMemo(() => {
-    return [...connections].sort((a, b) => {
+    return [...savedCandidates].sort((a, b) => {
       const wa = probeWeight(a.index);
       const wb = probeWeight(b.index);
       if (wa !== wb) return wa - wb;
@@ -213,7 +222,7 @@ export default function WelcomeView({
     });
     // probeWeight closes over `probes` so include it as a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections, probes]);
+  }, [probes, savedCandidates]);
 
   const shellLabel = workspaceRoot
     ? `zsh · ${workspaceRoot.split(/[/\\]/).pop() || "~"}`

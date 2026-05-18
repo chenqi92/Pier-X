@@ -24,7 +24,6 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type {
   DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
@@ -65,6 +64,7 @@ type Props = {
   /** Open the broadcast dialog with these saved-connection indices
    *  pre-selected (resolved to tab ids by the App layer). */
   onBroadcastToIndices?: (indices: number[]) => void;
+  coreInfo?: CoreInfo | null;
 };
 
 type ServiceChip = {
@@ -455,14 +455,11 @@ function shortPathLabel(path: string, homeDir: string): string {
   return normalized;
 }
 
-export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, onFileSelect, selectedFilePath, workspaceRoot, onBroadcastToIndices }: Props) {
+export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, onFileSelect, selectedFilePath, workspaceRoot, onBroadcastToIndices, coreInfo }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<0 | 1>(0);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [currentPath, setCurrentPath] = useState("");
-  const [homeDir, setHomeDir] = useState("");
-  const [platform, setPlatform] = useState<CoreInfo["platform"] | "">("");
-  const [coreWorkspaceRoot, setCoreWorkspaceRoot] = useState("");
   const [pathHistory, setPathHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [searchText, setSearchText] = useState("");
@@ -483,20 +480,18 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
     return () => window.clearTimeout(timer);
   }, [notice]);
   const reportError = (e: unknown) => setNotice(localizeError(e, t));
+  const homeDir = coreInfo?.homeDir ?? "";
+  const platform = coreInfo?.platform ?? "";
+  const coreWorkspaceRoot = coreInfo?.workspaceRoot ?? "";
 
   useEffect(() => {
-    cmd.coreInfo().then((info: CoreInfo) => {
-      setHomeDir(info.homeDir);
-      setPlatform(info.platform);
-      setCoreWorkspaceRoot(info.workspaceRoot);
-      const startPath = normalizePath(info.homeDir || info.workspaceRoot);
-      if (!currentPath) {
-        setCurrentPath(startPath);
-        setPathHistory([startPath]);
-        setHistoryIndex(0);
-      }
-    }).catch(reportError);
-  }, []);
+    if (currentPath) return;
+    const startPath = normalizePath(homeDir || coreWorkspaceRoot);
+    if (!startPath) return;
+    setCurrentPath(startPath);
+    setPathHistory([startPath]);
+    setHistoryIndex(0);
+  }, [coreWorkspaceRoot, currentPath, homeDir]);
 
   useEffect(() => {
     if (!currentPath) return;
@@ -529,8 +524,6 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
     if (!currentPath) return;
     onPathChange?.(currentPath);
   }, [currentPath, onPathChange]);
-  useEffect(() => { refreshConnections(); }, []);
-
   const filteredEntries = entries.filter((e) => !searchText.trim() || e.name.toLowerCase().includes(searchText.toLowerCase()));
   const segments = pathSegments(currentPath, homeDir);
   const effectiveWorkspaceRoot = workspaceRoot || coreWorkspaceRoot;
@@ -727,6 +720,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
       action: () => {
         void (async () => {
           try {
+            const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
             const picked = await openDialog({
               directory: true,
               multiple: false,
@@ -1197,6 +1191,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
           onBroadcastToIndices={onBroadcastToIndices}
           onExport={async () => {
             try {
+              const { save: saveDialog } = await import("@tauri-apps/plugin-dialog");
               const picked = await saveDialog({
                 title: t("Export SSH connections"),
                 defaultPath: "pier-x-ssh-connections.json",
@@ -1229,6 +1224,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
           }}
           onImport={async () => {
             try {
+              const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
               const picked = await openDialog({
                 title: t("Import SSH connections"),
                 multiple: false,

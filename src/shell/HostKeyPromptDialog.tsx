@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Copy, KeyRound, ShieldAlert, X } from "lucide-react";
 
-import * as cmd from "../lib/commands";
+import * as cmd from "../lib/shellCommands";
 import { useI18n } from "../i18n/useI18n";
 import { toast } from "../stores/useToastStore";
 import { useHostKeyPromptStore } from "../stores/useHostKeyPromptStore";

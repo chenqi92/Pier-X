@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import * as cmd from "../lib/commands";
+import * as cmd from "../lib/shellCommands";
 import { translate } from "../i18n/useI18n";
 import { useSettingsStore } from "./useSettingsStore";
 import type { RightTool, TabState } from "../lib/types";

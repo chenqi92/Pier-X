@@ -7,7 +7,7 @@ import {
   useTerminalProfilesStore,
   type TerminalProfile,
 } from "../stores/useTerminalProfilesStore";
-import * as cmd from "../lib/commands";
+import * as cmd from "../lib/shellCommands";
 
 type Props = {
   onOpenLocalTerminal: (path?: string) => void;
@@ -51,7 +51,7 @@ function HealthDot({
   probe,
   t,
 }: {
-  probe: import("../lib/commands").HostHealthReport | undefined;
+  probe: import("../lib/shellCommands").HostHealthReport | undefined;
   t: ReturnType<typeof useI18n>["t"];
 }) {
   let cls = "welcome-health-dot welcome-health-dot--unknown";

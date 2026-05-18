@@ -2,7 +2,7 @@ import type { RightTool, TabState } from "../lib/types";
 import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { isBrowsableRepoPath } from "../lib/browserPath";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import * as cmd from "../lib/commands";
+import * as cmd from "../lib/shellCommands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { useI18n } from "../i18n/useI18n";
 import { mapServiceToTool, useDetectedServicesStore } from "../stores/useDetectedServicesStore";

@@ -20,7 +20,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
 import { initDesktopNotifications, desktopNotify } from "./lib/notify";
 import { isBrowsableRepoPath } from "./lib/browserPath";
-import * as cmd from "./lib/commands";
+import * as cmd from "./lib/shellCommands";
 import { RIGHT_TOOL_META } from "./lib/rightToolMeta";
 
 /** Cmd+Alt+1..9 mapping for the active tab's right-side tool. Order

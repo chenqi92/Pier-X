@@ -34,7 +34,7 @@ import { effectiveSshTarget } from "../lib/types";
 import type { CoreInfo, FileEntry, NestedSshTarget, SavedSshConnection, RightTool } from "../lib/types";
 import { DRIVES_PATH } from "../lib/browserPath";
 import { RIGHT_TOOL_META, SERVICE_CHIP_TOOLS, type LucideIcon } from "../lib/rightToolMeta";
-import * as cmd from "../lib/commands";
+import * as cmd from "../lib/shellCommands";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { useConnectionStore } from "../stores/useConnectionStore";

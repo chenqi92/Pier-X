@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { localizeError } from "../i18n/localizeMessage";
 import { translate } from "../i18n/useI18n";
-import * as cmd from "../lib/commands";
+import * as cmd from "../lib/shellCommands";
 import type { EgressProfile } from "../lib/types";
 import { useSettingsStore } from "./useSettingsStore";
 

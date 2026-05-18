@@ -4,8 +4,8 @@ import {
   forgetElevationPassword,
   getElevationPassword,
   setElevationPassword,
-} from "../lib/commands";
-import type { SshParams } from "../lib/commands";
+} from "../lib/shellCommands";
+import type { SshParams } from "../lib/shellCommands";
 
 /** Stable host key — `user@host:port`. Same host accessed under
  *  different SSH users gets a separate credential, which matches

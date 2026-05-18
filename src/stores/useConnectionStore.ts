@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { localizeError } from "../i18n/localizeMessage";
 import { translate } from "../i18n/useI18n";
 import type { SavedSshConnection } from "../lib/types";
-import * as cmd from "../lib/commands";
+import * as cmd from "../lib/shellCommands";
 import { useSettingsStore } from "./useSettingsStore";
 
 type ConnectionStore = {

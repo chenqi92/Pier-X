@@ -1,5 +1,5 @@
 import { Key, Server, Shield, ShieldCheck, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import IconButton from "../components/IconButton";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
@@ -9,7 +9,8 @@ import type { SavedSshConnection } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useEgressStore } from "../stores/useEgressStore";
 import { useSudoStore } from "../stores/useSudoStore";
-import EgressProfilesDialog from "./EgressProfilesDialog";
+
+const EgressProfilesDialog = lazy(() => import("./EgressProfilesDialog"));
 
 type ConnectionDraft = {
   index?: number;
@@ -622,7 +623,11 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
           </button>
         </div>
       </div>
-      <EgressProfilesDialog open={egressDialogOpen} onClose={() => setEgressDialogOpen(false)} />
+      {egressDialogOpen && (
+        <Suspense fallback={null}>
+          <EgressProfilesDialog open onClose={() => setEgressDialogOpen(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }

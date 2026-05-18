@@ -42,7 +42,6 @@ const RIGHT_TOOL_KEY_MAP: RightTool[] = [
 ];
 import type { CoreInfo, FileEntry, RightTool, SavedSshConnection } from "./lib/types";
 import { isToolReachable, resolveReachableTool } from "./lib/types";
-import PortForwardDialog from "./components/PortForwardDialog";
 import PanelSkeleton from "./components/PanelSkeleton";
 import ResizeHandle from "./components/ResizeHandle";
 import Stage from "./components/Stage";
@@ -52,9 +51,7 @@ import { withTask } from "./stores/useTaskStore";
 import type { MenuDef } from "./components/TitlebarMenu";
 import type { PaletteCommand } from "./shell/CommandPalette";
 import HostKeyPromptDialog from "./shell/HostKeyPromptDialog";
-import NewConnectionDialog from "./shell/NewConnectionDialog";
 import TopBar from "./shell/TopBar";
-import BroadcastDialog from "./shell/BroadcastDialog";
 import StatusBar from "./shell/StatusBar";
 import Sidebar from "./shell/Sidebar";
 import TabBar from "./shell/TabBar";
@@ -84,6 +81,9 @@ const TerminalPanel = lazy(() => import("./panels/TerminalPanel"));
 const HostsHealthPanel = lazy(() => import("./panels/HostsHealthPanel"));
 const CommandPalette = lazy(() => import("./shell/CommandPalette"));
 const SettingsDialog = lazy(() => import("./components/SettingsDialog"));
+const BroadcastDialog = lazy(() => import("./shell/BroadcastDialog"));
+const NewConnectionDialog = lazy(() => import("./shell/NewConnectionDialog"));
+const PortForwardDialog = lazy(() => import("./components/PortForwardDialog"));
 
 const MARKDOWN_EXTENSIONS = /\.(md|markdown|mdown|mkdn|mkd|mdx)$/i;
 const PANE_STORAGE_KEY = "pierx:pane-widths";
@@ -1038,48 +1038,56 @@ function App() {
               />
             </Suspense>
           )}
-          <BroadcastDialog
-            open={broadcastOpen}
-            onClose={() => {
-              setBroadcastOpen(false);
-              // Drop the prefilter on close so the next "Broadcast to
-              // terminals" from the menu defaults back to the
-              // all-live-tabs behaviour.
-              setBroadcastPrefilter(null);
-            }}
-            prefilterTabIds={broadcastPrefilter}
-          />
-          <NewConnectionDialog
-            open={newConnOpen}
-            initialConnection={editingConnection}
-            onClose={() => {
-              setNewConnOpen(false);
-              setEditingConnection(null);
-            }}
-            onConnect={openSshTab}
-            onConnectSaved={openSshSaved}
-            onSaved={(savedIndex, password, authKind) => {
-              // Push the freshly-typed credentials into any open tabs
-              // that point at this saved connection. The terminal
-              // session will pick the change up via its create-effect
-              // dep on `tab.sshPassword` and retry connecting — so a
-              // tab that was stuck on the "saved password missing"
-              // error recovers automatically without the user having
-              // to hit Restart.
-              const store = useTabStore.getState();
-              for (const t of store.tabs) {
-                if (t.sshSavedConnectionIndex !== savedIndex) continue;
-                store.updateTab(t.id, {
-                  sshPassword: authKind === "password" ? password : "",
-                  sshAuthMode: authKind as "password" | "agent" | "key",
-                  // Clearing terminalSessionId signals the create
-                  // effect to spin up a fresh session on the next
-                  // tick rather than reuse a dead handle.
-                  terminalSessionId: null,
-                });
-              }
-            }}
-          />
+          {broadcastOpen && (
+            <Suspense fallback={null}>
+              <BroadcastDialog
+                open
+                onClose={() => {
+                  setBroadcastOpen(false);
+                  // Drop the prefilter on close so the next "Broadcast to
+                  // terminals" from the menu defaults back to the
+                  // all-live-tabs behaviour.
+                  setBroadcastPrefilter(null);
+                }}
+                prefilterTabIds={broadcastPrefilter}
+              />
+            </Suspense>
+          )}
+          {newConnOpen && (
+            <Suspense fallback={null}>
+              <NewConnectionDialog
+                open
+                initialConnection={editingConnection}
+                onClose={() => {
+                  setNewConnOpen(false);
+                  setEditingConnection(null);
+                }}
+                onConnect={openSshTab}
+                onConnectSaved={openSshSaved}
+                onSaved={(savedIndex, password, authKind) => {
+                  // Push the freshly-typed credentials into any open tabs
+                  // that point at this saved connection. The terminal
+                  // session will pick the change up via its create-effect
+                  // dep on `tab.sshPassword` and retry connecting — so a
+                  // tab that was stuck on the "saved password missing"
+                  // error recovers automatically without the user having
+                  // to hit Restart.
+                  const store = useTabStore.getState();
+                  for (const t of store.tabs) {
+                    if (t.sshSavedConnectionIndex !== savedIndex) continue;
+                    store.updateTab(t.id, {
+                      sshPassword: authKind === "password" ? password : "",
+                      sshAuthMode: authKind as "password" | "agent" | "key",
+                      // Clearing terminalSessionId signals the create
+                      // effect to spin up a fresh session on the next
+                      // tick rather than reuse a dead handle.
+                      terminalSessionId: null,
+                    });
+                  }
+                }}
+              />
+            </Suspense>
+          )}
           {settingsOpen && (
             <Suspense fallback={null}>
               <SettingsDialog
@@ -1094,10 +1102,14 @@ function App() {
               />
             </Suspense>
           )}
-          <PortForwardDialog
-            open={portForwardOpen}
-            onClose={() => setPortForwardOpen(false)}
-          />
+          {portForwardOpen && (
+            <Suspense fallback={null}>
+              <PortForwardDialog
+                open
+                onClose={() => setPortForwardOpen(false)}
+              />
+            </Suspense>
+          )}
           <HostKeyPromptDialog />
           <TaskTray />
           <ToastStack />

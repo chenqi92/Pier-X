@@ -1,0 +1,231 @@
+/* ── Firewall panel ───────────────────────────────────────────────
+ * Built on top of the .dk-* containers DockerPanel uses so the row /
+ * card / tab strip chrome stays visually consistent. Firewall-specific
+ * additions: a port composer toolbar, inline raw `iptables-save`
+ * <pre> dumps, per-interface bandwidth sparklines, and the
+ * "send-to-terminal" confirmation modal. */
+.fw .fw-composer { gap: var(--sp-2); align-items: center; }
+/* Port input + proto select share `--control-height` so they line up
+ * with the Allow / Deny buttons (`.btn.is-compact` is 24px — we lift
+ * those to control-height too via `.fw-composer .btn.is-compact`).
+ * Without explicit height the browser defaults render `<input>` and
+ * `<select>` at slightly different intrinsic heights. */
+.fw .fw-port-input,
+.fw .fw-proto {
+  height: var(--control-height);
+  box-sizing: border-box;
+  line-height: 1;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+}
+.fw .fw-port-input { width: 96px; }
+.fw .fw-composer .btn.is-compact {
+  height: var(--control-height);
+}
+.fw .fw-policies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--size-micro);
+}
+.fw .fw-section-title {
+  padding: var(--sp-2) var(--sp-3) 0;
+  color: var(--muted);
+  font-size: var(--size-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.fw .fw-pre {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--panel-2);
+  color: var(--ink-2);
+  font-size: var(--ui-fs-sm);
+  line-height: 1.45;
+  white-space: pre;
+  overflow: auto;
+  max-height: 320px;
+  border-bottom: 1px solid var(--line);
+}
+
+.fw .fw-hint {
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.fw .fw-iface {
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+.fw .fw-iface-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+  color: var(--ink);
+}
+.fw .fw-iface-rates {
+  color: var(--ink-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.fw .fw-spark {
+  display: block;
+  width: 100%;
+  height: 24px;
+}
+.fw .fw-spark-empty {
+  background: var(--panel-2);
+  border-radius: var(--radius-xs);
+}
+/* Confirm + custom-rule modals render as siblings of `.fw` (top-level
+ * fragment children of FirewallPanel), so these selectors are
+ * intentionally unscoped — `.fw .fw-confirm-...` would not match.
+ * Class names are unique to the firewall panel to avoid collisions. */
+.fw-confirm-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+.fw-confirm {
+  width: 480px;
+  max-width: 92vw;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog);
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.fw-confirm-title {
+  color: var(--ink);
+  font-size: var(--ui-fs-lg);
+  font-weight: 600;
+}
+.fw-confirm-body {
+  padding: var(--sp-3);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: var(--ui-fs);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.fw-confirm-hint {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+.fw-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+/* Rule-composer dialog (renders inside .fw-confirm) — same root, so
+ * its selectors stay unscoped too. */
+.fw-rule-dialog { width: 520px; }
+.fw-rule-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2) var(--sp-3);
+}
+.fw-rule-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--size-micro);
+  color: var(--muted);
+}
+.fw-rule-field > span {
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.fw-rule-field input,
+.fw-rule-field select {
+  height: var(--control-height);
+  box-sizing: border-box;
+  line-height: 1;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+}
+.fw-rule-field input:disabled {
+  opacity: 0.5;
+}
+
+/* ── Rules tab — chain-grouped cards ──────────────────────────
+ * Each chain (INPUT / OUTPUT / FORWARD) gets one card; the chain
+ * header carries the rule count, then individual rows render the
+ * action badge, a natural-language summary, the raw `-A` body in
+ * mono small text, the hit-count pill, and a delete button. The
+ * raw `iptables-save` <pre> dump still ships under a "Show raw"
+ * toggle for users who want to see what we parsed from. */
+.fw .fw-rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+}
+.fw .fw-rule-chain {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  overflow: hidden;
+}
+.fw .fw-rule-chain-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1-5) var(--sp-2);
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--size-micro);
+}
+.fw .fw-rule-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1-5) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+.fw .fw-rule-row:last-child { border-bottom: none; }
+.fw .fw-rule-text {
+  flex: 1;
+  min-width: 0;
+}
+.fw .fw-rule-summary {
+  font-size: var(--ui-fs-sm);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fw .fw-rule-raw {
+  font-size: var(--size-micro);
+  color: var(--muted);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* (Custom rule composer dialog styles live with the modal block above —
+ * the dialog renders as a sibling of `.fw`, not a descendant.) */

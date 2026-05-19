@@ -34,6 +34,8 @@ import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import SudoPasswordDialog from "../components/SudoPasswordDialog";
 import { useSudoStore, sudoKeyFor } from "../stores/useSudoStore";
 import { hasPendingHostKeyPrompts } from "../stores/useHostKeyPromptStore";
+import "../styles/docker-firewall-panel.css";
+import "../styles/firewall-panel.css";
 
 function fwLooksLikePermissionDenied(message: string): boolean {
   const m = message.toLowerCase();

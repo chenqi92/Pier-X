@@ -41,6 +41,7 @@ import { useSudoStore, sudoKeyFor } from "../stores/useSudoStore";
 import { useTabStore } from "../stores/useTabStore";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import SudoPasswordDialog from "../components/SudoPasswordDialog";
+import "../styles/docker-firewall-panel.css";
 
 /** Heuristic: does this error string look like the daemon refused us
  *  for lack of privilege? Mirrors `pier_core::sudo::is_permission_denied`

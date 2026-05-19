@@ -43,6 +43,7 @@ import { useConnectionStore } from "../stores/useConnectionStore";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
 import { hasPendingHostKeyPrompts } from "../stores/useHostKeyPromptStore";
 import { logEvent } from "../lib/logger";
+import "../styles/terminal-panel.css";
 
 /**
  * Resolve a backend-emitted color tag against the user's selected terminal

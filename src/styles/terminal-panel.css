@@ -1,0 +1,362 @@
+/* ── Terminal Panel ──────────────────────────────────────────── */
+
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg);
+}
+
+.terminal-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-height: 34px;
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  flex-shrink: 0;
+}
+
+.terminal-panel__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 11.5px;
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.terminal-panel__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-1-5);
+}
+
+.terminal-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-1) var(--sp-3) var(--sp-2);
+  overflow: hidden;
+  outline: none;
+  background: var(--bg);
+  cursor: text;
+  /* Anchor the rendered grid to the bottom: any sub-pixel overflow from
+   * row-height rounding is clipped from the TOP (older content reachable
+   * via scrollback) instead of the BOTTOM (cursor / prompt row). */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.terminal-viewport:focus { box-shadow: inset 0 0 0 1px var(--accent-dim); }
+.terminal-viewport--bell { box-shadow: inset 0 0 0 1px var(--warn), 0 0 0 1px var(--warn-dim); }
+/* Hide the rendered grid for the first ~2 frames after the tab
+ * becomes active, so the ResizeObserver-driven SIGWINCH + snapshot
+ * reflow happens off-screen. Otherwise the bottom-anchored layout
+ * makes the previous (smaller) snapshot visibly slide up as the new
+ * (larger) snapshot fills in. `visibility: hidden` keeps the box
+ * sized so layout still settles; only paint is suppressed. */
+.terminal-viewport--activating .terminal-screen { visibility: hidden; }
+
+.terminal-measure {
+  position: absolute;
+  top: -9999px;
+  left: -9999px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.terminal-screen {
+  display: block;
+  flex-shrink: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 13px;
+  /* line-height is set inline as integer px via --terminal-row-h. Stacked block
+   * rows use that value for both box height and line-box so every row abuts the
+   * next with no sub-pixel gap — flex-column added WebKit rounding that showed
+   * as visible separators when selection painted across rows. */
+  line-height: calc(13px * 1.45);
+  /* Containing block for the smart-mode syntax overlay. The overlay's
+   * `top` / `left` are computed in cell × cell-metric space, anchored
+   * to the top-left of the screen's content box. */
+  position: relative;
+}
+
+/* Smart-mode syntax overlay (see TerminalSyntaxOverlay.tsx). Sits
+ * above the row grid and paints colour onto the in-progress input
+ * line. Background matches the terminal theme (passed inline) so it
+ * cleanly covers the doubled-up terminal-segment render underneath. */
+.terminal-syntax-overlay {
+  position: absolute;
+  pointer-events: none;
+  z-index: 1;
+  font-family: var(--mono);
+  white-space: pre;
+}
+.terminal-syntax-overlay .terminal-syntax {
+  display: inline;
+}
+.terminal-syntax--command { color: var(--accent); }
+/* M3: command name not a builtin and not on $PATH — typo. Wavy
+ * underline reinforces the "this isn't a real command" cue without
+ * shouting; the colour token is the same one used for `--neg` chips
+ * and error toasts, so the visual language matches across the app. */
+.terminal-syntax--command-missing {
+  color: var(--neg);
+  text-decoration: underline wavy var(--neg);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 2px;
+}
+.terminal-syntax--option { color: var(--info); }
+.terminal-syntax--string { color: var(--pos); }
+.terminal-syntax--path { color: var(--syntax-path); }
+.terminal-syntax--variable { color: var(--info); font-style: italic; }
+.terminal-syntax--operator { color: var(--warn); }
+.terminal-syntax--redirect { color: var(--warn); font-weight: 510; }
+.terminal-syntax--comment { color: var(--muted); font-style: italic; }
+.terminal-syntax--text,
+.terminal-syntax--whitespace { color: inherit; }
+/* M5: autosuggestion suffix — fish-style ghost text shown after the
+ * typed portion. Muted token + extra opacity so the gray reads as
+ * "preview, not real text" against any of the terminal themes. */
+.terminal-syntax--suggestion {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+/* M4: completion popover hint — appears as muted right-aligned
+ * text inside a `.popover-item` row (e.g. resolved binary path
+ * `/usr/bin/git` next to the `git` candidate). The atom doesn't
+ * provide a "hint" slot, so we extend it here using only design
+ * tokens — no literal colours. */
+.completion-popover-hint {
+  flex: none;
+  max-width: 50%;
+  margin-left: var(--sp-2);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.completion-popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-0-5);
+  min-width: 0;
+  max-height: 360px;
+  overflow-y: auto;
+}
+/* Kill the inherited `.popover-item` background transition inside
+ * the completion popover. Arrow-key / Tab cycling fires class
+ * toggles back-to-back; the fade-in/out from the shared atom rule
+ * leaves a visible ghost on the previous row while the next row is
+ * still ramping up. Navigation lists need crisp instant highlight,
+ * not a hover-style fade — so reset transition here. Other consumers
+ * of the atom (context menus etc.) still get the original hover
+ * polish. */
+.completion-popover-list .popover-item,
+.completion-popover-list .popover-item.is-active {
+  transition: none;
+}
+
+/* Per-row name column — fixed minimum so descriptions line up
+ * vertically across all rows even when names are short ("cp" vs
+ * "container"). Larger names overflow into the description column
+ * with ellipsis, which stays acceptable for our token-bucket
+ * layout. */
+.completion-popover-name {
+  flex: 0 0 auto;
+  min-width: 96px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Per-row description shown next to the name (warp / fish style):
+ * library subcommands and options ship a short blurb that explains
+ * what the command does. Single line, ellipsis on overflow — the
+ * popover width grows when descriptions are present so most fit. */
+.completion-popover-desc {
+  flex: 1;
+  min-width: 0;
+  margin-left: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--size-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* M6: man-page popover. Reuses the standard `.popover` chrome and
+ * `.popover-section` heading; we only need to lay out the three
+ * SYNOPSIS / DESCRIPTION / OPTIONS bodies and style the per-option
+ * row. All colours route through design tokens so the popover
+ * tracks the active theme automatically. */
+.man-popover__section {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: var(--sp-1);
+}
+.man-popover__section:last-child {
+  margin-bottom: 0;
+}
+.man-popover__section-body {
+  padding: 0 var(--sp-2) var(--sp-1);
+  color: var(--ink-2);
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
+  line-height: 1.45;
+}
+.man-popover__pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  white-space: pre-wrap;
+  color: var(--ink);
+}
+.man-popover__paragraph {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.man-popover__placeholder {
+  /* `.popover-section` already styles the heading colour as
+   * `--muted`; reuse that for the empty / loading / error states
+   * so the popover doesn't shout when there's nothing to show. */
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.man-popover__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-0-5);
+}
+.man-popover__option-row {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-0-5) 0;
+}
+.man-popover__option-flag {
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+}
+.man-popover__option-summary {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: var(--ui-fs);
+}
+.terminal-row {
+  display: block;
+  height: var(--terminal-row-h, calc(13px * 1.45));
+  line-height: var(--terminal-row-h, calc(13px * 1.45));
+  white-space: pre;
+  color: var(--ink);
+}
+.terminal-screen--ruled .terminal-row {
+  position: relative;
+}
+.terminal-screen--ruled .terminal-row::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  pointer-events: none;
+  z-index: 0;
+}
+.terminal-screen--ruled .terminal-row:last-child::after {
+  display: none;
+}
+.terminal-viewport--selecting .terminal-screen--ruled .terminal-row::after {
+  display: none;
+}
+.terminal-screen,
+.terminal-row,
+.terminal-segment { user-select: text; }
+.terminal-screen ::selection { background: var(--selection-bg); color: var(--selection-fg); }
+
+.terminal-segment {
+  /* WebKit paints ::selection over the font's natural inline cell, not the row's
+   * full line-box, so adjacent selected rows leave visible gaps that read as
+   * row dividers. inline-block + explicit height pins the selection rect to the
+   * full row height regardless of the font's actual cell metrics. box-sizing:
+   * border-box keeps the cursor-beam/underline borders inside the row so they
+   * don't shift adjacent rows by their border width. */
+  display: inline-block;
+  position: relative;
+  height: var(--terminal-row-h, calc(13px * 1.45));
+  line-height: var(--terminal-row-h, calc(13px * 1.45));
+  vertical-align: top;
+  box-sizing: border-box;
+  z-index: 1;
+}
+.terminal-segment--filler { color: transparent; }
+/* Cursor visuals are painted via ::before so the blink animation only
+ * fades the cursor block, not the character on top — otherwise the
+ * underlying glyph fades together with the cursor and the cell appears
+ * to "blink with" the next character. */
+.terminal-segment--cursor { color: var(--accent-ink); }
+.terminal-segment--cursor::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  z-index: -1;
+  pointer-events: none;
+}
+.terminal-segment--cursor-beam::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-left: 2px solid var(--accent);
+  pointer-events: none;
+}
+.terminal-segment--cursor-underline::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-bottom: 2px solid var(--accent);
+  pointer-events: none;
+}
+.terminal-segment--cursor-blink::before {
+  animation: cursor-blink 1s step-end infinite;
+}
+
+@keyframes cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.terminal-placeholder {
+  display: grid;
+  place-items: center;
+  /* Viewport is now a flex column anchored to the bottom; claim all
+   * available height so the placeholder stays visually centered instead
+   * of collapsing to its content size at the foot of the panel. */
+  flex: 1;
+  width: 100%;
+  color: var(--ink-2);
+  text-align: center;
+}
+.terminal-placeholder--error { color: var(--neg); }

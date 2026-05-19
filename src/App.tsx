@@ -16,7 +16,6 @@ import {
   X,
 } from "lucide-react";
 import { getLogFilePath } from "./lib/logger";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { I18nContext, makeI18n } from "./i18n/useI18n";
 import { initDesktopNotifications, desktopNotify } from "./lib/notify";
 import { isBrowsableRepoPath } from "./lib/browserPath";
@@ -96,6 +95,11 @@ async function openExternalPath(path: string): Promise<void> {
 async function revealExternalItem(path: string): Promise<void> {
   const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
   await revealItemInDir(path);
+}
+
+async function closeCurrentWindow(): Promise<void> {
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  await getCurrentWindow().close();
 }
 
 const MARKDOWN_EXTENSIONS = /\.(md|markdown|mdown|mkdn|mkd|mdx)$/i;
@@ -746,7 +750,7 @@ function App() {
           { divider: true },
           { label: i18n.t("Settings"), shortcut: "Ctrl+,", action: () => setSettingsOpen(true) },
           { divider: true },
-          { label: i18n.t("Exit"), action: () => { void getCurrentWindow().close(); } },
+          { label: i18n.t("Exit"), action: () => { void closeCurrentWindow(); } },
         ],
       },
       {

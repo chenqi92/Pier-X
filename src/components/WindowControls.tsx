@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isTauri } from "@tauri-apps/api/core";
 import { useI18n } from "../i18n/useI18n";
 
 const glyphProps = {
@@ -38,6 +38,24 @@ const CloseGlyph = () => (
   </svg>
 );
 
+type AppWindow = {
+  minimize: () => Promise<void>;
+  toggleMaximize: () => Promise<void>;
+  close: () => Promise<void>;
+  isMaximized: () => Promise<boolean>;
+  onResized: (handler: () => void) => Promise<() => void>;
+};
+
+let appWindowPromise: Promise<AppWindow | null> | null = null;
+
+function loadAppWindow(): Promise<AppWindow | null> {
+  if (!isTauri()) return Promise.resolve(null);
+  appWindowPromise ??= import("@tauri-apps/api/window")
+    .then(({ getCurrentWindow }) => getCurrentWindow())
+    .catch(() => null);
+  return appWindowPromise;
+}
+
 /**
  * Windows / Linux caption controls. macOS uses the OS's native traffic
  * lights (exposed through titleBarStyle="Overlay") so this component is
@@ -50,17 +68,27 @@ export default function WindowControls() {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
-    const win = getCurrentWindow();
-    void win.isMaximized().then(setMaximized).catch(() => {});
-    const unlisten = win.onResized(() => {
-      void win.isMaximized().then(setMaximized).catch(() => {});
+    let disposed = false;
+    let cleanup: (() => void) | null = null;
+    void loadAppWindow().then((win) => {
+      if (!win || disposed) return;
+      void win.isMaximized().then((value) => {
+        if (!disposed) setMaximized(value);
+      }).catch(() => {});
+      void win.onResized(() => {
+        void win.isMaximized().then((value) => {
+          if (!disposed) setMaximized(value);
+        }).catch(() => {});
+      }).then((fn) => {
+        if (disposed) fn();
+        else cleanup = fn;
+      }).catch(() => {});
     });
     return () => {
-      void unlisten.then((fn) => fn()).catch(() => {});
+      disposed = true;
+      cleanup?.();
     };
   }, []);
-
-  const win = getCurrentWindow();
 
   return (
     <div className="winctl" data-no-window-drag="true">
@@ -68,7 +96,7 @@ export default function WindowControls() {
         type="button"
         className="winctl__btn"
         title={t("Minimize")}
-        onClick={() => void win.minimize().catch(() => {})}
+        onClick={() => void loadAppWindow().then((win) => win?.minimize().catch(() => {}))}
       >
         <MinimizeGlyph />
       </button>
@@ -76,7 +104,7 @@ export default function WindowControls() {
         type="button"
         className="winctl__btn"
         title={maximized ? t("Restore") : t("Maximize")}
-        onClick={() => void win.toggleMaximize().catch(() => {})}
+        onClick={() => void loadAppWindow().then((win) => win?.toggleMaximize().catch(() => {}))}
       >
         {maximized ? <RestoreGlyph /> : <MaximizeGlyph />}
       </button>
@@ -84,7 +112,7 @@ export default function WindowControls() {
         type="button"
         className="winctl__btn winctl__btn--close"
         title={t("Close")}
-        onClick={() => void win.close().catch(() => {})}
+        onClick={() => void loadAppWindow().then((win) => win?.close().catch(() => {}))}
       >
         <CloseGlyph />
       </button>

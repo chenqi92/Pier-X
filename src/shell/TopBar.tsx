@@ -1,6 +1,5 @@
 import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import { isTauri } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Command, Moon, Plus, Settings, Sun } from "lucide-react";
 import { useI18n } from "../i18n/useI18n";
 import { useThemeStore } from "../stores/useThemeStore";
@@ -18,8 +17,22 @@ type Props = {
 };
 
 const IS_MAC = navigator.platform.includes("Mac");
-const APP_WINDOW = isTauri() ? getCurrentWindow() : null;
 const DRAG_THRESHOLD_PX = 4;
+
+type AppWindow = {
+  startDragging: () => Promise<void>;
+  toggleMaximize: () => Promise<void>;
+};
+
+let appWindowPromise: Promise<AppWindow | null> | null = null;
+
+function loadAppWindow(): Promise<AppWindow | null> {
+  if (!isTauri()) return Promise.resolve(null);
+  appWindowPromise ??= import("@tauri-apps/api/window")
+    .then(({ getCurrentWindow }) => getCurrentWindow())
+    .catch(() => null);
+  return appWindowPromise;
+}
 
 function shouldSkipWindowDrag(target: HTMLElement | null) {
   return !!target?.closest(
@@ -42,7 +55,7 @@ export default function TopBar({
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
   function handleMouseDown(event: ReactMouseEvent<HTMLElement>) {
-    if (!APP_WINDOW || event.button !== 0) return;
+    if (!isTauri() || event.button !== 0) return;
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (shouldSkipWindowDrag(target) || event.detail > 1) return;
 
@@ -65,7 +78,7 @@ export default function TopBar({
       if (Math.max(movedX, movedY) < DRAG_THRESHOLD_PX) return;
       dragStarted = true;
       cleanup();
-      void APP_WINDOW.startDragging().catch(() => {});
+      void loadAppWindow().then((win) => win?.startDragging().catch(() => {}));
     };
 
     dragCleanupRef.current = cleanup;
@@ -74,11 +87,11 @@ export default function TopBar({
   }
 
   function handleDoubleClick(event: ReactMouseEvent<HTMLElement>) {
-    if (!APP_WINDOW || event.button !== 0) return;
+    if (!isTauri() || event.button !== 0) return;
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (shouldSkipWindowDrag(target)) return;
     dragCleanupRef.current?.();
-    void APP_WINDOW.toggleMaximize().catch(() => {});
+    void loadAppWindow().then((win) => win?.toggleMaximize().catch(() => {}));
   }
 
   const themeTitle = mode === "system" ? t("Follow system") : resolvedDark ? t("Light") : t("Dark");

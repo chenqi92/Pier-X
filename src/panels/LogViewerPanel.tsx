@@ -35,6 +35,7 @@ import StatusDot from "../components/StatusDot";
 import LogViewerDialog from "../shell/LogViewerDialog";
 import { useTabStore } from "../stores/useTabStore";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
+import "../styles/log-viewer.css";
 
 type Props = { tab: TabState };
 type IconType = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;

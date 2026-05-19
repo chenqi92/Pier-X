@@ -58,6 +58,7 @@ import {
   type LocalDragPayload,
   type SftpDragPayload,
 } from "../lib/sftpDrag";
+import "../styles/sftp-panel.css";
 
 // Module-scope constant for "no bookmarks". Kept out of the
 // zustand selector so two consecutive renders get the *same*
@@ -66,7 +67,7 @@ import {
 const EMPTY_BOOKMARKS: SftpBookmark[] = [];
 const SftpEditorDialog = lazy(() => import("../components/SftpEditorDialog"));
 
-/** Row height for virtualized entries, matching `.ftp-row` in shell.css
+/** Row height for virtualized entries, matching `.ftp-row` in sftp-panel.css
  *  (12px font · 6px padding top+bottom · 1px border). Kept in sync
  *  manually — if that CSS changes, bump this. Mismatches show up as
  *  rows overlapping or whitespace gaps during scroll. */

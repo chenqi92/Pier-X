@@ -30,6 +30,7 @@ import { desktopNotify } from "../lib/notify";
 import { toast } from "../stores/useToastStore";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import type { SavedSshConnection, TabState } from "../lib/types";
+import "../styles/hosts-health-panel.css";
 
 type Props = {
   tab: TabState;
@@ -1483,4 +1484,3 @@ function formatChecked(
   const hours = Math.floor(minutes / 60);
   return t("Checked {n}h ago", { n: hours });
 }
-

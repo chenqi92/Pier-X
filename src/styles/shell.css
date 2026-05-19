@@ -6109,15 +6109,7 @@ button,
   color: var(--ink-2);
 }
 
-/* Inline latency sparkline used by the Hosts Bus view. The chart
- * inherits the cell's text color so it picks up `--muted` by
- * default and shifts to `--accent` when we tag the cell as hot. */
-.hosts-health-bus__latency {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  white-space: nowrap;
-}
+/* Shared inline SVG sparkline used by monitor, firewall, and host health surfaces. */
 .sparkline {
   color: var(--accent);
   flex: 0 0 auto;

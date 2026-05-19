@@ -9,7 +9,11 @@ type TranslationVars = Record<string, string | number | null | undefined>;
 
 const dictionaries: Record<Locale, Dictionary> = {
   en,
-  zh: { ...zh, ...zhExtra },
+  zh,
+};
+
+const extraDictionaries: Partial<Record<Locale, Dictionary>> = {
+  zh: zhExtra,
 };
 
 export type I18nValue = {
@@ -32,7 +36,8 @@ function interpolate(template: string, vars?: TranslationVars) {
 
 export function translate(locale: Locale, key: string, vars?: TranslationVars) {
   const dict = dictionaries[locale] ?? {};
-  return interpolate(dict[key] || key, vars);
+  const extra = extraDictionaries[locale];
+  return interpolate(extra?.[key] ?? dict[key] ?? key, vars);
 }
 
 export function makeI18n(locale: Locale): I18nValue {

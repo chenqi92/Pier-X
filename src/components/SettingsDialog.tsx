@@ -59,6 +59,7 @@ import {
 import type { Locale } from "../stores/useSettingsStore";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useSudoStore } from "../stores/useSudoStore";
+import "../styles/settings-dialog.css";
 
 type Props = {
   open: boolean;

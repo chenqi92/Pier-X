@@ -77,6 +77,7 @@ import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import Popover from "../components/Popover";
 import StatusDot from "../components/StatusDot";
 import SudoPasswordDialog from "../components/SudoPasswordDialog";
+import "../styles/software-panel.css";
 
 type Props = { tab: TabState | null };
 

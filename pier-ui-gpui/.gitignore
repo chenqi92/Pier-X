@@ -1,0 +1,10 @@
+# Build artifacts (4.7 GB)
+/target
+
+# Local zed checkout used by the [patch] in Cargo.toml (109 MB, re-fetchable).
+# To recreate: git init .vendor/zed && fetch --depth 1 the rev pinned in Cargo.toml.
+/.vendor
+
+# Build logs and eyeball screenshots
+/build.log
+*.png

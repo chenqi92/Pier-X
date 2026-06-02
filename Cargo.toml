@@ -1,3 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["pier-core", "src-tauri", "tools/pier-x-completions-importer"]
+# GPUI migration spike — isolated in its own workspace so its heavy gpui git
+# dependency tree never touches the main app's Cargo.lock or build. See
+# docs/GPUI-MIGRATION-PLAN.md. Fold into `members` only if the slice ships.
+exclude = ["pier-ui-gpui"]

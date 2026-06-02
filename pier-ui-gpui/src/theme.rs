@@ -91,6 +91,7 @@ pub struct Theme {
     pub toolrail_w: Pixels,
     pub tabbar_h: Pixels,
     pub panel_header_h: Pixels,
+    pub rightpanel_w: Pixels,
 
     // Interaction overlays
     pub hover: Hsla,
@@ -162,6 +163,7 @@ impl Theme {
             toolrail_w: px(42.0),
             tabbar_h: px(34.0),
             panel_header_h: px(34.0),
+            rightpanel_w: px(360.0),
 
             // --bg-hover (dark): rgba(255,255,255,0.05). TODO: per-theme.
             hover: hexa(0xffffff0d),

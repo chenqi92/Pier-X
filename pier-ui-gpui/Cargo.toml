@@ -15,6 +15,9 @@ publish = false
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "9ad30e631e15f9bbba049717767bf4cd98e4f179" }
+# The terminal engine (emulator, PTY, GridSnapshot) lives here and is already
+# UI-agnostic — GPUI calls it directly, no Tauri layer.
+pier-core = { path = "../pier-core" }
 
 # Force EVERY reference to the zed repo (ours + gpui-component's transitive
 # one) onto the rev that gpui-component @9ad30e6 locks in its own Cargo.lock.

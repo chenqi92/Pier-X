@@ -5,6 +5,7 @@
 // build, not a functional app. See docs/GPUI-MIGRATION-PLAN.md (M0).
 
 mod shell;
+mod terminal;
 mod theme;
 
 use gpui::{
@@ -34,7 +35,7 @@ fn main() {
                 ..Default::default()
             };
             cx.open_window(opts, |window, cx| {
-                let view = cx.new(|_| Shell::new());
+                let view = cx.new(|cx| Shell::new(cx));
                 cx.new(|cx| Root::new(view, window, cx).bg(cx.theme().background))
             })
             .expect("failed to open window");

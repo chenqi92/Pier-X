@@ -7,19 +7,22 @@
 // (M2) will look like. See docs/GPUI-MIGRATION-PLAN.md.
 
 use gpui::prelude::*;
-use gpui::{div, px, Context, FontWeight, Hsla, SharedString, Window};
+use gpui::{div, px, Context, Entity, FontWeight, Hsla, SharedString, Window};
 use gpui_component::{h_flex, v_flex};
 
+use crate::terminal::TerminalView;
 use crate::theme::Theme;
 
 pub struct Shell {
     theme: Theme,
+    terminal: Entity<TerminalView>,
 }
 
 impl Shell {
-    pub fn new() -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             theme: Theme::dark(),
+            terminal: cx.new(|cx| TerminalView::new(cx)),
         }
     }
 
@@ -168,100 +171,12 @@ impl Shell {
             .child(self.tab(t.accent, "zsh — local", false))
     }
 
-    // ── Faux terminal (previews the M2 GridSnapshot paint) ───────
-    fn seg(&self, text: &'static str, color: Hsla) -> impl IntoElement {
-        div().text_color(color).child(text)
-    }
-
-    fn term_row(&self) -> gpui::Div {
-        // A monospace flex row; callers push coloured segments as children.
-        h_flex().font_family(self.theme.mono.clone())
-    }
-
-    fn terminal(&self) -> impl IntoElement {
-        let t = &self.theme;
-        v_flex()
-            .flex_1()
-            .min_h(px(0.0))
-            .w_full()
-            .bg(t.bg)
-            .p(t.sp3)
-            .gap(px(2.0))
-            .text_size(t.fs_body)
-            // prompt + ls
-            .child(
-                self.term_row()
-                    .child(self.seg("chenqi@prod-web-01", t.pos))
-                    .child(self.seg(" ~/srv/pier-x", t.info))
-                    .child(self.seg(" (main)", t.warn)),
-            )
-            .child(
-                self.term_row()
-                    .child(self.seg("$ ", t.muted))
-                    .child(self.seg("ls", t.ink)),
-            )
-            .child(
-                self.term_row()
-                    .gap(t.sp3)
-                    .child(self.seg("Cargo.toml", t.ink_2))
-                    .child(self.seg("pier-core", t.accent))
-                    .child(self.seg("src-tauri", t.accent))
-                    .child(self.seg("docs", t.accent))
-                    .child(self.seg("README.md", t.ink_2)),
-            )
-            // git status
-            .child(
-                self.term_row()
-                    .child(self.seg("$ ", t.muted))
-                    .child(self.seg("git status -sb", t.ink)),
-            )
-            .child(
-                self.term_row()
-                    .child(self.seg("## ", t.muted))
-                    .child(self.seg("main", t.pos))
-                    .child(self.seg("...origin/main", t.muted)),
-            )
-            .child(
-                self.term_row()
-                    .child(self.seg(" M ", t.warn))
-                    .child(self.seg("pier-ui-gpui/src/shell.rs", t.ink_2)),
-            )
-            .child(
-                self.term_row()
-                    .child(self.seg("?? ", t.neg))
-                    .child(self.seg("pier-ui-gpui/.vendor/", t.ink_2)),
-            )
-            // build
-            .child(
-                self.term_row()
-                    .child(self.seg("$ ", t.muted))
-                    .child(self.seg("cargo build", t.ink)),
-            )
-            .child(
-                self.term_row()
-                    .child(self.seg("   Compiling ", t.pos))
-                    .child(self.seg("pier-ui-gpui v0.1.0", t.ink_2)),
-            )
-            .child(
-                self.term_row()
-                    .child(self.seg("    Finished ", t.pos))
-                    .child(self.seg("`dev` in 4.02s", t.ink_2)),
-            )
-            // live prompt + cursor block
-            .child(
-                self.term_row()
-                    .items_center()
-                    .child(self.seg("$ ", t.muted))
-                    .child(div().w(px(8.0)).h(px(16.0)).bg(t.ink)),
-            )
-    }
-
     // ── Status bar ────────────────────────────────────────────────
     fn status_item(&self, text: impl Into<SharedString>, color: Hsla) -> impl IntoElement {
         div().text_color(color).child(text.into())
     }
 
-    fn status_bar(&self) -> impl IntoElement {
+    fn status_bar(&self, cols: u16, rows: u16) -> impl IntoElement {
         let t = &self.theme;
         h_flex()
             .items_center()
@@ -285,7 +200,7 @@ impl Shell {
                     .items_center()
                     .gap(t.sp3)
                     .child(self.status_item("ssh prod-web-01", t.muted))
-                    .child(self.status_item("120×26", t.muted))
+                    .child(self.status_item(format!("{cols}×{rows}"), t.muted))
                     .child(self.status_item("UTF-8", t.muted))
                     .child(self.status_item("LF", t.muted)),
             )
@@ -293,8 +208,9 @@ impl Shell {
 }
 
 impl Render for Shell {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme.clone();
+        let (cols, rows) = self.terminal.read(cx).size();
         div()
             .size_full()
             .font_family(t.sans.clone())
@@ -312,8 +228,14 @@ impl Render for Shell {
                             .h_full()
                             .min_w(px(0.0))
                             .child(self.tab_bar())
-                            .child(self.terminal())
-                            .child(self.status_bar()),
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h(px(0.0))
+                                    .w_full()
+                                    .child(self.terminal.clone()),
+                            )
+                            .child(self.status_bar(cols, rows)),
                     ),
             )
     }

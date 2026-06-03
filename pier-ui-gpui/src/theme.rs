@@ -24,6 +24,9 @@ fn hexa(v: u32) -> Hsla {
 const FONT_SANS: &str = "IBM Plex Sans";
 const FONT_MONO: &str = "IBM Plex Mono";
 
+// A full design-token palette mirrored from tokens.css; not every token is
+// consumed by the GPUI shell yet, so unused fields are expected.
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct Theme {
     pub dark: bool,

@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    deferred, div, px, relative, svg, AnyElement, Context, Entity, Focusable, FontWeight, Hsla,
+    deferred, div, px, svg, AnyElement, Context, Entity, Focusable, FontWeight, Hsla,
     InteractiveElement, MouseButton, MouseDownEvent, Pixels, SharedString, Svg, Window,
 };
 use gpui_component::{h_flex, v_flex, TitleBar};
@@ -78,6 +78,8 @@ const TOOLS: &[(Svc, &str, &str, u8)] = &[
     (Svc::Software, "package", "SOFTWARE", 5),
 ];
 
+// Db/Markdown are reserved for future tab types (DB consoles, markdown tabs).
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq)]
 enum TabKind {
     Local,
@@ -1276,63 +1278,6 @@ impl Shell {
     }
 
     // ── Monitor panel (real local metrics) ───────────────────────
-    fn meter(
-        &self,
-        label: &'static str,
-        value: String,
-        pct: f64,
-        color: Hsla,
-    ) -> impl IntoElement {
-        let t = &self.theme;
-        let frac = (pct.clamp(0.0, 100.0) / 100.0) as f32;
-        v_flex()
-            .gap(px(5.0))
-            .px(t.sp3)
-            .py(t.sp2)
-            .child(
-                h_flex()
-                    .justify_between()
-                    .child(div().text_size(t.fs_ui).text_color(t.ink_2).child(label))
-                    .child(
-                        div()
-                            .font_family(t.mono.clone())
-                            .text_size(t.fs_sm)
-                            .text_color(t.muted)
-                            .child(value),
-                    ),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .h(px(6.0))
-                    .rounded(px(3.0))
-                    .bg(t.panel_2)
-                    .child(
-                        div()
-                            .h_full()
-                            .w(relative(frac))
-                            .rounded(px(3.0))
-                            .bg(color),
-                    ),
-            )
-    }
-
-    fn info_row(&self, label: &'static str, value: String) -> impl IntoElement {
-        let t = &self.theme;
-        h_flex()
-            .justify_between()
-            .px(t.sp3)
-            .py(px(3.0))
-            .child(div().text_size(t.fs_ui).text_color(t.muted).child(label))
-            .child(
-                div()
-                    .font_family(t.mono.clone())
-                    .text_size(t.fs_sm)
-                    .text_color(t.ink_2)
-                    .child(value),
-            )
-    }
-
     fn monitor_panel(&self) -> AnyElement {
         let t = &self.theme;
         let Some(m) = &self.mon else {
@@ -1358,39 +1303,38 @@ impl Shell {
             .flex_1()
             .min_h(px(0.0))
             .child(self.panel_header("activity", "MONITOR", "localhost"))
-            .child(self.meter(
+            .child(ui::meter(
+                t,
                 "CPU",
                 format!("{:.0}% · {} cores", m.cpu_pct, m.cpu_count),
                 m.cpu_pct,
-                level_color(t, m.cpu_pct),
             ))
-            .child(self.meter(
+            .child(ui::meter(
+                t,
                 "Memory",
                 format!("{} / {}", gb(m.mem_used_mb), gb(m.mem_total_mb)),
                 mem_pct,
-                level_color(t, mem_pct),
             ));
         if m.swap_total_mb > 0.0 {
-            col = col.child(self.meter(
+            col = col.child(ui::meter(
+                t,
                 "Swap",
                 format!("{} / {}", gb(m.swap_used_mb), gb(m.swap_total_mb)),
                 swap_pct,
-                level_color(t, swap_pct),
             ));
         }
         col = col
             .child(self.section_label("SYSTEM"))
-            .child(self.info_row("Uptime", m.uptime.clone()))
-            .child(self.info_row("Processes", m.proc_count.to_string()));
+            .child(ui::info_row(t, "Uptime", m.uptime.clone()))
+            .child(ui::info_row(t, "Processes", m.proc_count.to_string()));
         if let Some((l1, l5, l15)) = m.load {
-            col = col.child(self.info_row("Load", format!("{l1:.2} {l5:.2} {l15:.2}")));
+            col = col.child(ui::info_row(t, "Load", format!("{l1:.2} {l5:.2} {l15:.2}")));
         }
-        col = col.child(self.info_row("OS", m.os_label.clone()));
+        col = col.child(ui::info_row(t, "OS", m.os_label.clone()));
         col.into_any_element()
     }
 
     fn right_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = &self.theme;
         let (svc, glyph, name, _) = TOOLS[self.active_tool];
         if matches!(svc, Svc::Git) {
             div()
@@ -1679,17 +1623,6 @@ impl Render for Shell {
             .size_full()
             .child(body)
             .when(show_overlay, |d| d.child(self.overlay_layer(cx)))
-    }
-}
-
-/// Usage-bar colour: green under 60%, amber under 85%, red above.
-fn level_color(t: &Theme, pct: f64) -> Hsla {
-    if pct >= 85.0 {
-        t.neg
-    } else if pct >= 60.0 {
-        t.warn
-    } else {
-        t.pos
     }
 }
 

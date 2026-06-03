@@ -25,8 +25,10 @@ use gpui_component::{h_flex, v_flex, TitleBar};
 use pier_core::services::git::FileStatus;
 
 use crate::data::{self, ConnRow, FileEntry, GitData, MonStat};
+use crate::panels::PanelViews;
 use crate::terminal::TerminalView;
 use crate::theme::Theme;
+use crate::ui;
 
 /// A bundled lucide SVG, sized and tinted. `name` is the file stem under
 /// `assets/icons/` (see src/assets.rs); the glyph picks up `color` because the
@@ -41,7 +43,7 @@ fn icon(name: &str, sz: Pixels, color: Hsla) -> Svg {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Svc {
+pub enum Svc {
     Markdown,
     Git,
     Monitor,
@@ -107,6 +109,7 @@ pub struct Shell {
     conns: Vec<ConnRow>,
     git: Option<GitData>,
     mon: Option<MonStat>,
+    panels: PanelViews,
 }
 
 impl Shell {
@@ -121,6 +124,7 @@ impl Shell {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| cwd_label.clone());
         let terminal = cx.new(|cx| TerminalView::new(cx));
+        let panels = PanelViews::new(cx);
         Self::start_monitor(cx);
         Self {
             theme: Theme::dark(),
@@ -137,6 +141,7 @@ impl Shell {
             conns,
             git,
             mon: None,
+            panels,
         }
     }
 
@@ -912,16 +917,14 @@ impl Shell {
                 .overflow_y_scroll()
                 .child(self.monitor_panel())
                 .into_any_element()
+        } else if let Some(view) = self.panels.for_svc(svc) {
+            // Each panel View (src/panels/*.rs) owns its own layout and scroll.
+            view
         } else {
             v_flex()
                 .flex_1()
                 .child(self.panel_header(glyph, name, "panel"))
-                .child(
-                    div()
-                        .p(t.sp4)
-                        .text_color(t.muted)
-                        .child(SharedString::from(format!("{name} panel — not wired in this spike"))),
-                )
+                .child(ui::empty_state(&self.theme, "not implemented"))
                 .into_any_element()
         }
     }

@@ -6,9 +6,11 @@
 
 mod assets;
 mod data;
+mod panels;
 mod shell;
 mod terminal;
 mod theme;
+mod ui;
 
 use gpui::{
     point, px, size, App, AppContext, Bounds, Styled, WindowBounds, WindowOptions,

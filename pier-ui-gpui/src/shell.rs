@@ -86,6 +86,15 @@ enum TabKind {
     Markdown,
 }
 
+/// Sub-views inside the Git panel.
+#[derive(Clone, Copy, PartialEq)]
+enum GitTab {
+    Changes,
+    History,
+    Branches,
+    Stash,
+}
+
 struct Tab {
     title: String,
     kind: TabKind,
@@ -108,6 +117,12 @@ pub struct Shell {
     files: Vec<FileEntry>,
     conns: Vec<ConnRow>,
     git: Option<GitData>,
+    git_tab: GitTab,
+    git_history: Vec<data::CommitInfo>,
+    git_branch_list: Vec<String>,
+    git_stashes: Vec<data::StashEntry>,
+    /// Transient Push/Pull result line.
+    git_msg: Option<String>,
     mon: Option<MonStat>,
     panels: PanelViews,
 }
@@ -140,9 +155,62 @@ impl Shell {
             files,
             conns,
             git,
+            git_tab: GitTab::Changes,
+            git_history: Vec::new(),
+            git_branch_list: Vec::new(),
+            git_stashes: Vec::new(),
+            git_msg: None,
             mon: None,
             panels,
         }
+    }
+
+    /// Switch the Git sub-tab, loading its data on demand (local git reads are
+    /// fast; this runs in a click handler, never in render).
+    fn set_git_tab(&mut self, tab: GitTab, cx: &mut Context<Self>) {
+        self.git_tab = tab;
+        match tab {
+            GitTab::History => self.git_history = data::git_log(&self.cwd, 50),
+            GitTab::Branches => self.git_branch_list = data::git_branches(&self.cwd),
+            GitTab::Stash => self.git_stashes = data::git_stash(&self.cwd),
+            GitTab::Changes => {}
+        }
+        cx.notify();
+    }
+
+    /// Run `git push`/`git pull` off the render path and surface the result.
+    fn git_action(&mut self, push: bool, cx: &mut Context<Self>) {
+        self.git_msg = Some(if push { "Pushing…".into() } else { "Pulling…".into() });
+        cx.notify();
+        let cwd = self.cwd.clone();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    if push {
+                        data::git_push(&cwd)
+                    } else {
+                        data::git_pull(&cwd)
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.git_msg = Some(match res {
+                    Ok(s) => {
+                        let s = s.trim().to_string();
+                        if s.is_empty() {
+                            "Done".to_string()
+                        } else {
+                            s
+                        }
+                    }
+                    Err(e) => e,
+                });
+                this.git = data::git_status(&this.cwd);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Refresh the Monitor snapshot on an interval while the Monitor panel is
@@ -738,7 +806,162 @@ impl Shell {
             )
     }
 
-    fn git_panel(&self) -> AnyElement {
+    fn git_chip(
+        &self,
+        cx: &mut Context<Self>,
+        label: &'static str,
+        count: Option<usize>,
+        tab: GitTab,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        let active = self.git_tab == tab;
+        h_flex()
+            .id(SharedString::from(format!("gtab-{label}")))
+            .items_center()
+            .gap(px(4.0))
+            .px(t.sp2)
+            .py(px(2.0))
+            .text_size(t.fs_ui)
+            .cursor_pointer()
+            .text_color(if active { t.ink } else { t.muted })
+            .when(active, |d| d.border_b_2().border_color(t.accent))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| this.set_git_tab(tab, cx)),
+            )
+            .child(label)
+            .when_some(count, |d, n| {
+                d.child(div().text_size(t.fs_sm).text_color(t.muted).child(n.to_string()))
+            })
+    }
+
+    /// `push = Some(true)` → Push, `Some(false)` → Pull, `None` → inert label.
+    fn git_btn(
+        &self,
+        cx: &mut Context<Self>,
+        label: &'static str,
+        primary: bool,
+        push: Option<bool>,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        let mut d = div()
+            .id(SharedString::from(format!("gbtn-{label}")))
+            .px(t.sp3)
+            .py(px(4.0))
+            .rounded(t.radius_sm)
+            .text_size(t.fs_ui)
+            .when(primary, |d| d.bg(t.accent).text_color(t.accent_ink))
+            .when(!primary, |d| d.bg(t.panel_2).text_color(t.ink_2))
+            .child(label);
+        match push {
+            Some(is_push) => {
+                d = d.cursor_pointer().on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                        this.git_action(is_push, cx)
+                    }),
+                );
+            }
+            None => d = d.text_color(t.dim),
+        }
+        d
+    }
+
+    fn git_commit_row(&self, c: &data::CommitInfo) -> impl IntoElement {
+        let t = &self.theme;
+        v_flex()
+            .gap(px(2.0))
+            .px(t.sp3)
+            .py(t.sp2)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(t.sp2)
+                    .child(
+                        div()
+                            .font_family(t.mono.clone())
+                            .text_size(t.fs_sm)
+                            .text_color(t.accent)
+                            .child(c.short_hash.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .text_color(t.ink_2)
+                            .child(c.message.clone()),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap(t.sp2)
+                    .child(div().text_size(t.fs_sm).text_color(t.muted).child(c.author.clone()))
+                    .child(
+                        div()
+                            .text_size(t.fs_sm)
+                            .text_color(t.dim)
+                            .child(c.relative_date.clone()),
+                    ),
+            )
+    }
+
+    fn git_branch_row(&self, name: &str, current: bool) -> impl IntoElement {
+        let t = &self.theme;
+        h_flex()
+            .id(SharedString::from(format!("gbr-{name}")))
+            .items_center()
+            .gap(t.sp2)
+            .h(px(26.0))
+            .px(t.sp3)
+            .hover(|s| s.bg(t.hover))
+            .child(icon("git-branch", px(13.0), if current { t.accent } else { t.muted }))
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .font_family(t.mono.clone())
+                    .text_color(if current { t.ink } else { t.ink_2 })
+                    .child(name.to_string()),
+            )
+            .when(current, |d| {
+                d.child(div().text_size(t.fs_sm).text_color(t.accent).child("current"))
+            })
+    }
+
+    fn git_stash_row(&self, s: &data::StashEntry) -> impl IntoElement {
+        let t = &self.theme;
+        v_flex()
+            .gap(px(2.0))
+            .px(t.sp3)
+            .py(t.sp2)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(t.sp2)
+                    .child(
+                        div()
+                            .font_family(t.mono.clone())
+                            .text_size(t.fs_sm)
+                            .text_color(t.accent)
+                            .child(s.index.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .text_color(t.ink_2)
+                            .child(s.message.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(t.fs_sm)
+                    .text_color(t.dim)
+                    .child(s.relative_date.clone()),
+            )
+    }
+
+    fn git_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = &self.theme;
         let Some(git) = &self.git else {
             return v_flex()
@@ -753,28 +976,6 @@ impl Shell {
                 .into_any_element();
         };
         let total = git.staged.len() + git.unstaged.len();
-        let chip = |label: &'static str, n: String, active: bool| {
-            h_flex()
-                .items_center()
-                .gap(px(4.0))
-                .px(t.sp2)
-                .py(px(2.0))
-                .text_size(t.fs_ui)
-                .text_color(if active { t.ink } else { t.muted })
-                .when(active, |d| d.border_b_2().border_color(t.accent))
-                .child(label)
-                .child(div().text_size(t.fs_sm).text_color(t.muted).child(n))
-        };
-        let btn = |label: &'static str, primary: bool| {
-            div()
-                .px(t.sp3)
-                .py(px(4.0))
-                .rounded(t.radius_sm)
-                .text_size(t.fs_ui)
-                .when(primary, |d| d.bg(t.accent).text_color(t.accent_ink))
-                .when(!primary, |d| d.bg(t.panel_2).text_color(t.ink_2))
-                .child(label)
-        };
         let ahead_behind = format!("↑{} ↓{}", git.ahead, git.behind);
         let tracking = if git.tracking.is_empty() {
             "no upstream".to_string()
@@ -793,10 +994,10 @@ impl Shell {
                     .py(t.sp2)
                     .border_b_1()
                     .border_color(t.line)
-                    .child(chip("Changes", total.to_string(), true))
-                    .child(chip("History", String::new(), false))
-                    .child(chip("Branches", String::new(), false))
-                    .child(chip("Stash", String::new(), false)),
+                    .child(self.git_chip(cx, "Changes", Some(total), GitTab::Changes))
+                    .child(self.git_chip(cx, "History", None, GitTab::History))
+                    .child(self.git_chip(cx, "Branches", None, GitTab::Branches))
+                    .child(self.git_chip(cx, "Stash", None, GitTab::Stash)),
             )
             .child(
                 v_flex()
@@ -830,32 +1031,73 @@ impl Shell {
                         h_flex()
                             .gap(t.sp2)
                             .pt(t.sp1)
-                            .child(btn("Push", true))
-                            .child(btn("Pull", false))
-                            .child(btn("Fetch", false))
-                            .child(btn("Rebase", false)),
-                    ),
+                            .child(self.git_btn(cx, "Push", true, Some(true)))
+                            .child(self.git_btn(cx, "Pull", false, Some(false)))
+                            .child(self.git_btn(cx, "Fetch", false, None))
+                            .child(self.git_btn(cx, "Rebase", false, None)),
+                    )
+                    .when_some(self.git_msg.clone(), |d, msg| {
+                        d.child(
+                            div()
+                                .text_size(t.fs_sm)
+                                .font_family(t.mono.clone())
+                                .text_color(t.ink_2)
+                                .child(msg),
+                        )
+                    }),
             );
 
-        if !git.staged.is_empty() {
-            col = col.child(self.section_label(format!("STAGED · {}", git.staged.len())));
-            for c in &git.staged {
-                col = col.child(self.git_change_row(c));
+        match self.git_tab {
+            GitTab::Changes => {
+                if !git.staged.is_empty() {
+                    col = col.child(self.section_label(format!("STAGED · {}", git.staged.len())));
+                    for c in &git.staged {
+                        col = col.child(self.git_change_row(c));
+                    }
+                }
+                if !git.unstaged.is_empty() {
+                    col = col.child(self.section_label(format!("CHANGES · {}", git.unstaged.len())));
+                    for c in &git.unstaged {
+                        col = col.child(self.git_change_row(c));
+                    }
+                }
+                if total == 0 {
+                    col = col.child(
+                        div().p(t.sp4).text_color(t.muted).child("Working tree clean"),
+                    );
+                }
             }
-        }
-        if !git.unstaged.is_empty() {
-            col = col.child(self.section_label(format!("CHANGES · {}", git.unstaged.len())));
-            for c in &git.unstaged {
-                col = col.child(self.git_change_row(c));
+            GitTab::History => {
+                col = col.child(self.section_label(format!("HISTORY · {}", self.git_history.len())));
+                if self.git_history.is_empty() {
+                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No commits"));
+                } else {
+                    for c in &self.git_history {
+                        col = col.child(self.git_commit_row(c));
+                    }
+                }
             }
-        }
-        if total == 0 {
-            col = col.child(
-                div()
-                    .p(t.sp4)
-                    .text_color(t.muted)
-                    .child("Working tree clean"),
-            );
+            GitTab::Branches => {
+                col = col
+                    .child(self.section_label(format!("BRANCHES · {}", self.git_branch_list.len())));
+                if self.git_branch_list.is_empty() {
+                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No branches"));
+                } else {
+                    for b in &self.git_branch_list {
+                        col = col.child(self.git_branch_row(b, b == &git.branch));
+                    }
+                }
+            }
+            GitTab::Stash => {
+                col = col.child(self.section_label(format!("STASH · {}", self.git_stashes.len())));
+                if self.git_stashes.is_empty() {
+                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No stashes"));
+                } else {
+                    for s in &self.git_stashes {
+                        col = col.child(self.git_stash_row(s));
+                    }
+                }
+            }
         }
         col.into_any_element()
     }
@@ -974,7 +1216,7 @@ impl Shell {
         col.into_any_element()
     }
 
-    fn right_panel(&self) -> impl IntoElement {
+    fn right_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let (svc, glyph, name, _) = TOOLS[self.active_tool];
         if matches!(svc, Svc::Git) {
@@ -983,7 +1225,7 @@ impl Shell {
                 .flex_1()
                 .min_h(px(0.0))
                 .overflow_y_scroll()
-                .child(self.git_panel())
+                .child(self.git_panel(cx))
                 .into_any_element()
         } else if matches!(svc, Svc::Monitor) {
             div()
@@ -1072,7 +1314,7 @@ impl Render for Shell {
                     .bg(t.surface)
                     .border_l_1()
                     .border_color(t.line)
-                    .child(self.right_panel()),
+                    .child(self.right_panel(cx)),
             );
         }
         right_zone = right_zone.child(self.tool_strip(cx));

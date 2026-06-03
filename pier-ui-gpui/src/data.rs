@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use pier_core::connections::ConnectionStore;
+pub use pier_core::services::git::{CommitInfo, StashEntry};
 use pier_core::services::git::{FileStatus, GitClient};
 use pier_core::services::local_monitor;
 use pier_core::ssh::{HostKeyVerifier, SshConfig, SshSession};
@@ -174,6 +175,43 @@ pub fn monitor_snapshot() -> MonStat {
         os_label: s.os_label,
         load,
     }
+}
+
+/// Recent commits (newest first) for the repo at `path`, empty if not a repo.
+pub fn git_log(path: &Path, limit: usize) -> Vec<CommitInfo> {
+    GitClient::open(&path.to_string_lossy())
+        .and_then(|c| c.log(limit))
+        .unwrap_or_default()
+}
+
+/// Local branch names for the repo at `path`.
+pub fn git_branches(path: &Path) -> Vec<String> {
+    GitClient::open(&path.to_string_lossy())
+        .and_then(|c| c.branch_list())
+        .unwrap_or_default()
+}
+
+/// Stash entries for the repo at `path`.
+pub fn git_stash(path: &Path) -> Vec<StashEntry> {
+    GitClient::open(&path.to_string_lossy())
+        .and_then(|c| c.stash_list())
+        .unwrap_or_default()
+}
+
+/// `git push` for the repo at `path` (network — run off the render path).
+pub fn git_push(path: &Path) -> Result<String, String> {
+    GitClient::open(&path.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .push()
+        .map_err(|e| e.to_string())
+}
+
+/// `git pull` for the repo at `path` (network — run off the render path).
+pub fn git_pull(path: &Path) -> Result<String, String> {
+    GitClient::open(&path.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .pull()
+        .map_err(|e| e.to_string())
 }
 
 fn rel_age(t: SystemTime) -> String {

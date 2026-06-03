@@ -13,17 +13,18 @@
 // GPUI state on the Shell entity. The center is the real TerminalView.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, svg, AnyElement, Context, Entity, Focusable, FontWeight, Hsla, MouseButton,
+    div, px, relative, svg, AnyElement, Context, Entity, Focusable, FontWeight, Hsla, MouseButton,
     MouseDownEvent, Pixels, SharedString, Svg, Window,
 };
 use gpui_component::{h_flex, v_flex, TitleBar};
 
 use pier_core::services::git::FileStatus;
 
-use crate::data::{self, ConnRow, FileEntry, GitData};
+use crate::data::{self, ConnRow, FileEntry, GitData, MonStat};
 use crate::terminal::TerminalView;
 use crate::theme::Theme;
 
@@ -105,6 +106,7 @@ pub struct Shell {
     files: Vec<FileEntry>,
     conns: Vec<ConnRow>,
     git: Option<GitData>,
+    mon: Option<MonStat>,
 }
 
 impl Shell {
@@ -119,6 +121,7 @@ impl Shell {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| cwd_label.clone());
         let terminal = cx.new(|cx| TerminalView::new(cx));
+        Self::start_monitor(cx);
         Self {
             theme: Theme::dark(),
             tabs: vec![Tab { title: tab_title, kind: TabKind::Local, terminal }],
@@ -133,7 +136,33 @@ impl Shell {
             files,
             conns,
             git,
+            mon: None,
         }
+    }
+
+    /// Refresh the Monitor snapshot on an interval while the Monitor panel is
+    /// the visible tool. Sampling is gated so we don't poll sysinfo when the
+    /// panel is hidden.
+    fn start_monitor(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(1500))
+                .await;
+            let alive = this
+                .update(cx, |this, cx| {
+                    let showing = matches!(TOOLS[this.active_tool].0, Svc::Monitor)
+                        && !this.right_collapsed;
+                    if showing {
+                        this.mon = Some(data::monitor_snapshot());
+                        cx.notify();
+                    }
+                })
+                .is_ok();
+            if !alive {
+                break;
+            }
+        })
+        .detach();
     }
 
     /// Open a fresh local terminal tab and make it active.
@@ -508,6 +537,9 @@ impl Shell {
                 cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
                     this.active_tool = idx;
                     this.right_collapsed = false;
+                    if matches!(TOOLS[idx].0, Svc::Monitor) {
+                        this.mon = Some(data::monitor_snapshot());
+                    }
                     cx.notify();
                 }),
             )
@@ -747,16 +779,138 @@ impl Shell {
         col.into_any_element()
     }
 
+    // ── Monitor panel (real local metrics) ───────────────────────
+    fn meter(
+        &self,
+        label: &'static str,
+        value: String,
+        pct: f64,
+        color: Hsla,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        let frac = (pct.clamp(0.0, 100.0) / 100.0) as f32;
+        v_flex()
+            .gap(px(5.0))
+            .px(t.sp3)
+            .py(t.sp2)
+            .child(
+                h_flex()
+                    .justify_between()
+                    .child(div().text_size(t.fs_ui).text_color(t.ink_2).child(label))
+                    .child(
+                        div()
+                            .font_family(t.mono.clone())
+                            .text_size(t.fs_sm)
+                            .text_color(t.muted)
+                            .child(value),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .h(px(6.0))
+                    .rounded(px(3.0))
+                    .bg(t.panel_2)
+                    .child(
+                        div()
+                            .h_full()
+                            .w(relative(frac))
+                            .rounded(px(3.0))
+                            .bg(color),
+                    ),
+            )
+    }
+
+    fn info_row(&self, label: &'static str, value: String) -> impl IntoElement {
+        let t = &self.theme;
+        h_flex()
+            .justify_between()
+            .px(t.sp3)
+            .py(px(3.0))
+            .child(div().text_size(t.fs_ui).text_color(t.muted).child(label))
+            .child(
+                div()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.ink_2)
+                    .child(value),
+            )
+    }
+
+    fn monitor_panel(&self) -> AnyElement {
+        let t = &self.theme;
+        let Some(m) = &self.mon else {
+            return v_flex()
+                .flex_1()
+                .child(self.panel_header("activity", "MONITOR", ""))
+                .child(div().p(t.sp4).text_color(t.muted).child("Sampling…"))
+                .into_any_element();
+        };
+        let gb = |mb: f64| format!("{:.1} GB", mb / 1024.0);
+        let mem_pct = if m.mem_total_mb > 0.0 {
+            m.mem_used_mb / m.mem_total_mb * 100.0
+        } else {
+            0.0
+        };
+        let swap_pct = if m.swap_total_mb > 0.0 {
+            m.swap_used_mb / m.swap_total_mb * 100.0
+        } else {
+            0.0
+        };
+
+        let mut col = v_flex()
+            .flex_1()
+            .min_h(px(0.0))
+            .child(self.panel_header("activity", "MONITOR", "localhost"))
+            .child(self.meter(
+                "CPU",
+                format!("{:.0}% · {} cores", m.cpu_pct, m.cpu_count),
+                m.cpu_pct,
+                level_color(t, m.cpu_pct),
+            ))
+            .child(self.meter(
+                "Memory",
+                format!("{} / {}", gb(m.mem_used_mb), gb(m.mem_total_mb)),
+                mem_pct,
+                level_color(t, mem_pct),
+            ));
+        if m.swap_total_mb > 0.0 {
+            col = col.child(self.meter(
+                "Swap",
+                format!("{} / {}", gb(m.swap_used_mb), gb(m.swap_total_mb)),
+                swap_pct,
+                level_color(t, swap_pct),
+            ));
+        }
+        col = col
+            .child(self.section_label("SYSTEM"))
+            .child(self.info_row("Uptime", m.uptime.clone()))
+            .child(self.info_row("Processes", m.proc_count.to_string()));
+        if let Some((l1, l5, l15)) = m.load {
+            col = col.child(self.info_row("Load", format!("{l1:.2} {l5:.2} {l15:.2}")));
+        }
+        col = col.child(self.info_row("OS", m.os_label.clone()));
+        col.into_any_element()
+    }
+
     fn right_panel(&self) -> impl IntoElement {
         let t = &self.theme;
-        let (_, glyph, name, _) = TOOLS[self.active_tool];
-        if self.active_tool == 1 {
+        let (svc, glyph, name, _) = TOOLS[self.active_tool];
+        if matches!(svc, Svc::Git) {
             div()
                 .id("git-scroll")
                 .flex_1()
                 .min_h(px(0.0))
                 .overflow_y_scroll()
                 .child(self.git_panel())
+                .into_any_element()
+        } else if matches!(svc, Svc::Monitor) {
+            div()
+                .id("mon-scroll")
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_y_scroll()
+                .child(self.monitor_panel())
                 .into_any_element()
         } else {
             v_flex()
@@ -871,6 +1025,17 @@ impl Render for Shell {
                     .child(right_zone),
             )
             .child(self.status_bar(cols, rows))
+    }
+}
+
+/// Usage-bar colour: green under 60%, amber under 85%, red above.
+fn level_color(t: &Theme, pct: f64) -> Hsla {
+    if pct >= 85.0 {
+        t.neg
+    } else if pct >= 60.0 {
+        t.warn
+    } else {
+        t.pos
     }
 }
 

@@ -12,6 +12,7 @@ use std::time::SystemTime;
 
 use pier_core::connections::ConnectionStore;
 use pier_core::services::git::{FileStatus, GitClient};
+use pier_core::services::local_monitor;
 
 /// One entry in the Files sidebar.
 pub struct FileEntry {
@@ -119,6 +120,44 @@ pub fn git_status(path: &Path) -> Option<GitData> {
         staged,
         unstaged,
     })
+}
+
+/// Live local-host metrics for the Monitor panel.
+pub struct MonStat {
+    pub cpu_pct: f64,
+    pub cpu_count: u32,
+    pub mem_used_mb: f64,
+    pub mem_total_mb: f64,
+    pub swap_used_mb: f64,
+    pub swap_total_mb: f64,
+    pub proc_count: u32,
+    pub uptime: String,
+    pub os_label: String,
+    /// 1/5/15-minute load average, or None on platforms without it (Windows).
+    pub load: Option<(f64, f64, f64)>,
+}
+
+/// Sample the local host once. Backed by `sysinfo`, so CPU/mem/uptime are
+/// real on every platform; load average is Unix-only.
+pub fn monitor_snapshot() -> MonStat {
+    let s = local_monitor::collect_snapshot(false);
+    let load = if s.load_1 < 0.0 {
+        None
+    } else {
+        Some((s.load_1, s.load_5, s.load_15))
+    };
+    MonStat {
+        cpu_pct: s.cpu_pct.max(0.0),
+        cpu_count: s.cpu_count,
+        mem_used_mb: s.mem_used_mb,
+        mem_total_mb: s.mem_total_mb,
+        swap_used_mb: s.swap_used_mb,
+        swap_total_mb: s.swap_total_mb,
+        proc_count: s.proc_count,
+        uptime: s.uptime,
+        os_label: s.os_label,
+        load,
+    }
 }
 
 fn rel_age(t: SystemTime) -> String {

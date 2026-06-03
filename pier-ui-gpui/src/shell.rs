@@ -140,6 +140,17 @@ pub struct Shell {
     /// Command-palette filter text + its focus handle for keyboard input.
     palette_query: String,
     palette_focus: FocusHandle,
+    /// Git commit message buffer + its focus handle.
+    commit_msg: String,
+    commit_focus: FocusHandle,
+}
+
+/// A per-file staging action in the Git panel.
+#[derive(Clone, Copy)]
+enum GitFileOp {
+    Stage,
+    Unstage,
+    Discard,
 }
 
 /// A draggable layout divider.
@@ -235,6 +246,68 @@ impl Shell {
             dragging: None,
             palette_query: String::new(),
             palette_focus: cx.focus_handle(),
+            commit_msg: String::new(),
+            commit_focus: cx.focus_handle(),
+        }
+    }
+
+    /// Run a per-file staging action, then refresh status.
+    fn git_file_op(&mut self, op: GitFileOp, file: String, cx: &mut Context<Self>) {
+        let res = match op {
+            GitFileOp::Stage => data::git_stage(&self.cwd, &file),
+            GitFileOp::Unstage => data::git_unstage(&self.cwd, &file),
+            GitFileOp::Discard => data::git_discard(&self.cwd, &file),
+        };
+        self.git_msg = res.err();
+        self.git = data::git_status(&self.cwd);
+        cx.notify();
+    }
+
+    /// Commit the staged changes with the current message.
+    fn do_commit(&mut self, cx: &mut Context<Self>) {
+        let msg = self.commit_msg.trim().to_string();
+        if msg.is_empty() {
+            self.git_msg = Some("Enter a commit message".to_string());
+            cx.notify();
+            return;
+        }
+        match data::git_commit(&self.cwd, &msg) {
+            Ok(hash) => {
+                self.commit_msg.clear();
+                let short: String = hash.chars().take(7).collect();
+                self.git_msg = Some(format!("Committed {short}"));
+            }
+            Err(e) => self.git_msg = Some(e),
+        }
+        self.git = data::git_status(&self.cwd);
+        cx.notify();
+    }
+
+    fn on_commit_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        let m = &ks.modifiers;
+        match ks.key.as_str() {
+            // Cmd/Ctrl+Enter commits; plain Enter inserts a newline-free submit too.
+            "enter" => {
+                self.do_commit(cx);
+                return;
+            }
+            "backspace" => {
+                if self.commit_msg.pop().is_some() {
+                    cx.notify();
+                }
+                return;
+            }
+            _ => {}
+        }
+        if m.control || m.alt || m.platform {
+            return;
+        }
+        if let Some(kc) = &ks.key_char {
+            if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) {
+                self.commit_msg.push_str(kc);
+                cx.notify();
+            }
         }
     }
 
@@ -1061,11 +1134,42 @@ impl Shell {
             .child(div().text_size(t.fs_sm).text_color(t.muted).child(meta.into()))
     }
 
-    fn git_change_row(&self, c: &data::GitChange) -> impl IntoElement {
+    /// A small icon button performing a per-file git op.
+    fn git_file_btn(
+        &self,
+        cx: &mut Context<Self>,
+        key: &str,
+        glyph: &'static str,
+        color: Hsla,
+        op: GitFileOp,
+        file: String,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        div()
+            .id(SharedString::from(format!("gfb-{key}")))
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(18.0))
+            .h(px(18.0))
+            .rounded(t.radius_sm)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                    this.git_file_op(op, file.clone(), cx)
+                }),
+            )
+            .child(icon(glyph, px(13.0), color))
+    }
+
+    fn git_change_row(&self, cx: &mut Context<Self>, c: &data::GitChange, staged: bool) -> impl IntoElement {
         let t = &self.theme;
         let (mark, mark_color) = status_style(t, &c.status);
+        let path = c.path.clone();
         h_flex()
-            .id(SharedString::from(format!("gch-{}", c.path)))
+            .id(SharedString::from(format!("gch-{}-{}", staged, c.path)))
             .items_center()
             .gap(t.sp2)
             .h(px(26.0))
@@ -1086,6 +1190,83 @@ impl Shell {
                     .text_size(t.fs_sm)
                     .text_color(t.ink_2)
                     .child(c.path.clone()),
+            )
+            .when(staged, |d| {
+                d.child(self.git_file_btn(
+                    cx,
+                    &format!("uns-{}", c.path),
+                    "minus",
+                    t.muted,
+                    GitFileOp::Unstage,
+                    path.clone(),
+                ))
+            })
+            .when(!staged, |d| {
+                d.child(self.git_file_btn(
+                    cx,
+                    &format!("dis-{}", c.path),
+                    "delete",
+                    t.neg,
+                    GitFileOp::Discard,
+                    path.clone(),
+                ))
+                .child(self.git_file_btn(
+                    cx,
+                    &format!("stg-{}", c.path),
+                    "plus",
+                    t.pos,
+                    GitFileOp::Stage,
+                    path.clone(),
+                ))
+            })
+    }
+
+    /// Commit message input + Commit button (shown above staged files).
+    fn commit_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let empty = self.commit_msg.is_empty();
+        h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .mx(t.sp3)
+            .mb(t.sp2)
+            .child(
+                div()
+                    .track_focus(&self.commit_focus)
+                    .key_context("CommitMsg")
+                    .on_key_down(cx.listener(Self::on_commit_key))
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h(px(28.0))
+                    .px(t.sp2)
+                    .flex()
+                    .items_center()
+                    .rounded(t.radius_sm)
+                    .bg(t.panel_2)
+                    .border_1()
+                    .border_color(t.line_2)
+                    .when(empty, |d| {
+                        d.text_color(t.dim).child("Commit message…")
+                    })
+                    .when(!empty, |d| {
+                        d.text_color(t.ink).child(self.commit_msg.clone())
+                    }),
+            )
+            .child(
+                div()
+                    .id("git-commit")
+                    .px(t.sp3)
+                    .py(px(5.0))
+                    .rounded(t.radius_sm)
+                    .text_size(t.fs_ui)
+                    .cursor_pointer()
+                    .bg(t.accent)
+                    .text_color(t.accent_ink)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _w, cx| this.do_commit(cx)),
+                    )
+                    .child("Commit"),
             )
     }
 
@@ -1333,15 +1514,17 @@ impl Shell {
         match self.git_tab {
             GitTab::Changes => {
                 if !git.staged.is_empty() {
-                    col = col.child(self.section_label(format!("STAGED · {}", git.staged.len())));
+                    col = col
+                        .child(self.section_label(format!("STAGED · {}", git.staged.len())))
+                        .child(self.commit_box(cx));
                     for c in &git.staged {
-                        col = col.child(self.git_change_row(c));
+                        col = col.child(self.git_change_row(cx, c, true));
                     }
                 }
                 if !git.unstaged.is_empty() {
                     col = col.child(self.section_label(format!("CHANGES · {}", git.unstaged.len())));
                     for c in &git.unstaged {
-                        col = col.child(self.git_change_row(c));
+                        col = col.child(self.git_change_row(cx, c, false));
                     }
                 }
                 if total == 0 {

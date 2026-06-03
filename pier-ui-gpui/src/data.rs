@@ -198,6 +198,38 @@ pub fn git_stash(path: &Path) -> Vec<StashEntry> {
         .unwrap_or_default()
 }
 
+/// Stage a single path. Fast local op — safe to call from a click handler.
+pub fn git_stage(repo: &Path, file: &str) -> Result<(), String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .stage(&[file.to_string()])
+        .map_err(|e| e.to_string())
+}
+
+/// Unstage a single path.
+pub fn git_unstage(repo: &Path, file: &str) -> Result<(), String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .unstage(&[file.to_string()])
+        .map_err(|e| e.to_string())
+}
+
+/// Discard worktree changes to a single path (destructive).
+pub fn git_discard(repo: &Path, file: &str) -> Result<(), String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .discard(&[file.to_string()])
+        .map_err(|e| e.to_string())
+}
+
+/// Commit staged changes with `message`; returns the new commit hash.
+pub fn git_commit(repo: &Path, message: &str) -> Result<String, String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .commit(message)
+        .map_err(|e| e.to_string())
+}
+
 /// `git push` for the repo at `path` (network — run off the render path).
 pub fn git_push(path: &Path) -> Result<String, String> {
     GitClient::open(&path.to_string_lossy())

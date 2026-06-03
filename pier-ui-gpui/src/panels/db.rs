@@ -1,35 +1,612 @@
 // Database panel — shared by MySQL / PostgreSQL / Redis / SQLite tools.
 //
-// STUB: render a styled placeholder. Implement a schema/table tree plus a
-// read-only result preview via pier-core's db services. Respect the product's
-// read-only default. See the per-panel prompt for the contract.
+// Two access paths, picked with the engine selector at the top:
+//
+//   * SQLite (no network): discover `.db` / `.sqlite` files under the working
+//     dir, open one via pier_core::services::sqlite::SqliteClient, then list its
+//     tables and — for the selected table — its columns. All sqlite3 subprocess
+//     work runs on the background executor; render only paints cached state.
+//   * MySQL / Postgres / Redis (remote): pick a saved SSH connection from
+//     data::connections_raw(), open an SshSession with data::connect_blocking on
+//     the background executor, and run a single READ-ONLY listing command
+//     (`SHOW DATABASES` / `SELECT datname …` / `INFO keyspace`) over it. No
+//     writes or DDL are ever issued — the panel honours the read-only default.
+//
+// Connection / query failures surface as a single `t.neg` line under the header.
 
 use gpui::prelude::*;
-use gpui::{Context, Window};
-use gpui_component::v_flex;
+use gpui::{div, px, AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, SharedString, Window};
+use gpui_component::{h_flex, v_flex};
 
+use pier_core::services::sqlite::SqliteClient;
+use pier_core::ssh::SshConfig;
+
+use crate::data;
 use crate::theme::Theme;
 use crate::ui;
 
+/// Which backend the panel is currently driving. All four DB tools share this
+/// one View, so the engine is chosen here rather than inferred from the tool.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Engine {
+    Sqlite,
+    Mysql,
+    Postgres,
+    Redis,
+}
+
+impl Engine {
+    fn label(self) -> &'static str {
+        match self {
+            Engine::Sqlite => "SQLite",
+            Engine::Mysql => "MySQL",
+            Engine::Postgres => "Postgres",
+            Engine::Redis => "Redis",
+        }
+    }
+
+    /// True for the engines reached over SSH (everything but SQLite).
+    fn remote(self) -> bool {
+        !matches!(self, Engine::Sqlite)
+    }
+
+    /// A single read-only command listing the engine's databases, run over the
+    /// SSH session. Relies on the remote host's local auth (peer / ~/.my.cnf);
+    /// stderr is dropped so a missing client surfaces as an empty result.
+    fn list_command(self) -> &'static str {
+        match self {
+            Engine::Mysql => "mysql -N -B -e 'SHOW DATABASES' 2>/dev/null",
+            Engine::Postgres => {
+                "psql -At -c 'SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname' 2>/dev/null"
+            }
+            Engine::Redis => "redis-cli INFO keyspace 2>/dev/null",
+            Engine::Sqlite => "",
+        }
+    }
+
+    /// Parse the listing command's stdout into database names.
+    fn parse_list(self, out: &str) -> Vec<String> {
+        match self {
+            // Lines look like `db0:keys=1,expires=0,avg_ttl=0`.
+            Engine::Redis => out
+                .lines()
+                .filter_map(|l| {
+                    let l = l.trim();
+                    let rest = l.strip_prefix("db")?;
+                    let idx = rest.find(':')?;
+                    Some(format!("db{}", &rest[..idx]))
+                })
+                .collect(),
+            _ => out
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        }
+    }
+}
+
+/// One column of the selected table, normalised across engines.
+struct Col {
+    name: String,
+    ty: String,
+    /// Short key marker (`PK` / `NN`), empty when neither applies.
+    key: String,
+}
+
 pub struct DbPanel {
-    #[allow(dead_code)]
     theme: Theme,
+    engine: Engine,
+
+    // SQLite (local) state.
+    db_files: Vec<String>,
+    open_db: Option<String>,
+    tables: Vec<String>,
+    selected_table: Option<usize>,
+    columns: Vec<Col>,
+
+    // Remote (MySQL / Postgres / Redis) state.
+    conns: Vec<SshConfig>,
+    selected_conn: Option<usize>,
+    databases: Vec<String>,
+
+    // Shared.
+    busy: bool,
+    error: Option<String>,
 }
 
 impl DbPanel {
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self {
             theme: Theme::dark(),
+            engine: Engine::Sqlite,
+            db_files: discover_db_files(),
+            open_db: None,
+            tables: Vec::new(),
+            selected_table: None,
+            columns: Vec::new(),
+            conns: data::connections_raw(),
+            selected_conn: None,
+            databases: Vec::new(),
+            busy: false,
+            error: None,
         }
+    }
+
+    // ── Actions (all blocking work happens on the background executor) ──
+
+    /// Re-scan the working dir for SQLite files and reload saved connections.
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        self.db_files = discover_db_files();
+        self.conns = data::connections_raw();
+        cx.notify();
+    }
+
+    /// Open a SQLite file and list its tables.
+    fn open_sqlite(&mut self, path: String, cx: &mut Context<Self>) {
+        self.open_db = Some(path.clone());
+        self.tables.clear();
+        self.selected_table = None;
+        self.columns.clear();
+        self.error = None;
+        self.busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    match SqliteClient::open(&path) {
+                        Ok(c) => c.list_tables().map_err(|e| e.to_string()),
+                        Err(e) => Err(e.to_string()),
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = false;
+                match res {
+                    Ok(tables) => this.tables = tables,
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Load column metadata for the table at `idx` in the open SQLite file.
+    fn open_table(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(path) = self.open_db.clone() else {
+            return;
+        };
+        let Some(table) = self.tables.get(idx).cloned() else {
+            return;
+        };
+        self.selected_table = Some(idx);
+        self.columns.clear();
+        self.error = None;
+        self.busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    match SqliteClient::open(&path) {
+                        Ok(c) => c.table_columns(&table).map_err(|e| e.to_string()),
+                        Err(e) => Err(e.to_string()),
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = false;
+                match res {
+                    Ok(cols) => {
+                        this.columns = cols
+                            .into_iter()
+                            .map(|c| Col {
+                                name: c.name,
+                                ty: c.col_type,
+                                key: if c.primary_key {
+                                    "PK".into()
+                                } else if c.not_null {
+                                    "NN".into()
+                                } else {
+                                    String::new()
+                                },
+                            })
+                            .collect();
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Open an SSH session to the saved connection at `idx` and run the current
+    /// engine's read-only database-listing command over it.
+    fn connect_remote(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(cfg) = self.conns.get(idx).cloned() else {
+            return;
+        };
+        let engine = self.engine;
+        self.selected_conn = Some(idx);
+        self.databases.clear();
+        self.error = None;
+        self.busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    let session = data::connect_blocking(&cfg)?;
+                    let (_code, out) = session
+                        .exec_command_blocking(engine.list_command())
+                        .map_err(|e| e.to_string())?;
+                    Ok::<Vec<String>, String>(engine.parse_list(&out))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = false;
+                match res {
+                    Ok(dbs) => this.databases = dbs,
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    // ── Chrome ───────────────────────────────────────────────────
+
+    fn engine_chip(&self, cx: &mut Context<Self>, e: Engine) -> impl IntoElement {
+        let t = &self.theme;
+        let active = self.engine == e;
+        h_flex()
+            .id(SharedString::from(format!("eng-{}", e.label())))
+            .items_center()
+            .px(t.sp2)
+            .py(px(3.0))
+            .rounded(t.radius_sm)
+            .text_size(t.fs_ui)
+            .text_color(if active { t.ink } else { t.muted })
+            .when(active, |d| d.bg(t.accent_dim))
+            .when(!active, |d| d.hover(|s| s.bg(t.hover)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                    this.engine = e;
+                    this.error = None;
+                    cx.notify();
+                }),
+            )
+            .child(e.label())
+    }
+
+    fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .w_full()
+            .px(t.sp3)
+            .py(t.sp2)
+            .border_b_1()
+            .border_color(t.line)
+            .child(self.engine_chip(cx, Engine::Sqlite))
+            .child(self.engine_chip(cx, Engine::Mysql))
+            .child(self.engine_chip(cx, Engine::Postgres))
+            .child(self.engine_chip(cx, Engine::Redis))
+            .child(div().flex_1())
+            .child(
+                div()
+                    .id("db-reload")
+                    .px(t.sp3)
+                    .py(px(3.0))
+                    .rounded(t.radius_sm)
+                    .bg(t.panel_2)
+                    .text_size(t.fs_ui)
+                    .text_color(t.ink_2)
+                    .hover(|s| s.bg(t.elev))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _w, cx| this.reload(cx)),
+                    )
+                    .child("Reload"),
+            )
+    }
+
+    // ── Bodies ───────────────────────────────────────────────────
+
+    fn sqlite_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = &self.theme;
+        let mut col = v_flex().pb(t.sp3);
+
+        col = col.child(ui::section_label(t, format!("DATABASES · {}", self.db_files.len())));
+        if self.db_files.is_empty() {
+            col = col.child(hint(t, "No .db / .sqlite files in the working dir"));
+        } else {
+            for (i, path) in self.db_files.iter().enumerate() {
+                let selected = self.open_db.as_deref() == Some(path.as_str());
+                let p = path.clone();
+                col = col.child(
+                    h_flex()
+                        .id(SharedString::from(format!("dbf-{i}")))
+                        .items_center()
+                        .gap(t.sp2)
+                        .h(px(26.0))
+                        .px(t.sp3)
+                        .when(selected, |d| d.bg(t.accent_dim))
+                        .when(!selected, |d| d.hover(|s| s.bg(t.hover)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                                this.open_sqlite(p.clone(), cx)
+                            }),
+                        )
+                        .child(ui::icon("database", px(14.0), if selected { t.accent } else { t.muted }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .overflow_hidden()
+                                .text_color(if selected { t.ink } else { t.ink_2 })
+                                .child(file_name(path)),
+                        ),
+                );
+            }
+        }
+
+        if self.open_db.is_some() {
+            col = col.child(ui::section_label(t, format!("TABLES · {}", self.tables.len())));
+            if self.tables.is_empty() && !self.busy {
+                col = col.child(hint(t, "No tables"));
+            }
+            for (i, table) in self.tables.iter().enumerate() {
+                let selected = self.selected_table == Some(i);
+                col = col.child(
+                    h_flex()
+                        .id(SharedString::from(format!("tbl-{i}")))
+                        .items_center()
+                        .gap(t.sp2)
+                        .h(px(26.0))
+                        .px(t.sp3)
+                        .when(selected, |d| d.bg(t.accent_dim))
+                        .when(!selected, |d| d.hover(|s| s.bg(t.hover)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                                this.open_table(i, cx)
+                            }),
+                        )
+                        .child(ui::icon("layers", px(14.0), if selected { t.accent } else { t.muted }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .overflow_hidden()
+                                .font_family(t.mono.clone())
+                                .text_size(t.fs_sm)
+                                .text_color(if selected { t.ink } else { t.ink_2 })
+                                .child(table.clone()),
+                        ),
+                );
+            }
+        }
+
+        if self.selected_table.is_some() {
+            col = col.child(ui::section_label(t, format!("COLUMNS · {}", self.columns.len())));
+            for c in &self.columns {
+                col = col.child(column_row(t, c));
+            }
+        }
+
+        col.into_any_element()
+    }
+
+    fn remote_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = &self.theme;
+        let mut col = v_flex().pb(t.sp3);
+
+        col = col.child(ui::section_label(t, format!("CONNECTIONS · {}", self.conns.len())));
+        if self.conns.is_empty() {
+            col = col.child(hint(t, "No saved connections"));
+        } else {
+            for (i, c) in self.conns.iter().enumerate() {
+                let selected = self.selected_conn == Some(i);
+                let addr = format!("{}@{}:{}", c.user, c.host, c.port);
+                let name = c.name.clone();
+                col = col.child(
+                    h_flex()
+                        .id(SharedString::from(format!("conn-{i}")))
+                        .items_center()
+                        .gap(t.sp2)
+                        .h(px(42.0))
+                        .px(t.sp3)
+                        .when(selected, |d| d.bg(t.accent_dim))
+                        .when(!selected, |d| d.hover(|s| s.bg(t.hover)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                                this.connect_remote(i, cx)
+                            }),
+                        )
+                        .child(ui::status_dot(if selected { t.accent } else { t.muted }))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .overflow_hidden()
+                                        .text_color(if selected { t.ink } else { t.ink_2 })
+                                        .child(name),
+                                )
+                                .child(
+                                    div()
+                                        .overflow_hidden()
+                                        .font_family(t.mono.clone())
+                                        .text_size(t.fs_sm)
+                                        .text_color(t.muted)
+                                        .child(addr),
+                                ),
+                        ),
+                );
+            }
+        }
+
+        if !self.databases.is_empty() {
+            col = col.child(ui::section_label(t, format!("DATABASES · {}", self.databases.len())));
+            for (i, db) in self.databases.iter().enumerate() {
+                col = col.child(
+                    h_flex()
+                        .id(SharedString::from(format!("rdb-{i}")))
+                        .items_center()
+                        .gap(t.sp2)
+                        .h(px(26.0))
+                        .px(t.sp3)
+                        .child(ui::icon("database", px(14.0), t.muted))
+                        .child(
+                            div()
+                                .flex_1()
+                                .overflow_hidden()
+                                .font_family(t.mono.clone())
+                                .text_size(t.fs_sm)
+                                .text_color(t.ink_2)
+                                .child(db.clone()),
+                        ),
+                );
+            }
+        } else if self.selected_conn.is_some() && !self.busy && self.error.is_none() {
+            col = col.child(hint(t, "No databases reported (read-only listing)"));
+        }
+
+        col.into_any_element()
     }
 }
 
 impl Render for DbPanel {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let t = &self.theme;
-        v_flex()
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme.clone();
+        let meta = if self.busy {
+            "…".to_string()
+        } else if self.engine == Engine::Sqlite {
+            self.open_db
+                .as_deref()
+                .map(file_name)
+                .unwrap_or_else(|| Engine::Sqlite.label().to_string())
+        } else {
+            self.engine.label().to_string()
+        };
+
+        let mut root = v_flex()
             .size_full()
-            .child(ui::panel_header(t, "database", "DATABASE", ""))
-            .child(ui::empty_state(t, "Database panel — not yet implemented"))
+            .child(ui::panel_header(&t, "database", "DATABASE", meta))
+            .child(self.toolbar(cx));
+
+        if let Some(err) = self.error.clone() {
+            root = root.child(
+                div()
+                    .w_full()
+                    .px(t.sp3)
+                    .py(t.sp2)
+                    .border_b_1()
+                    .border_color(t.line)
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.neg)
+                    .child(err),
+            );
+        }
+
+        let body = if self.engine.remote() {
+            self.remote_body(cx)
+        } else {
+            self.sqlite_body(cx)
+        };
+
+        root.child(
+            div()
+                .id("db-scroll")
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_y_scroll()
+                .child(body),
+        )
     }
+}
+
+/// A single muted hint line for empty sections.
+fn hint(t: &Theme, text: &'static str) -> impl IntoElement {
+    div()
+        .px(t.sp3)
+        .py(t.sp2)
+        .text_size(t.fs_sm)
+        .text_color(t.dim)
+        .child(text)
+}
+
+/// One column row: mono name, type, and an optional key badge.
+fn column_row(t: &Theme, c: &Col) -> impl IntoElement {
+    h_flex()
+        .items_center()
+        .gap(t.sp2)
+        .h(px(24.0))
+        .px(t.sp3)
+        .child(
+            div()
+                .flex_1()
+                .overflow_hidden()
+                .font_family(t.mono.clone())
+                .text_size(t.fs_sm)
+                .text_color(t.ink_2)
+                .child(c.name.clone()),
+        )
+        .child(div().text_size(t.fs_sm).text_color(t.muted).child(c.ty.clone()))
+        .when(!c.key.is_empty(), |d| {
+            d.child(
+                div()
+                    .px(px(5.0))
+                    .py(px(1.0))
+                    .rounded(t.radius_sm)
+                    .bg(t.accent_subtle)
+                    .font_family(t.mono.clone())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(t.fs_sm)
+                    .text_color(t.accent)
+                    .child(c.key.clone()),
+            )
+        })
+}
+
+/// The trailing path component (file name) of `path`.
+fn file_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// Scan the working dir (one level) for SQLite database files, sorted.
+fn discover_db_files() -> Vec<String> {
+    let dir = data::current_dir();
+    let mut out = Vec::new();
+    if let Ok(read) = std::fs::read_dir(&dir) {
+        for e in read.flatten() {
+            let path = e.path();
+            if !path.is_file() {
+                continue;
+            }
+            let is_db = path
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| matches!(x.to_ascii_lowercase().as_str(), "db" | "sqlite" | "sqlite3"))
+                .unwrap_or(false);
+            if is_db {
+                out.push(path.to_string_lossy().into_owned());
+            }
+        }
+    }
+    out.sort();
+    out
 }

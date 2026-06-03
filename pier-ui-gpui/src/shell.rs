@@ -16,8 +16,8 @@ use std::path::PathBuf;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, svg, AnyElement, Context, Entity, FontWeight, Hsla, MouseButton, MouseDownEvent,
-    Pixels, SharedString, Svg, Window,
+    div, px, svg, AnyElement, Context, Entity, Focusable, FontWeight, Hsla, MouseButton,
+    MouseDownEvent, Pixels, SharedString, Svg, Window,
 };
 use gpui_component::{h_flex, v_flex, TitleBar};
 
@@ -86,11 +86,13 @@ enum TabKind {
 struct Tab {
     title: String,
     kind: TabKind,
+    /// Each tab owns its own terminal session; dropping the tab drops the
+    /// entity, which drops PierTerminal and closes the PTY.
+    terminal: Entity<TerminalView>,
 }
 
 pub struct Shell {
     theme: Theme,
-    terminal: Entity<TerminalView>,
     tabs: Vec<Tab>,
     active_tab: usize,
     active_tool: usize,
@@ -116,10 +118,10 @@ impl Shell {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| cwd_label.clone());
+        let terminal = cx.new(|cx| TerminalView::new(cx));
         Self {
             theme: Theme::dark(),
-            terminal: cx.new(|cx| TerminalView::new(cx)),
-            tabs: vec![Tab { title: tab_title, kind: TabKind::Local }],
+            tabs: vec![Tab { title: tab_title, kind: TabKind::Local, terminal }],
             active_tab: 0,
             // default to Git so the right panel matches the reference screenshot
             active_tool: 1,
@@ -132,6 +134,18 @@ impl Shell {
             conns,
             git,
         }
+    }
+
+    /// Open a fresh local terminal tab and make it active.
+    fn open_terminal_tab(&mut self, cx: &mut Context<Self>) {
+        let terminal = cx.new(|cx| TerminalView::new(cx));
+        self.tabs.push(Tab {
+            title: "pwsh".to_string(),
+            kind: TabKind::Local,
+            terminal,
+        });
+        self.active_tab = self.tabs.len() - 1;
+        cx.notify();
     }
 
     fn svc_color(&self, s: Svc) -> Hsla {
@@ -295,7 +309,7 @@ impl Shell {
             .id(SharedString::from(format!("conn-{idx}")))
             .items_center()
             .gap(t.sp2)
-            .h(px(28.0))
+            .h(px(42.0))
             .px(t.sp3)
             .when(selected, |d| d.bg(t.accent_dim))
             .when(!selected, |d| d.hover(|s| s.bg(t.hover)))
@@ -308,18 +322,24 @@ impl Shell {
             )
             .child(div().w(px(7.0)).h(px(7.0)).rounded_full().bg(dot))
             .child(
-                div()
+                v_flex()
                     .flex_1()
+                    .min_w(px(0.0))
                     .overflow_hidden()
-                    .text_color(if selected { t.ink } else { t.ink_2 })
-                    .child(c.name.clone()),
-            )
-            .child(
-                div()
-                    .font_family(t.mono.clone())
-                    .text_size(t.fs_sm)
-                    .text_color(t.muted)
-                    .child(c.addr.clone()),
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .text_color(if selected { t.ink } else { t.ink_2 })
+                            .child(c.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .font_family(t.mono.clone())
+                            .text_size(t.fs_sm)
+                            .text_color(t.muted)
+                            .child(c.addr.clone()),
+                    ),
             )
     }
 
@@ -392,8 +412,10 @@ impl Shell {
             .when(!active, |d| d.hover(|s| s.bg(t.hover)))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                cx.listener(move |this, _: &MouseDownEvent, window, cx| {
                     this.active_tab = idx;
+                    let handle = this.tabs[idx].terminal.read(cx).focus_handle(cx);
+                    window.focus(&handle, cx);
                     cx.notify();
                 }),
             )
@@ -448,11 +470,19 @@ impl Shell {
         }
         row.child(
             div()
+                .id("new-tab")
                 .flex()
                 .items_center()
                 .justify_center()
                 .w(px(34.0))
                 .h_full()
+                .hover(|s| s.bg(t.hover))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _w, cx| {
+                        this.open_terminal_tab(cx);
+                    }),
+                )
                 .child(icon("plus", px(15.0), t.muted)),
         )
     }
@@ -794,7 +824,8 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme.clone();
-        let (cols, rows) = self.terminal.read(cx).size();
+        let active_terminal = self.tabs[self.active_tab].terminal.clone();
+        let (cols, rows) = active_terminal.read(cx).size();
 
         // Right zone: optional panel + always-visible tool strip on the right.
         let mut right_zone = h_flex().h_full();
@@ -834,7 +865,7 @@ impl Render for Shell {
                                     .flex_1()
                                     .min_h(px(0.0))
                                     .w_full()
-                                    .child(self.terminal.clone()),
+                                    .child(active_terminal),
                             ),
                     )
                     .child(right_zone),

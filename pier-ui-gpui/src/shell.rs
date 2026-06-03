@@ -18,7 +18,8 @@ use std::time::Duration;
 use gpui::prelude::*;
 use gpui::{
     deferred, div, px, svg, AnyElement, Context, Entity, Focusable, FontWeight, Hsla,
-    InteractiveElement, MouseButton, MouseDownEvent, Pixels, SharedString, Svg, Window,
+    InteractiveElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    SharedString, Svg, Window,
 };
 use gpui_component::{h_flex, v_flex, TitleBar};
 
@@ -131,6 +132,18 @@ pub struct Shell {
     open_menu: Option<usize>,
     /// Active centered overlay (Settings / command palette), if any.
     overlay: Overlay,
+    /// User-dragged widths overriding the defaults; None = theme default.
+    sidebar_w: Option<Pixels>,
+    right_w: Option<Pixels>,
+    /// The divider currently being dragged, if any.
+    dragging: Option<DragTarget>,
+}
+
+/// A draggable layout divider.
+#[derive(Clone, Copy, PartialEq)]
+enum DragTarget {
+    Sidebar,
+    Right,
 }
 
 /// A centered modal layer over the shell.
@@ -214,7 +227,33 @@ impl Shell {
             panels,
             open_menu: None,
             overlay: Overlay::None,
+            sidebar_w: None,
+            right_w: None,
+            dragging: None,
         }
+    }
+
+    /// A vertical divider the user can drag to resize an adjacent panel.
+    fn drag_handle(&self, cx: &mut Context<Self>, target: DragTarget) -> impl IntoElement {
+        let t = &self.theme;
+        let id = match target {
+            DragTarget::Sidebar => "drag-sidebar",
+            DragTarget::Right => "drag-right",
+        };
+        div()
+            .id(id)
+            .w(px(5.0))
+            .h_full()
+            .flex_none()
+            .cursor_col_resize()
+            .hover(|s| s.bg(t.accent_dim))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                    this.dragging = Some(target);
+                    cx.notify();
+                }),
+            )
     }
 
     /// Dispatch a shell-wide command from a menu / palette / title-bar button.
@@ -725,8 +764,9 @@ impl Shell {
         };
 
         v_flex()
-            .w(t.sidebar_w)
+            .w(self.sidebar_w.unwrap_or(t.sidebar_w))
             .h_full()
+            .flex_none()
             .bg(t.surface)
             .border_r_1()
             .border_color(t.line)
@@ -1571,13 +1611,14 @@ impl Render for Shell {
         let active_terminal = self.tabs[self.active_tab].terminal.clone();
         let (cols, rows) = active_terminal.read(cx).size();
 
-        // Right zone: optional panel + always-visible tool strip on the right.
+        // Right zone: optional panel (with a drag handle) + tool strip.
         let mut right_zone = h_flex().h_full();
         if !self.right_collapsed {
-            right_zone = right_zone.child(
+            right_zone = right_zone.child(self.drag_handle(cx, DragTarget::Right)).child(
                 v_flex()
-                    .w(t.rightpanel_w)
+                    .w(self.right_w.unwrap_or(t.rightpanel_w))
                     .h_full()
+                    .flex_none()
                     .bg(t.surface)
                     .border_l_1()
                     .border_color(t.line)
@@ -1598,6 +1639,7 @@ impl Render for Shell {
                     .flex_1()
                     .min_h(px(0.0))
                     .child(self.sidebar(cx))
+                    .child(self.drag_handle(cx, DragTarget::Sidebar))
                     .child(
                         v_flex()
                             .flex_1()
@@ -1618,9 +1660,37 @@ impl Render for Shell {
 
         // Overlay layer (Settings / command palette) paints on top of the shell.
         let show_overlay = self.overlay != Overlay::None;
+        let dragging = self.dragging.is_some();
         div()
+            .id("shell-root")
             .relative()
             .size_full()
+            // While a divider is dragged, track moves at the root and commit
+            // widths from the cursor x; release on mouse-up.
+            .when(dragging, |d| {
+                d.on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
+                    let Some(target) = this.dragging else { return };
+                    let x = f32::from(ev.position.x);
+                    match target {
+                        DragTarget::Sidebar => {
+                            this.sidebar_w = Some(px(x.clamp(180.0, 480.0)));
+                        }
+                        DragTarget::Right => {
+                            let vw = f32::from(window.viewport_size().width);
+                            let trw = f32::from(this.theme.toolrail_w);
+                            this.right_w = Some(px((vw - trw - x).clamp(260.0, 720.0)));
+                        }
+                    }
+                    cx.notify();
+                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseUpEvent, _w, cx| {
+                        this.dragging = None;
+                        cx.notify();
+                    }),
+                )
+            })
             .child(body)
             .when(show_overlay, |d| d.child(self.overlay_layer(cx)))
     }

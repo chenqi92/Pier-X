@@ -168,6 +168,7 @@ impl DockerPanel {
 
 impl Render for DockerPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = cx.global::<Theme>().clone();
         let t = &self.theme;
         let count = if self.session.is_some() {
             self.containers.len().to_string()

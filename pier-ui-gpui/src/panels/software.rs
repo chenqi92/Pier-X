@@ -302,6 +302,7 @@ impl SoftwarePanel {
 
 impl Render for SoftwarePanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = cx.global::<Theme>().clone();
         let t = &self.theme;
         let meta: SharedString = match &self.load {
             Load::Ready(d) => d.total.to_string().into(),

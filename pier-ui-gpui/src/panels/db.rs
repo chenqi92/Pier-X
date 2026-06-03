@@ -487,6 +487,7 @@ impl DbPanel {
 
 impl Render for DbPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = cx.global::<Theme>().clone();
         let t = self.theme.clone();
         let meta = if self.busy {
             "…".to_string()

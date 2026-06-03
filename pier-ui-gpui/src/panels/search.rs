@@ -519,6 +519,7 @@ impl SearchPanel {
 
 impl Render for SearchPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = cx.global::<Theme>().clone();
         // Move focus into the query box once a connect succeeds.
         if self.focus_input_pending && self.session.is_some() {
             self.focus_input_pending = false;

@@ -56,7 +56,8 @@ impl MarkdownPanel {
 }
 
 impl Render for MarkdownPanel {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = cx.global::<Theme>().clone();
         let t = &self.theme;
         let (meta, body): (String, AnyElement) = match &self.state {
             PanelState::Loading => (

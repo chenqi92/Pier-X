@@ -229,6 +229,7 @@ impl SftpPanel {
 
 impl Render for SftpPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = cx.global::<Theme>().clone();
         let t = self.theme.clone();
         let meta: SharedString = if self.sftp.is_some() {
             self.cwd.clone().into()

@@ -212,7 +212,7 @@ impl Shell {
     }
 
     // ── TitleBar (client-side window chrome) ─────────────────────
-    fn topbar(&self) -> impl IntoElement {
+    fn topbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let menu = |label: &'static str| {
             div()
@@ -266,7 +266,36 @@ impl Shell {
                     .child(div().flex_1())
                     .child(action("command"))
                     .child(action("plus"))
-                    .child(action("moon"))
+                    .child(
+                        // Theme toggle: moon in dark mode (→ light), sun in light (→ dark).
+                        div()
+                            .id("theme-toggle")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(26.0))
+                            .h(px(26.0))
+                            .rounded(t.radius_sm)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(t.hover))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|_this, _: &MouseDownEvent, window, cx| {
+                                    let dark = cx.global::<Theme>().dark;
+                                    cx.set_global(if dark {
+                                        Theme::light()
+                                    } else {
+                                        Theme::dark()
+                                    });
+                                    window.refresh();
+                                }),
+                            )
+                            .child(icon(
+                                if t.dark { "moon" } else { "sun" },
+                                px(15.0),
+                                t.ink_2,
+                            )),
+                    )
                     .child(action("settings")),
             )
     }
@@ -1027,6 +1056,8 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Pick up the current global theme so dark/light toggles propagate.
+        self.theme = cx.global::<Theme>().clone();
         let t = self.theme.clone();
         let active_terminal = self.tabs[self.active_tab].terminal.clone();
         let (cols, rows) = active_terminal.read(cx).size();
@@ -1052,7 +1083,7 @@ impl Render for Shell {
             .text_size(t.fs_body)
             .text_color(t.ink)
             .bg(t.bg)
-            .child(self.topbar())
+            .child(self.topbar(cx))
             .child(
                 h_flex()
                     .flex_1()

@@ -148,7 +148,8 @@ impl LogsPanel {
 }
 
 impl Render for LogsPanel {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = cx.global::<Theme>().clone();
         let t = &self.theme;
 
         // No log file → logging was never initialised; nothing to tail.

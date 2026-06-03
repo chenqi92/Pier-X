@@ -274,6 +274,7 @@ impl Focusable for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = cx.global::<Theme>().clone();
         // Grab focus on first paint so typing works without a click.
         if !self.did_focus {
             self.did_focus = true;

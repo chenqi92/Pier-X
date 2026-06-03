@@ -342,6 +342,7 @@ impl FirewallPanel {
 
 impl Render for FirewallPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = cx.global::<Theme>().clone();
         let t = &self.theme;
         let meta = self.header_meta();
 

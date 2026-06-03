@@ -4,21 +4,26 @@
 // ported design tokens (theme.rs). This is the "does GPUI look ugly?" eyeball
 // build, not a functional app. See docs/GPUI-MIGRATION-PLAN.md (M0).
 
+mod assets;
 mod shell;
 mod terminal;
 mod theme;
 
 use gpui::{
-    point, px, size, App, AppContext, Bounds, Styled, TitlebarOptions, WindowBounds, WindowOptions,
+    point, px, size, App, AppContext, Bounds, Styled, WindowBounds, WindowOptions,
 };
-use gpui_component::{ActiveTheme, Root};
+use gpui_component::{ActiveTheme, Root, TitleBar};
 
+use assets::Assets;
 use shell::Shell;
 use theme::Theme;
 
 fn main() {
-    gpui_platform::application().run(move |cx: &mut App| {
+    gpui_platform::application().with_assets(Assets).run(move |cx: &mut App| {
         gpui_component::init(cx);
+        if let Err(e) = assets::load_fonts(cx) {
+            eprintln!("failed to load embedded fonts: {e}");
+        }
         cx.set_global(Theme::dark());
 
         cx.spawn(async move |cx| {
@@ -28,13 +33,14 @@ fn main() {
             };
             let opts = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Pier-X".into()),
-                    ..Default::default()
-                }),
+                // Client-side decorations: gpui-component's TitleBar draws the
+                // chrome (drag + min/max/close) so the shell owns the whole frame.
+                titlebar: Some(TitleBar::title_bar_options()),
                 ..Default::default()
             };
             cx.open_window(opts, |window, cx| {
+                window.activate_window();
+                window.set_window_title("Pier-X");
                 let view = cx.new(|cx| Shell::new(cx));
                 cx.new(|cx| Root::new(view, window, cx).bg(cx.theme().background))
             })

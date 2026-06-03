@@ -5282,10 +5282,12 @@ dependencies = [
 name = "pier-ui-gpui"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "gpui",
  "gpui-component",
  "gpui_platform",
  "pier-core",
+ "rust-embed",
 ]
 
 [[package]]

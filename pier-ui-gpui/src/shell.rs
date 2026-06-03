@@ -14,12 +14,25 @@
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, Context, Entity, FontWeight, Hsla, MouseButton, MouseDownEvent, SharedString, Window,
+    div, px, svg, Context, Entity, FontWeight, Hsla, MouseButton, MouseDownEvent, Pixels,
+    SharedString, Svg, Window,
 };
-use gpui_component::{h_flex, v_flex};
+use gpui_component::{h_flex, v_flex, TitleBar};
 
 use crate::terminal::TerminalView;
 use crate::theme::Theme;
+
+/// A bundled lucide SVG, sized and tinted. `name` is the file stem under
+/// `assets/icons/` (see src/assets.rs); the glyph picks up `color` because the
+/// SVGs paint with `currentColor`.
+fn icon(name: &str, sz: Pixels, color: Hsla) -> Svg {
+    svg()
+        .flex_none()
+        .w(sz)
+        .h(sz)
+        .path(SharedString::from(format!("icons/{name}.svg")))
+        .text_color(color)
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Svc {
@@ -39,22 +52,22 @@ enum Svc {
     Software,
 }
 
-/// (service, 2-char strip label, full name, category index).
+/// (service, icon stem, full name, category index).
 const TOOLS: &[(Svc, &str, &str, u8)] = &[
-    (Svc::Markdown, "Md", "MARKDOWN", 0),
-    (Svc::Git, "Git", "GIT", 0),
-    (Svc::Monitor, "Mn", "MONITOR", 1),
-    (Svc::Firewall, "Fw", "FIREWALL", 1),
-    (Svc::Sftp, "Sf", "SFTP", 2),
-    (Svc::Log, "Lg", "LOGS", 2),
-    (Svc::Search, "Sr", "SEARCH", 2),
-    (Svc::Docker, "Dk", "DOCKER", 3),
-    (Svc::Mysql, "My", "MYSQL", 4),
-    (Svc::Postgres, "Pg", "POSTGRES", 4),
-    (Svc::Redis, "Rd", "REDIS", 4),
-    (Svc::Sqlite, "Sq", "SQLITE", 4),
-    (Svc::Webserver, "Wb", "WEBSERVER", 5),
-    (Svc::Software, "Sw", "SOFTWARE", 5),
+    (Svc::Markdown, "file-text", "MARKDOWN", 0),
+    (Svc::Git, "git-branch", "GIT", 0),
+    (Svc::Monitor, "activity", "MONITOR", 1),
+    (Svc::Firewall, "shield", "FIREWALL", 1),
+    (Svc::Sftp, "folder", "SFTP", 2),
+    (Svc::Log, "scroll-text", "LOGS", 2),
+    (Svc::Search, "search", "SEARCH", 2),
+    (Svc::Docker, "container", "DOCKER", 3),
+    (Svc::Mysql, "database", "MYSQL", 4),
+    (Svc::Postgres, "database", "POSTGRES", 4),
+    (Svc::Redis, "database", "REDIS", 4),
+    (Svc::Sqlite, "database", "SQLITE", 4),
+    (Svc::Webserver, "server", "WEBSERVER", 5),
+    (Svc::Software, "package", "SOFTWARE", 5),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -127,16 +140,16 @@ impl Shell {
         }
     }
 
-    fn tab_glyph(kind: TabKind) -> &'static str {
+    fn tab_icon(kind: TabKind) -> &'static str {
         match kind {
-            TabKind::Local => "▸",
-            TabKind::Ssh => "⧉",
-            TabKind::Db => "◫",
-            TabKind::Markdown => "≡",
+            TabKind::Local => "square-terminal",
+            TabKind::Ssh => "terminal",
+            TabKind::Db => "database",
+            TabKind::Markdown => "file-text",
         }
     }
 
-    // ── TopBar ───────────────────────────────────────────────────
+    // ── TitleBar (client-side window chrome) ─────────────────────
     fn topbar(&self) -> impl IntoElement {
         let t = &self.theme;
         let menu = |label: &'static str| {
@@ -146,7 +159,7 @@ impl Shell {
                 .text_color(t.ink_2)
                 .child(label)
         };
-        let action = |glyph: &'static str| {
+        let action = |name: &'static str| {
             div()
                 .flex()
                 .items_center()
@@ -154,43 +167,46 @@ impl Shell {
                 .w(px(26.0))
                 .h(px(26.0))
                 .rounded(t.radius_sm)
-                .text_color(t.ink_2)
-                .child(glyph)
+                .child(icon(name, px(15.0), t.ink_2))
         };
-        h_flex()
-            .items_center()
-            .w_full()
+        // gpui-component TitleBar handles drag + native min/max/close on the
+        // right; we fill the draggable area with the menu bar and quick actions.
+        TitleBar::new()
             .h(t.titlebar_h)
-            .px(t.sp3)
-            .gap(t.sp2)
             .bg(t.surface)
-            .border_b_1()
             .border_color(t.line)
             .child(
-                div()
-                    .w(px(16.0))
-                    .h(px(16.0))
-                    .rounded(t.radius_sm)
-                    .bg(t.accent),
+                h_flex()
+                    .items_center()
+                    .w_full()
+                    .h_full()
+                    .gap(t.sp2)
+                    .child(
+                        div()
+                            .w(px(16.0))
+                            .h(px(16.0))
+                            .rounded(t.radius_sm)
+                            .bg(t.accent),
+                    )
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(t.ink)
+                            .child("Pier-X"),
+                    )
+                    .child(div().text_size(t.fs_sm).text_color(t.muted).child("0.7.2"))
+                    .child(div().w(px(8.0)))
+                    .child(menu("File"))
+                    .child(menu("Edit"))
+                    .child(menu("View"))
+                    .child(menu("Session"))
+                    .child(menu("Help"))
+                    .child(div().flex_1())
+                    .child(action("command"))
+                    .child(action("plus"))
+                    .child(action("moon"))
+                    .child(action("settings")),
             )
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(t.ink)
-                    .child("Pier-X"),
-            )
-            .child(div().text_size(t.fs_sm).text_color(t.muted).child("0.7.2"))
-            .child(div().w(px(8.0)))
-            .child(menu("File"))
-            .child(menu("Edit"))
-            .child(menu("View"))
-            .child(menu("Session"))
-            .child(menu("Help"))
-            .child(div().flex_1())
-            .child(action("⌘"))
-            .child(action("+"))
-            .child(action("☾"))
-            .child(action("⚙"))
     }
 
     // ── Sidebar ──────────────────────────────────────────────────
@@ -235,8 +251,10 @@ impl Shell {
             .child(text)
     }
 
-    fn file_row(&self, icon: &'static str, name: &'static str, meta: &'static str) -> impl IntoElement {
+    fn file_row(&self, is_dir: bool, name: &'static str, meta: &'static str) -> impl IntoElement {
         let t = &self.theme;
+        let glyph = if is_dir { "folder" } else { "file" };
+        let glyph_color = if is_dir { t.accent } else { t.muted };
         h_flex()
             .id(SharedString::from(format!("file-{name}")))
             .items_center()
@@ -245,7 +263,7 @@ impl Shell {
             .px(t.sp3)
             .text_color(t.ink_2)
             .hover(|s| s.bg(t.hover))
-            .child(div().text_color(t.muted).child(icon))
+            .child(icon(glyph, px(14.0), glyph_color))
             .child(div().flex_1().child(name))
             .child(div().text_size(t.fs_sm).text_color(t.muted).child(meta))
     }
@@ -301,15 +319,15 @@ impl Shell {
         } else {
             v_flex()
                 .child(self.section_label("~/code/warehouse-api"))
-                .child(self.file_row("▸", ".git", "2d"))
-                .child(self.file_row("▸", ".github", "5d"))
-                .child(self.file_row("▸", "migrations", "1h"))
-                .child(self.file_row("▸", "src", "14m"))
-                .child(self.file_row("▸", "tests", "3d"))
-                .child(self.file_row("▸", "docs", "2w"))
-                .child(self.file_row("·", ".gitignore", "3w"))
-                .child(self.file_row("·", "CHANGELOG.md", "2h"))
-                .child(self.file_row("·", "Dockerfile", "5d"))
+                .child(self.file_row(true, ".git", "2d"))
+                .child(self.file_row(true, ".github", "5d"))
+                .child(self.file_row(true, "migrations", "1h"))
+                .child(self.file_row(true, "src", "14m"))
+                .child(self.file_row(true, "tests", "3d"))
+                .child(self.file_row(true, "docs", "2w"))
+                .child(self.file_row(false, ".gitignore", "3w"))
+                .child(self.file_row(false, "CHANGELOG.md", "2h"))
+                .child(self.file_row(false, "Dockerfile", "5d"))
         };
 
         v_flex()
@@ -351,11 +369,11 @@ impl Shell {
                     cx.notify();
                 }),
             )
-            .child(
-                div()
-                    .text_color(if active { t.accent } else { t.muted })
-                    .child(Self::tab_glyph(tab.kind)),
-            )
+            .child(icon(
+                Self::tab_icon(tab.kind),
+                px(14.0),
+                if active { t.accent } else { t.muted },
+            ))
             .child(
                 div()
                     .max_w(px(150.0))
@@ -366,9 +384,13 @@ impl Shell {
             .child(
                 div()
                     .id(SharedString::from(format!("tabx-{idx}")))
-                    .text_size(t.fs_sm)
-                    .text_color(t.muted)
-                    .hover(|s| s.text_color(t.ink))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(16.0))
+                    .h(px(16.0))
+                    .rounded(t.radius_sm)
+                    .hover(|s| s.bg(t.hover))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
@@ -381,7 +403,7 @@ impl Shell {
                             }
                         }),
                     )
-                    .child("✕"),
+                    .child(icon("close", px(12.0), t.muted)),
             )
     }
 
@@ -403,15 +425,14 @@ impl Shell {
                 .justify_center()
                 .w(px(34.0))
                 .h_full()
-                .text_color(t.muted)
-                .child("+"),
+                .child(icon("plus", px(15.0), t.muted)),
         )
     }
 
     // ── Right zone: panel + tool strip ───────────────────────────
     fn tool_btn(&self, cx: &mut Context<Self>, idx: usize) -> impl IntoElement {
         let t = &self.theme;
-        let (svc, label, _, _) = TOOLS[idx];
+        let (svc, glyph, _, _) = TOOLS[idx];
         let active = self.active_tool == idx;
         let color = self.svc_color(svc);
         div()
@@ -422,9 +443,6 @@ impl Shell {
             .w(px(32.0))
             .h(px(32.0))
             .rounded(t.radius_sm)
-            .text_size(t.fs_sm)
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(if active { color } else { t.muted })
             .when(active, |d| d.bg(t.accent_dim))
             .when(!active, |d| d.hover(|s| s.bg(t.hover)))
             .on_mouse_down(
@@ -435,7 +453,7 @@ impl Shell {
                     cx.notify();
                 }),
             )
-            .child(label)
+            .child(icon(glyph, px(17.0), if active { color } else { t.muted }))
     }
 
     fn tool_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -482,11 +500,19 @@ impl Shell {
                         cx.notify();
                     }),
                 )
-                .child(if self.right_collapsed { "‹" } else { "›" }),
+                .child(icon(
+                    if self.right_collapsed {
+                        "panel-right-open"
+                    } else {
+                        "panel-right-close"
+                    },
+                    px(16.0),
+                    t.muted,
+                )),
         )
     }
 
-    fn panel_header(&self, icon: &'static str, title: &'static str, meta: &'static str) -> impl IntoElement {
+    fn panel_header(&self, glyph: &'static str, title: &'static str, meta: &'static str) -> impl IntoElement {
         let t = &self.theme;
         h_flex()
             .items_center()
@@ -496,7 +522,7 @@ impl Shell {
             .px(t.sp3)
             .border_b_1()
             .border_color(t.line)
-            .child(div().text_color(t.accent).child(icon))
+            .child(icon(glyph, px(15.0), t.accent))
             .child(
                 div()
                     .font_family(t.mono.clone())
@@ -549,7 +575,7 @@ impl Shell {
         v_flex()
             .flex_1()
             .min_h(px(0.0))
-            .child(self.panel_header("⎇", "GIT", "feat/ingest-pipeline ↑2"))
+            .child(self.panel_header("git-branch", "GIT", "feat/ingest-pipeline ↑2"))
             .child(
                 h_flex()
                     .gap(t.sp3)
@@ -599,13 +625,13 @@ impl Shell {
 
     fn right_panel(&self) -> impl IntoElement {
         let t = &self.theme;
-        let (_, _, name, _) = TOOLS[self.active_tool];
+        let (_, glyph, name, _) = TOOLS[self.active_tool];
         if self.active_tool == 1 {
             self.git_panel().into_any_element()
         } else {
             v_flex()
                 .flex_1()
-                .child(self.panel_header("◧", name, "panel"))
+                .child(self.panel_header(glyph, name, "panel"))
                 .child(
                     div()
                         .p(t.sp4)
@@ -638,7 +664,13 @@ impl Shell {
                 h_flex()
                     .items_center()
                     .gap(t.sp3)
-                    .child(self.status_item("⎇ feat/ingest-pipeline", t.ink_2))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .child(icon("git-branch", px(12.0), t.ink_2))
+                            .child(self.status_item("feat/ingest-pipeline", t.ink_2)),
+                    )
                     .child(self.status_item("↑2 ↓0", t.muted))
                     .child(self.status_item("ssh · russh", t.ink_2))
                     .child(self.status_item(format!("{cols}×{rows}"), t.muted)),

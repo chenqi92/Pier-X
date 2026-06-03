@@ -18,6 +18,9 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "
 # The terminal engine (emulator, PTY, GridSnapshot) lives here and is already
 # UI-agnostic — GPUI calls it directly, no Tauri layer.
 pier-core = { path = "../pier-core" }
+# Embed the SVG icon set into the binary (see src/assets.rs).
+rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }
+anyhow = "1"
 
 # Force EVERY reference to the zed repo (ours + gpui-component's transitive
 # one) onto the rev that gpui-component @9ad30e6 locks in its own Cargo.lock.

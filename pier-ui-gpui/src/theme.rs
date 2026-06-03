@@ -17,13 +17,12 @@ fn hexa(v: u32) -> Hsla {
     rgba(v).into()
 }
 
-// Font families. tokens.css wants "IBM Plex Sans" / "IBM Plex Mono", but the
-// repo only ships those as .woff2 (font-kit needs .ttf/.otf) and they aren't
-// installed system-wide. Until we embed the .ttf, fall back to the Windows
-// system faces — clean, present, and good enough to judge layout/colour.
-// TODO(M0): embed IBM Plex Sans/Mono .ttf as gpui assets and switch these.
-const FONT_SANS: &str = "Segoe UI";
-const FONT_MONO: &str = "Consolas";
+// Font families — matches tokens.css. The .ttf faces are embedded under
+// assets/fonts and registered with the text system at startup (see
+// crate::assets::load_fonts), so these names resolve regardless of what's
+// installed system-wide.
+const FONT_SANS: &str = "IBM Plex Sans";
+const FONT_MONO: &str = "IBM Plex Mono";
 
 #[derive(Clone)]
 pub struct Theme {

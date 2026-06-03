@@ -94,6 +94,8 @@ pub struct Theme {
 
     // Interaction overlays
     pub hover: Hsla,
+    /// Dimming scrim behind modal overlays.
+    pub scrim: Hsla,
 
     // Service brand tints (--svc-*)
     pub svc_docker: Hsla,
@@ -166,6 +168,7 @@ impl Theme {
 
             // --bg-hover (dark): rgba(255,255,255,0.05). TODO: per-theme.
             hover: hexa(0xffffff0d),
+            scrim: hexa(0x00000099),
 
             svc_docker: hex(0x4aa3ff),
             svc_mysql: hex(0xf29d49),

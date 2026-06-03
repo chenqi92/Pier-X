@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, relative, svg, AnyElement, Context, Entity, Focusable, FontWeight, Hsla, MouseButton,
-    MouseDownEvent, Pixels, SharedString, Svg, Window,
+    deferred, div, px, relative, svg, AnyElement, Context, Entity, Focusable, FontWeight, Hsla,
+    InteractiveElement, MouseButton, MouseDownEvent, Pixels, SharedString, Svg, Window,
 };
 use gpui_component::{h_flex, v_flex, TitleBar};
 
@@ -125,7 +125,55 @@ pub struct Shell {
     git_msg: Option<String>,
     mon: Option<MonStat>,
     panels: PanelViews,
+    /// Which top-bar menu is open (index into MENUS), if any.
+    open_menu: Option<usize>,
+    /// Active centered overlay (Settings / command palette), if any.
+    overlay: Overlay,
 }
+
+/// A centered modal layer over the shell.
+#[derive(Clone, Copy, PartialEq)]
+enum Overlay {
+    None,
+    Settings,
+    Palette,
+}
+
+/// A shell-wide command, dispatched from menus, the command palette, and
+/// title-bar buttons through `Shell::run`.
+#[derive(Clone, Copy)]
+enum Cmd {
+    NewTerminal,
+    ToggleTheme,
+    ToggleRightPanel,
+    SelectTool(usize),
+    OpenSettings,
+    OpenPalette,
+    CloseOverlay,
+}
+
+/// Top-bar menus: (label, items). Each item is (text, command).
+const MENUS: &[(&str, &[(&str, Cmd)])] = &[
+    (
+        "File",
+        &[
+            ("New Terminal", Cmd::NewTerminal),
+            ("Command Palette", Cmd::OpenPalette),
+            ("Settings", Cmd::OpenSettings),
+        ],
+    ),
+    ("Edit", &[("Settings", Cmd::OpenSettings)]),
+    (
+        "View",
+        &[
+            ("Toggle Theme", Cmd::ToggleTheme),
+            ("Toggle Right Panel", Cmd::ToggleRightPanel),
+            ("Command Palette", Cmd::OpenPalette),
+        ],
+    ),
+    ("Session", &[("New Terminal", Cmd::NewTerminal)]),
+    ("Help", &[("About Pier-X", Cmd::OpenSettings)]),
+];
 
 impl Shell {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -162,7 +210,40 @@ impl Shell {
             git_msg: None,
             mon: None,
             panels,
+            open_menu: None,
+            overlay: Overlay::None,
         }
+    }
+
+    /// Dispatch a shell-wide command from a menu / palette / title-bar button.
+    fn run(&mut self, cmd: Cmd, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_menu = None;
+        match cmd {
+            Cmd::NewTerminal => {
+                self.overlay = Overlay::None;
+                self.open_terminal_tab(cx);
+                return;
+            }
+            Cmd::ToggleTheme => {
+                let dark = cx.global::<Theme>().dark;
+                cx.set_global(if dark { Theme::light() } else { Theme::dark() });
+                window.refresh();
+                return;
+            }
+            Cmd::ToggleRightPanel => self.right_collapsed = !self.right_collapsed,
+            Cmd::SelectTool(i) => {
+                self.active_tool = i;
+                self.right_collapsed = false;
+                self.overlay = Overlay::None;
+                if matches!(TOOLS[i].0, Svc::Monitor) {
+                    self.mon = Some(data::monitor_snapshot());
+                }
+            }
+            Cmd::OpenSettings => self.overlay = Overlay::Settings,
+            Cmd::OpenPalette => self.overlay = Overlay::Palette,
+            Cmd::CloseOverlay => self.overlay = Overlay::None,
+        }
+        cx.notify();
     }
 
     /// Switch the Git sub-tab, loading its data on demand (local git reads are
@@ -280,25 +361,110 @@ impl Shell {
     }
 
     // ── TitleBar (client-side window chrome) ─────────────────────
+    /// A title-bar icon button that dispatches `cmd` on click.
+    fn action_btn(&self, cx: &mut Context<Self>, name: &'static str, cmd: Cmd) -> impl IntoElement {
+        let t = &self.theme;
+        div()
+            .id(SharedString::from(format!("act-{name}")))
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(26.0))
+            .h(px(26.0))
+            .rounded(t.radius_sm)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, window, cx| this.run(cmd, window, cx)),
+            )
+            .child(icon(name, px(15.0), t.ink_2))
+    }
+
+    /// A top-bar menu label plus its drop-down (deferred so it paints on top).
+    fn menu_btn(&self, cx: &mut Context<Self>, idx: usize) -> impl IntoElement {
+        let t = &self.theme;
+        let (label, items) = MENUS[idx];
+        let open = self.open_menu == Some(idx);
+        div()
+            .relative()
+            .child(
+                div()
+                    .id(SharedString::from(format!("menu-{label}")))
+                    .px(t.sp2)
+                    .py(px(2.0))
+                    .rounded(t.radius_sm)
+                    .text_size(t.fs_ui)
+                    .cursor_pointer()
+                    .text_color(if open { t.ink } else { t.ink_2 })
+                    .when(open, |d| d.bg(t.hover))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                            this.open_menu = if this.open_menu == Some(idx) {
+                                None
+                            } else {
+                                Some(idx)
+                            };
+                            cx.notify();
+                        }),
+                    )
+                    .child(label),
+            )
+            .when(open, |d| {
+                d.child(deferred(self.menu_dropdown(cx, idx, items)))
+            })
+    }
+
+    fn menu_dropdown(
+        &self,
+        cx: &mut Context<Self>,
+        idx: usize,
+        items: &'static [(&'static str, Cmd)],
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        let mut col = v_flex()
+            .id("menu-dd")
+            .absolute()
+            .top(t.titlebar_h)
+            .left(px(0.0))
+            .min_w(px(190.0))
+            .py(t.sp1)
+            .bg(t.elev)
+            .border_1()
+            .border_color(t.line_2)
+            .rounded(t.radius_md)
+            .on_mouse_down_out(cx.listener(|this, _, _w, cx| {
+                this.open_menu = None;
+                cx.notify();
+            }));
+        for (text, cmd) in items {
+            let cmd = *cmd;
+            let text = *text;
+            col = col.child(
+                div()
+                    .id(SharedString::from(format!("mi-{idx}-{text}")))
+                    .px(t.sp3)
+                    .py(px(5.0))
+                    .text_size(t.fs_ui)
+                    .text_color(t.ink_2)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.hover))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            this.run(cmd, window, cx)
+                        }),
+                    )
+                    .child(text),
+            );
+        }
+        col
+    }
+
     fn topbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
-        let menu = |label: &'static str| {
-            div()
-                .px(t.sp2)
-                .text_size(t.fs_ui)
-                .text_color(t.ink_2)
-                .child(label)
-        };
-        let action = |name: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(px(26.0))
-                .h(px(26.0))
-                .rounded(t.radius_sm)
-                .child(icon(name, px(15.0), t.ink_2))
-        };
+        let theme_icon = if t.dark { "moon" } else { "sun" };
         // gpui-component TitleBar handles drag + native min/max/close on the
         // right; we fill the draggable area with the menu bar and quick actions.
         TitleBar::new()
@@ -311,13 +477,7 @@ impl Shell {
                     .w_full()
                     .h_full()
                     .gap(t.sp2)
-                    .child(
-                        div()
-                            .w(px(16.0))
-                            .h(px(16.0))
-                            .rounded(t.radius_sm)
-                            .bg(t.accent),
-                    )
+                    .child(div().w(px(16.0)).h(px(16.0)).rounded(t.radius_sm).bg(t.accent))
                     .child(
                         div()
                             .font_weight(FontWeight::SEMIBOLD)
@@ -326,45 +486,16 @@ impl Shell {
                     )
                     .child(div().text_size(t.fs_sm).text_color(t.muted).child("0.7.2"))
                     .child(div().w(px(8.0)))
-                    .child(menu("File"))
-                    .child(menu("Edit"))
-                    .child(menu("View"))
-                    .child(menu("Session"))
-                    .child(menu("Help"))
+                    .child(self.menu_btn(cx, 0))
+                    .child(self.menu_btn(cx, 1))
+                    .child(self.menu_btn(cx, 2))
+                    .child(self.menu_btn(cx, 3))
+                    .child(self.menu_btn(cx, 4))
                     .child(div().flex_1())
-                    .child(action("command"))
-                    .child(action("plus"))
-                    .child(
-                        // Theme toggle: moon in dark mode (→ light), sun in light (→ dark).
-                        div()
-                            .id("theme-toggle")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(26.0))
-                            .h(px(26.0))
-                            .rounded(t.radius_sm)
-                            .cursor_pointer()
-                            .hover(|s| s.bg(t.hover))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|_this, _: &MouseDownEvent, window, cx| {
-                                    let dark = cx.global::<Theme>().dark;
-                                    cx.set_global(if dark {
-                                        Theme::light()
-                                    } else {
-                                        Theme::dark()
-                                    });
-                                    window.refresh();
-                                }),
-                            )
-                            .child(icon(
-                                if t.dark { "moon" } else { "sun" },
-                                px(15.0),
-                                t.ink_2,
-                            )),
-                    )
-                    .child(action("settings")),
+                    .child(self.action_btn(cx, "command", Cmd::OpenPalette))
+                    .child(self.action_btn(cx, "plus", Cmd::NewTerminal))
+                    .child(self.action_btn(cx, theme_icon, Cmd::ToggleTheme))
+                    .child(self.action_btn(cx, "settings", Cmd::OpenSettings)),
             )
     }
 
@@ -1311,6 +1442,156 @@ impl Shell {
                     .child(self.status_item("Pier-X v0.7.2", t.muted)),
             )
     }
+
+    // ── Overlays (Settings / command palette) ────────────────────
+    fn theme_btn(&self, cx: &mut Context<Self>, label: &'static str, want_dark: bool) -> impl IntoElement {
+        let t = &self.theme;
+        let active = t.dark == want_dark;
+        div()
+            .id(SharedString::from(format!("themebtn-{label}")))
+            .px(t.sp3)
+            .py(px(5.0))
+            .rounded(t.radius_sm)
+            .text_size(t.fs_ui)
+            .cursor_pointer()
+            .when(active, |d| d.bg(t.accent).text_color(t.accent_ink))
+            .when(!active, |d| d.bg(t.panel_2).text_color(t.ink_2))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_this, _: &MouseDownEvent, window, cx| {
+                    if cx.global::<Theme>().dark != want_dark {
+                        cx.set_global(if want_dark { Theme::dark() } else { Theme::light() });
+                        window.refresh();
+                    }
+                }),
+            )
+            .child(label)
+    }
+
+    fn settings_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        v_flex()
+            .w(px(420.0))
+            .p(t.sp4)
+            .gap(t.sp3)
+            .bg(t.panel)
+            .border_1()
+            .border_color(t.line_2)
+            .rounded(t.radius_lg)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(t.sp2)
+                    .child(icon("settings", px(16.0), t.accent))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(t.ink)
+                            .child("Settings"),
+                    ),
+            )
+            .child(self.section_label("APPEARANCE"))
+            .child(
+                h_flex()
+                    .gap(t.sp2)
+                    .child(self.theme_btn(cx, "Dark", true))
+                    .child(self.theme_btn(cx, "Light", false)),
+            )
+            .child(self.section_label("ABOUT"))
+            .child(ui::info_row(t, "Version", "0.7.2"))
+            .child(ui::info_row(t, "UI engine", "GPUI (native)"))
+            .child(ui::info_row(t, "Backend", "pier-core"))
+    }
+
+    fn palette_row(
+        &self,
+        cx: &mut Context<Self>,
+        glyph: &'static str,
+        label: &'static str,
+        cmd: Cmd,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        h_flex()
+            .id(SharedString::from(format!("pal-{label}")))
+            .items_center()
+            .gap(t.sp2)
+            .h(px(30.0))
+            .px(t.sp3)
+            .rounded(t.radius_sm)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, window, cx| this.run(cmd, window, cx)),
+            )
+            .child(icon(glyph, px(15.0), t.ink_2))
+            .child(div().text_color(t.ink_2).child(label))
+    }
+
+    fn palette_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let theme_icon = if t.dark { "moon" } else { "sun" };
+        let mut list = v_flex()
+            .id("palette-list")
+            .max_h(px(440.0))
+            .overflow_y_scroll()
+            .child(self.palette_row(cx, "plus", "New Terminal", Cmd::NewTerminal))
+            .child(self.palette_row(cx, theme_icon, "Toggle Theme", Cmd::ToggleTheme));
+        for (i, (_, glyph, name, _)) in TOOLS.iter().enumerate() {
+            list = list.child(self.palette_row(cx, glyph, name, Cmd::SelectTool(i)));
+        }
+        v_flex()
+            .w(px(460.0))
+            .p(t.sp3)
+            .gap(t.sp2)
+            .bg(t.panel)
+            .border_1()
+            .border_color(t.line_2)
+            .rounded(t.radius_lg)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(t.sp2)
+                    .px(t.sp2)
+                    .child(icon("command", px(15.0), t.muted))
+                    .child(div().text_color(t.muted).child("Go to tool / action")),
+            )
+            .child(list)
+    }
+
+    /// Full-window scrim + centered modal card for the active overlay.
+    fn overlay_layer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let card = match self.overlay {
+            Overlay::Settings => self.settings_card(cx).into_any_element(),
+            Overlay::Palette => self.palette_card(cx).into_any_element(),
+            Overlay::None => div().into_any_element(),
+        };
+        div()
+            .absolute()
+            .top(px(0.0))
+            .left(px(0.0))
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .id("scrim")
+                    .absolute()
+                    .top(px(0.0))
+                    .left(px(0.0))
+                    .size_full()
+                    .bg(t.scrim)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                            this.run(Cmd::CloseOverlay, window, cx)
+                        }),
+                    ),
+            )
+            .child(card)
+    }
 }
 
 impl Render for Shell {
@@ -1336,7 +1617,7 @@ impl Render for Shell {
         }
         right_zone = right_zone.child(self.tool_strip(cx));
 
-        v_flex()
+        let body = v_flex()
             .size_full()
             .font_family(t.sans.clone())
             .text_size(t.fs_body)
@@ -1364,7 +1645,15 @@ impl Render for Shell {
                     )
                     .child(right_zone),
             )
-            .child(self.status_bar(cols, rows))
+            .child(self.status_bar(cols, rows));
+
+        // Overlay layer (Settings / command palette) paints on top of the shell.
+        let show_overlay = self.overlay != Overlay::None;
+        div()
+            .relative()
+            .size_full()
+            .child(body)
+            .when(show_overlay, |d| d.child(self.overlay_layer(cx)))
     }
 }
 

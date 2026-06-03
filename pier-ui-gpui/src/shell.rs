@@ -17,9 +17,9 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    deferred, div, px, svg, AnyElement, Context, Entity, Focusable, FontWeight, Hsla,
-    InteractiveElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    SharedString, Svg, Window,
+    deferred, div, px, svg, AnyElement, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla,
+    InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, SharedString, Svg, Window,
 };
 use gpui_component::{h_flex, v_flex, TitleBar};
 
@@ -137,6 +137,9 @@ pub struct Shell {
     right_w: Option<Pixels>,
     /// The divider currently being dragged, if any.
     dragging: Option<DragTarget>,
+    /// Command-palette filter text + its focus handle for keyboard input.
+    palette_query: String,
+    palette_focus: FocusHandle,
 }
 
 /// A draggable layout divider.
@@ -230,6 +233,67 @@ impl Shell {
             sidebar_w: None,
             right_w: None,
             dragging: None,
+            palette_query: String::new(),
+            palette_focus: cx.focus_handle(),
+        }
+    }
+
+    /// The palette's entries (icon, label, command), in display order.
+    fn palette_entries() -> Vec<(&'static str, &'static str, Cmd)> {
+        let mut v = vec![
+            ("plus", "New Terminal", Cmd::NewTerminal),
+            ("settings", "Settings", Cmd::OpenSettings),
+        ];
+        for (i, (_, glyph, name, _)) in TOOLS.iter().enumerate() {
+            v.push((glyph, name, Cmd::SelectTool(i)));
+        }
+        v
+    }
+
+    /// Entries matching the current palette query (case-insensitive substring).
+    fn palette_matches(&self) -> Vec<(&'static str, &'static str, Cmd)> {
+        let q = self.palette_query.trim().to_lowercase();
+        Self::palette_entries()
+            .into_iter()
+            .filter(|(_, label, _)| q.is_empty() || label.to_lowercase().contains(&q))
+            .collect()
+    }
+
+    fn on_palette_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        match ks.key.as_str() {
+            "escape" => {
+                if self.palette_query.is_empty() {
+                    self.run(Cmd::CloseOverlay, window, cx);
+                } else {
+                    self.palette_query.clear();
+                    cx.notify();
+                }
+                return;
+            }
+            "enter" => {
+                if let Some((_, _, cmd)) = self.palette_matches().first().copied() {
+                    self.run(cmd, window, cx);
+                }
+                return;
+            }
+            "backspace" => {
+                if self.palette_query.pop().is_some() {
+                    cx.notify();
+                }
+                return;
+            }
+            _ => {}
+        }
+        let m = &ks.modifiers;
+        if m.control || m.alt || m.platform {
+            return;
+        }
+        if let Some(kc) = &ks.key_char {
+            if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) {
+                self.palette_query.push_str(kc);
+                cx.notify();
+            }
         }
     }
 
@@ -281,7 +345,11 @@ impl Shell {
                 }
             }
             Cmd::OpenSettings => self.overlay = Overlay::Settings,
-            Cmd::OpenPalette => self.overlay = Overlay::Palette,
+            Cmd::OpenPalette => {
+                self.overlay = Overlay::Palette;
+                self.palette_query.clear();
+                window.focus(&self.palette_focus, cx);
+            }
             Cmd::CloseOverlay => self.overlay = Overlay::None,
         }
         cx.notify();
@@ -1518,6 +1586,7 @@ impl Shell {
         glyph: &'static str,
         label: &'static str,
         cmd: Cmd,
+        first: bool,
     ) -> impl IntoElement {
         let t = &self.theme;
         h_flex()
@@ -1528,6 +1597,7 @@ impl Shell {
             .px(t.sp3)
             .rounded(t.radius_sm)
             .cursor_pointer()
+            .when(first, |d| d.bg(t.accent_subtle))
             .hover(|s| s.bg(t.hover))
             .on_mouse_down(
                 MouseButton::Left,
@@ -1539,33 +1609,55 @@ impl Shell {
 
     fn palette_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
-        let theme_icon = if t.dark { "moon" } else { "sun" };
-        let mut list = v_flex()
-            .id("palette-list")
-            .max_h(px(440.0))
-            .overflow_y_scroll()
-            .child(self.palette_row(cx, "plus", "New Terminal", Cmd::NewTerminal))
-            .child(self.palette_row(cx, theme_icon, "Toggle Theme", Cmd::ToggleTheme));
-        for (i, (_, glyph, name, _)) in TOOLS.iter().enumerate() {
-            list = list.child(self.palette_row(cx, glyph, name, Cmd::SelectTool(i)));
+        let matches = self.palette_matches();
+        let mut list = v_flex().id("palette-list").max_h(px(420.0)).overflow_y_scroll();
+        if matches.is_empty() {
+            list = list.child(
+                div()
+                    .px(t.sp3)
+                    .py(t.sp3)
+                    .text_color(t.dim)
+                    .child("No matching command"),
+            );
+        } else {
+            for (i, (glyph, label, cmd)) in matches.into_iter().enumerate() {
+                // Highlight the first row (what Enter runs).
+                let first = i == 0;
+                list = list.child(self.palette_row(cx, glyph, label, cmd, first));
+            }
         }
+        // The query input: a focused box echoing palette_query with a caret.
+        let query_box = div()
+            .track_focus(&self.palette_focus)
+            .key_context("Palette")
+            .on_key_down(cx.listener(Self::on_palette_key))
+            .h(px(34.0))
+            .px(t.sp3)
+            .flex()
+            .items_center()
+            .gap(t.sp2)
+            .border_b_1()
+            .border_color(t.line)
+            .child(icon("command", px(15.0), t.muted))
+            .child(
+                div()
+                    .flex_1()
+                    .when(self.palette_query.is_empty(), |d| {
+                        d.text_color(t.dim).child("Go to tool / action…")
+                    })
+                    .when(!self.palette_query.is_empty(), |d| {
+                        d.text_color(t.ink).child(self.palette_query.clone())
+                    }),
+            );
         v_flex()
             .w(px(460.0))
-            .p(t.sp3)
-            .gap(t.sp2)
             .bg(t.panel)
             .border_1()
             .border_color(t.line_2)
             .rounded(t.radius_lg)
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap(t.sp2)
-                    .px(t.sp2)
-                    .child(icon("command", px(15.0), t.muted))
-                    .child(div().text_color(t.muted).child("Go to tool / action")),
-            )
-            .child(list)
+            .overflow_hidden()
+            .child(query_box)
+            .child(div().p(t.sp2).child(list))
     }
 
     /// Full-window scrim + centered modal card for the active overlay.

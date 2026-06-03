@@ -13,12 +13,14 @@ mod theme;
 mod ui;
 
 use gpui::{
-    point, px, size, App, AppContext, Bounds, Styled, WindowBounds, WindowOptions,
+    point, px, size, App, AppContext, Bounds, KeyBinding, Styled, WindowBounds, WindowOptions,
 };
 use gpui_component::{ActiveTheme, Root, TitleBar};
 
 use assets::Assets;
-use shell::Shell;
+use shell::{
+    CmdCloseTab, CmdNewTerminal, CmdPalette, CmdSettings, CmdToggleTheme, Shell,
+};
 use theme::Theme;
 
 fn main() {
@@ -27,6 +29,14 @@ fn main() {
         if let Err(e) = assets::load_fonts(cx) {
             eprintln!("failed to load embedded fonts: {e}");
         }
+        // Global keyboard shortcuts (handled on the shell root via on_action).
+        cx.bind_keys([
+            KeyBinding::new("ctrl-shift-p", CmdPalette, None),
+            KeyBinding::new("ctrl-shift-t", CmdNewTerminal, None),
+            KeyBinding::new("ctrl-shift-w", CmdCloseTab, None),
+            KeyBinding::new("ctrl-shift-l", CmdToggleTheme, None),
+            KeyBinding::new("ctrl-,", CmdSettings, None),
+        ]);
         cx.set_global(Theme::dark());
 
         cx.spawn(async move |cx| {

@@ -190,7 +190,14 @@ enum Cmd {
     OpenPalette,
     OpenNewConn,
     CloseOverlay,
+    CloseTab,
 }
+
+// Global actions bound to keyboard shortcuts in main.rs. Each maps to a Cmd.
+gpui::actions!(
+    pier_x,
+    [CmdPalette, CmdNewTerminal, CmdCloseTab, CmdToggleTheme, CmdSettings]
+);
 
 /// Top-bar menus: (label, items). Each item is (text, command).
 const MENUS: &[(&str, &[(&str, Cmd)])] = &[
@@ -527,6 +534,14 @@ impl Shell {
                 window.focus(&self.conn_focus, cx);
             }
             Cmd::CloseOverlay => self.overlay = Overlay::None,
+            Cmd::CloseTab => {
+                if self.tabs.len() > 1 {
+                    self.tabs.remove(self.active_tab);
+                    if self.active_tab >= self.tabs.len() {
+                        self.active_tab = self.tabs.len() - 1;
+                    }
+                }
+            }
         }
         cx.notify();
     }
@@ -2165,6 +2180,22 @@ impl Render for Shell {
             .id("shell-root")
             .relative()
             .size_full()
+            // Global keyboard shortcuts (bound in main.rs) dispatch here.
+            .on_action(cx.listener(|this, _: &CmdPalette, window, cx| {
+                this.run(Cmd::OpenPalette, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CmdNewTerminal, window, cx| {
+                this.run(Cmd::NewTerminal, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CmdCloseTab, window, cx| {
+                this.run(Cmd::CloseTab, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CmdToggleTheme, window, cx| {
+                this.run(Cmd::ToggleTheme, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CmdSettings, window, cx| {
+                this.run(Cmd::OpenSettings, window, cx)
+            }))
             // While a divider is dragged, track moves at the root and commit
             // widths from the cursor x; release on mouse-up.
             .when(dragging, |d| {

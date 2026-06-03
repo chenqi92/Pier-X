@@ -313,10 +313,21 @@ impl Shell {
             .child(text.into())
     }
 
-    fn file_row(&self, f: &FileEntry) -> impl IntoElement {
+    /// Point the Files tree at a new directory and reload its contents + git.
+    fn navigate_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.cwd_label = path.display().to_string();
+        self.files = data::list_dir(&path);
+        self.git = data::git_status(&path);
+        self.cwd = path;
+        cx.notify();
+    }
+
+    fn file_row(&self, cx: &mut Context<Self>, f: &FileEntry) -> impl IntoElement {
         let t = &self.theme;
         let glyph = if f.is_dir { "folder" } else { "file" };
         let glyph_color = if f.is_dir { t.accent } else { t.muted };
+        let name = f.name.clone();
+        let is_dir = f.is_dir;
         h_flex()
             .id(SharedString::from(format!("file-{}", f.name)))
             .items_center()
@@ -325,6 +336,15 @@ impl Shell {
             .px(t.sp3)
             .text_color(t.ink_2)
             .hover(|s| s.bg(t.hover))
+            .when(is_dir, |d| {
+                d.cursor_pointer().on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                        let target = this.cwd.join(&name);
+                        this.navigate_to(target, cx);
+                    }),
+                )
+            })
             .child(icon(glyph, px(14.0), glyph_color))
             .child(div().flex_1().overflow_hidden().child(f.name.clone()))
             .child(
@@ -333,6 +353,30 @@ impl Shell {
                     .text_color(t.muted)
                     .child(f.age.clone()),
             )
+    }
+
+    /// The ".." row that ascends to the parent directory.
+    fn parent_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        h_flex()
+            .id("file-up")
+            .items_center()
+            .gap(t.sp2)
+            .h(px(26.0))
+            .px(t.sp3)
+            .text_color(t.muted)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _w, cx| {
+                    if let Some(parent) = this.cwd.parent().map(|p| p.to_path_buf()) {
+                        this.navigate_to(parent, cx);
+                    }
+                }),
+            )
+            .child(icon("folder", px(14.0), t.muted))
+            .child(div().flex_1().child(".."))
     }
 
     fn conn_row(&self, cx: &mut Context<Self>, idx: usize, c: &ConnRow) -> impl IntoElement {
@@ -399,8 +443,11 @@ impl Shell {
             col
         } else {
             let mut col = v_flex().child(self.section_label(self.cwd_label.clone()));
+            if self.cwd.parent().is_some() {
+                col = col.child(self.parent_row(cx));
+            }
             for f in &self.files {
-                col = col.child(self.file_row(f));
+                col = col.child(self.file_row(cx, f));
             }
             col
         };

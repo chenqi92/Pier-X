@@ -5,6 +5,7 @@
 // build, not a functional app. See docs/GPUI-MIGRATION-PLAN.md (M0).
 
 mod assets;
+mod data;
 mod shell;
 mod terminal;
 mod theme;

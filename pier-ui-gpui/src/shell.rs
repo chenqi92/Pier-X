@@ -12,13 +12,18 @@
 // sidebar toggle, connection-row selection, collapse right panel — all native
 // GPUI state on the Shell entity. The center is the real TerminalView.
 
+use std::path::PathBuf;
+
 use gpui::prelude::*;
 use gpui::{
-    div, px, svg, Context, Entity, FontWeight, Hsla, MouseButton, MouseDownEvent, Pixels,
-    SharedString, Svg, Window,
+    div, px, svg, AnyElement, Context, Entity, FontWeight, Hsla, MouseButton, MouseDownEvent,
+    Pixels, SharedString, Svg, Window,
 };
 use gpui_component::{h_flex, v_flex, TitleBar};
 
+use pier_core::services::git::FileStatus;
+
+use crate::data::{self, ConnRow, FileEntry, GitData};
 use crate::terminal::TerminalView;
 use crate::theme::Theme;
 
@@ -79,14 +84,8 @@ enum TabKind {
 }
 
 struct Tab {
-    title: &'static str,
+    title: String,
     kind: TabKind,
-}
-
-struct Conn {
-    name: &'static str,
-    addr: &'static str,
-    online: bool,
 }
 
 pub struct Shell {
@@ -98,25 +97,40 @@ pub struct Shell {
     show_servers: bool,
     selected_conn: usize,
     right_collapsed: bool,
+    // Real data loaded from pier-core / the local working dir.
+    cwd: PathBuf,
+    cwd_label: String,
+    files: Vec<FileEntry>,
+    conns: Vec<ConnRow>,
+    git: Option<GitData>,
 }
 
 impl Shell {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let cwd = data::current_dir();
+        let cwd_label = cwd.display().to_string();
+        let files = data::list_dir(&cwd);
+        let conns = data::load_connections();
+        let git = data::git_status(&cwd);
+        let tab_title = cwd
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| cwd_label.clone());
         Self {
             theme: Theme::dark(),
             terminal: cx.new(|cx| TerminalView::new(cx)),
-            tabs: vec![
-                Tab { title: "~/code/warehouse-api", kind: TabKind::Local },
-                Tab { title: "deploy@prod-web-01", kind: TabKind::Ssh },
-                Tab { title: "postgres · analytics", kind: TabKind::Db },
-                Tab { title: "CHANGELOG.md", kind: TabKind::Markdown },
-            ],
+            tabs: vec![Tab { title: tab_title, kind: TabKind::Local }],
             active_tab: 0,
             // default to Git so the right panel matches the reference screenshot
             active_tool: 1,
             show_servers: false,
             selected_conn: 0,
             right_collapsed: false,
+            cwd,
+            cwd_label,
+            files,
+            conns,
+            git,
         }
     }
 
@@ -239,7 +253,7 @@ impl Shell {
             .child(label)
     }
 
-    fn section_label(&self, text: &'static str) -> impl IntoElement {
+    fn section_label(&self, text: impl Into<SharedString>) -> impl IntoElement {
         let t = &self.theme;
         div()
             .px(t.sp3)
@@ -248,15 +262,15 @@ impl Shell {
             .text_size(t.fs_sm)
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(t.muted)
-            .child(text)
+            .child(text.into())
     }
 
-    fn file_row(&self, is_dir: bool, name: &'static str, meta: &'static str) -> impl IntoElement {
+    fn file_row(&self, f: &FileEntry) -> impl IntoElement {
         let t = &self.theme;
-        let glyph = if is_dir { "folder" } else { "file" };
-        let glyph_color = if is_dir { t.accent } else { t.muted };
+        let glyph = if f.is_dir { "folder" } else { "file" };
+        let glyph_color = if f.is_dir { t.accent } else { t.muted };
         h_flex()
-            .id(SharedString::from(format!("file-{name}")))
+            .id(SharedString::from(format!("file-{}", f.name)))
             .items_center()
             .gap(t.sp2)
             .h(px(26.0))
@@ -264,11 +278,16 @@ impl Shell {
             .text_color(t.ink_2)
             .hover(|s| s.bg(t.hover))
             .child(icon(glyph, px(14.0), glyph_color))
-            .child(div().flex_1().child(name))
-            .child(div().text_size(t.fs_sm).text_color(t.muted).child(meta))
+            .child(div().flex_1().overflow_hidden().child(f.name.clone()))
+            .child(
+                div()
+                    .text_size(t.fs_sm)
+                    .text_color(t.muted)
+                    .child(f.age.clone()),
+            )
     }
 
-    fn conn_row(&self, cx: &mut Context<Self>, idx: usize, c: &Conn) -> impl IntoElement {
+    fn conn_row(&self, cx: &mut Context<Self>, idx: usize, c: &ConnRow) -> impl IntoElement {
         let t = &self.theme;
         let selected = self.selected_conn == idx;
         let dot = if c.online { t.pos } else { t.muted };
@@ -291,43 +310,45 @@ impl Shell {
             .child(
                 div()
                     .flex_1()
+                    .overflow_hidden()
                     .text_color(if selected { t.ink } else { t.ink_2 })
-                    .child(c.name),
+                    .child(c.name.clone()),
             )
             .child(
                 div()
                     .font_family(t.mono.clone())
                     .text_size(t.fs_sm)
                     .text_color(t.muted)
-                    .child(c.addr),
+                    .child(c.addr.clone()),
             )
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let body = if self.show_servers {
-            let conns = [
-                Conn { name: "prod-web-01", addr: "ari@10.0.1.4:22", online: true },
-                Conn { name: "db-primary", addr: "ari@10.0.1.9:22", online: true },
-                Conn { name: "staging-02", addr: "ari@10.0.2.7:22", online: false },
-            ];
-            let mut col = v_flex().child(self.section_label("SERVERS"));
-            for (i, c) in conns.iter().enumerate() {
-                col = col.child(self.conn_row(cx, i, c));
+            let mut col =
+                v_flex().child(self.section_label(format!("SERVERS · {}", self.conns.len())));
+            if self.conns.is_empty() {
+                col = col.child(
+                    div()
+                        .px(t.sp3)
+                        .py(t.sp2)
+                        .text_size(t.fs_sm)
+                        .text_color(t.dim)
+                        .child("No saved connections"),
+                );
+            } else {
+                for (i, c) in self.conns.iter().enumerate() {
+                    col = col.child(self.conn_row(cx, i, c));
+                }
             }
             col
         } else {
-            v_flex()
-                .child(self.section_label("~/code/warehouse-api"))
-                .child(self.file_row(true, ".git", "2d"))
-                .child(self.file_row(true, ".github", "5d"))
-                .child(self.file_row(true, "migrations", "1h"))
-                .child(self.file_row(true, "src", "14m"))
-                .child(self.file_row(true, "tests", "3d"))
-                .child(self.file_row(true, "docs", "2w"))
-                .child(self.file_row(false, ".gitignore", "3w"))
-                .child(self.file_row(false, "CHANGELOG.md", "2h"))
-                .child(self.file_row(false, "Dockerfile", "5d"))
+            let mut col = v_flex().child(self.section_label(self.cwd_label.clone()));
+            for f in &self.files {
+                col = col.child(self.file_row(f));
+            }
+            col
         };
 
         v_flex()
@@ -344,7 +365,14 @@ impl Shell {
                     .child(self.sidebar_tab(cx, "Files", false))
                     .child(self.sidebar_tab(cx, "Servers", true)),
             )
-            .child(body)
+            .child(
+                div()
+                    .id("sidebar-scroll")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .child(body),
+            )
     }
 
     // ── TabBar ────────────────────────────────────────────────────
@@ -379,7 +407,7 @@ impl Shell {
                     .max_w(px(150.0))
                     .overflow_hidden()
                     .text_color(if active { t.ink } else { t.muted })
-                    .child(tab.title),
+                    .child(tab.title.clone()),
             )
             .child(
                 div()
@@ -512,7 +540,12 @@ impl Shell {
         )
     }
 
-    fn panel_header(&self, glyph: &'static str, title: &'static str, meta: &'static str) -> impl IntoElement {
+    fn panel_header(
+        &self,
+        glyph: &'static str,
+        title: impl Into<SharedString>,
+        meta: impl Into<SharedString>,
+    ) -> impl IntoElement {
         let t = &self.theme;
         h_flex()
             .items_center()
@@ -528,29 +561,56 @@ impl Shell {
                     .font_family(t.mono.clone())
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(t.ink)
-                    .child(title),
+                    .child(title.into()),
             )
             .child(div().flex_1())
-            .child(div().text_size(t.fs_sm).text_color(t.muted).child(meta))
+            .child(div().text_size(t.fs_sm).text_color(t.muted).child(meta.into()))
     }
 
-    fn git_change_row(&self, mark: &'static str, mark_color: Hsla, path: &'static str, stat: &'static str, stat_color: Hsla) -> impl IntoElement {
+    fn git_change_row(&self, c: &data::GitChange) -> impl IntoElement {
         let t = &self.theme;
+        let (mark, mark_color) = status_style(t, &c.status);
         h_flex()
-            .id(SharedString::from(format!("gch-{path}")))
+            .id(SharedString::from(format!("gch-{}", c.path)))
             .items_center()
             .gap(t.sp2)
             .h(px(26.0))
             .px(t.sp3)
             .hover(|s| s.bg(t.hover))
-            .child(div().w(px(14.0)).font_family(t.mono.clone()).text_color(mark_color).child(mark))
-            .child(div().flex_1().font_family(t.mono.clone()).text_size(t.fs_sm).text_color(t.ink_2).child(path))
-            .child(div().font_family(t.mono.clone()).text_size(t.fs_sm).text_color(stat_color).child(stat))
+            .child(
+                div()
+                    .w(px(14.0))
+                    .font_family(t.mono.clone())
+                    .text_color(mark_color)
+                    .child(mark),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.ink_2)
+                    .child(c.path.clone()),
+            )
     }
 
-    fn git_panel(&self) -> impl IntoElement {
+    fn git_panel(&self) -> AnyElement {
         let t = &self.theme;
-        let chip = |label: &'static str, n: &'static str, active: bool| {
+        let Some(git) = &self.git else {
+            return v_flex()
+                .flex_1()
+                .child(self.panel_header("git-branch", "GIT", ""))
+                .child(
+                    div()
+                        .p(t.sp4)
+                        .text_color(t.muted)
+                        .child("Not a git repository"),
+                )
+                .into_any_element();
+        };
+        let total = git.staged.len() + git.unstaged.len();
+        let chip = |label: &'static str, n: String, active: bool| {
             h_flex()
                 .items_center()
                 .gap(px(4.0))
@@ -572,10 +632,17 @@ impl Shell {
                 .when(!primary, |d| d.bg(t.panel_2).text_color(t.ink_2))
                 .child(label)
         };
-        v_flex()
+        let ahead_behind = format!("↑{} ↓{}", git.ahead, git.behind);
+        let tracking = if git.tracking.is_empty() {
+            "no upstream".to_string()
+        } else {
+            format!("tracking {}", git.tracking)
+        };
+
+        let mut col = v_flex()
             .flex_1()
             .min_h(px(0.0))
-            .child(self.panel_header("git-branch", "GIT", "feat/ingest-pipeline ↑2"))
+            .child(self.panel_header("git-branch", "GIT", git.branch.clone()))
             .child(
                 h_flex()
                     .gap(t.sp3)
@@ -583,10 +650,10 @@ impl Shell {
                     .py(t.sp2)
                     .border_b_1()
                     .border_color(t.line)
-                    .child(chip("Changes", "8", true))
-                    .child(chip("History", "", false))
-                    .child(chip("Branches", "3", false))
-                    .child(chip("Stash", "1", false)),
+                    .child(chip("Changes", total.to_string(), true))
+                    .child(chip("History", String::new(), false))
+                    .child(chip("Branches", String::new(), false))
+                    .child(chip("Stash", String::new(), false)),
             )
             .child(
                 v_flex()
@@ -600,10 +667,22 @@ impl Shell {
                     .child(
                         h_flex()
                             .items_center()
-                            .child(div().flex_1().font_family(t.mono.clone()).text_color(t.ink).child("feat/ingest-pipeline"))
-                            .child(div().text_size(t.fs_sm).text_color(t.muted).child("↑2 ↓0")),
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .overflow_hidden()
+                                    .font_family(t.mono.clone())
+                                    .text_color(t.ink)
+                                    .child(git.branch.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(t.fs_sm)
+                                    .text_color(t.muted)
+                                    .child(ahead_behind),
+                            ),
                     )
-                    .child(div().text_size(t.fs_sm).text_color(t.muted).child("tracking origin/feat/ingest-pipeline"))
+                    .child(div().text_size(t.fs_sm).text_color(t.muted).child(tracking))
                     .child(
                         h_flex()
                             .gap(t.sp2)
@@ -613,21 +692,42 @@ impl Shell {
                             .child(btn("Fetch", false))
                             .child(btn("Rebase", false)),
                     ),
-            )
-            .child(self.section_label("STAGED · 3"))
-            .child(self.git_change_row("M", t.warn, "src/ingest/parse.ts", "+84 -12", t.pos))
-            .child(self.git_change_row("A", t.pos, "src/ingest/backpressure.ts", "+142", t.pos))
-            .child(self.git_change_row("D", t.neg, "src/ingest/legacy.ts", "-218", t.neg))
-            .child(self.section_label("CHANGES · 5"))
-            .child(self.git_change_row("M", t.warn, "src/ingest/stream.ts", "+24 -6", t.pos))
-            .child(self.git_change_row("M", t.warn, "src/api/routes.ts", "+18 -2", t.pos))
+            );
+
+        if !git.staged.is_empty() {
+            col = col.child(self.section_label(format!("STAGED · {}", git.staged.len())));
+            for c in &git.staged {
+                col = col.child(self.git_change_row(c));
+            }
+        }
+        if !git.unstaged.is_empty() {
+            col = col.child(self.section_label(format!("CHANGES · {}", git.unstaged.len())));
+            for c in &git.unstaged {
+                col = col.child(self.git_change_row(c));
+            }
+        }
+        if total == 0 {
+            col = col.child(
+                div()
+                    .p(t.sp4)
+                    .text_color(t.muted)
+                    .child("Working tree clean"),
+            );
+        }
+        col.into_any_element()
     }
 
     fn right_panel(&self) -> impl IntoElement {
         let t = &self.theme;
         let (_, glyph, name, _) = TOOLS[self.active_tool];
         if self.active_tool == 1 {
-            self.git_panel().into_any_element()
+            div()
+                .id("git-scroll")
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_y_scroll()
+                .child(self.git_panel())
+                .into_any_element()
         } else {
             v_flex()
                 .flex_1()
@@ -650,6 +750,10 @@ impl Shell {
     fn status_bar(&self, cols: u16, rows: u16) -> impl IntoElement {
         let t = &self.theme;
         let (_, _, tool_name, _) = TOOLS[self.active_tool];
+        let (branch, ahead_behind) = match &self.git {
+            Some(g) => (g.branch.clone(), format!("↑{} ↓{}", g.ahead, g.behind)),
+            None => ("—".to_string(), String::new()),
+        };
         h_flex()
             .items_center()
             .justify_between()
@@ -669,10 +773,10 @@ impl Shell {
                             .items_center()
                             .gap(px(4.0))
                             .child(icon("git-branch", px(12.0), t.ink_2))
-                            .child(self.status_item("feat/ingest-pipeline", t.ink_2)),
+                            .child(self.status_item(branch, t.ink_2)),
                     )
-                    .child(self.status_item("↑2 ↓0", t.muted))
-                    .child(self.status_item("ssh · russh", t.ink_2))
+                    .child(self.status_item(ahead_behind, t.muted))
+                    .child(self.status_item("local · pwsh", t.ink_2))
                     .child(self.status_item(format!("{cols}×{rows}"), t.muted)),
             )
             .child(
@@ -737,4 +841,18 @@ impl Render for Shell {
             )
             .child(self.status_bar(cols, rows))
     }
+}
+
+/// Single-char mark + colour for a git file status.
+fn status_style(t: &Theme, s: &FileStatus) -> (&'static str, Hsla) {
+    let color = match s {
+        FileStatus::Modified => t.warn,
+        FileStatus::Added => t.pos,
+        FileStatus::Deleted => t.neg,
+        FileStatus::Renamed => t.info,
+        FileStatus::Untracked => t.muted,
+        FileStatus::Conflicted => t.neg,
+        FileStatus::Copied => t.info,
+    };
+    (s.code(), color)
 }

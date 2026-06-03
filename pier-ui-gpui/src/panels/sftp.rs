@@ -1,12 +1,15 @@
-// SFTP panel — read-only remote file browser over an SSH session.
+// SFTP panel — remote file browser over an SSH session.
 //
 // Pick a saved connection, open an SFTP channel off the render path, and walk
 // the remote tree: directories first, click a folder to descend, a ".." row to
-// go back up. Connect/list failures surface as a single error line. Upload /
-// download are out of scope for this pass.
+// go back up. Files can be downloaded (native save dialog) and local files
+// uploaded into the current remote dir (native open dialog). Failures surface
+// as a single error line.
 
 use gpui::prelude::*;
-use gpui::{div, px, Context, MouseButton, MouseDownEvent, SharedString, Window};
+use gpui::{
+    div, px, Context, MouseButton, MouseDownEvent, PathPromptOptions, SharedString, Window,
+};
 use gpui_component::{h_flex, v_flex};
 
 use pier_core::ssh::{RemoteFileEntry, SftpClient, SshConfig, SshSession};
@@ -123,6 +126,79 @@ impl SftpPanel {
         .detach();
     }
 
+    /// Download a remote file to a local path chosen via the native dialog.
+    fn download(&mut self, remote: String, name: String, cx: &mut Context<Self>) {
+        let Some(sftp) = self.sftp.clone() else {
+            return;
+        };
+        let dir = data::current_dir();
+        cx.spawn(async move |this, cx| {
+            let recv = cx.update(|cx| cx.prompt_for_new_path(&dir, Some(name.as_str())));
+            let Ok(Ok(Some(local))) = recv.await else {
+                return; // cancelled or errored
+            };
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    sftp.download_to_blocking(&remote, &local)
+                        .map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.error = res.err();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Upload a locally-chosen file into the current remote directory.
+    fn upload(&mut self, cx: &mut Context<Self>) {
+        let Some(sftp) = self.sftp.clone() else {
+            return;
+        };
+        let remote_dir = self.cwd.clone();
+        cx.spawn(async move |this, cx| {
+            let opts = PathPromptOptions {
+                files: true,
+                directories: false,
+                multiple: false,
+                prompt: None,
+            };
+            let recv = cx.update(|cx| cx.prompt_for_paths(opts));
+            let Ok(Ok(Some(paths))) = recv.await else {
+                return;
+            };
+            let Some(local) = paths.into_iter().next() else {
+                return;
+            };
+            let fname = local
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let remote = format!("{}/{}", remote_dir.trim_end_matches('/'), fname);
+            let listed = cx
+                .background_executor()
+                .spawn(async move {
+                    sftp.upload_from_blocking(&local, &remote)
+                        .map_err(|e| e.to_string())?;
+                    sftp.list_dir_blocking(&remote_dir).map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match listed {
+                    Ok(entries) => {
+                        this.entries = entries;
+                        this.error = None;
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn conn_row(&self, cx: &mut Context<Self>, idx: usize, c: &SshConfig) -> impl IntoElement {
         let t = &self.theme;
         let addr = format!("{}@{}:{}", c.user, c.host, c.port);
@@ -189,6 +265,8 @@ impl SftpPanel {
         };
         let path = e.path.clone();
         let is_dir = e.is_dir;
+        let dl_path = e.path.clone();
+        let dl_name = e.name.clone();
         h_flex()
             .id(SharedString::from(format!("sftp-entry-{}", e.path)))
             .items_center()
@@ -214,6 +292,27 @@ impl SftpPanel {
                     .text_color(t.muted)
                     .child(size),
             )
+            .when(!is_dir, |d| {
+                d.child(
+                    div()
+                        .id(SharedString::from(format!("sftp-dl-{}", e.path)))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .w(px(18.0))
+                        .h(px(18.0))
+                        .rounded(t.radius_sm)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(t.elev))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                                this.download(dl_path.clone(), dl_name.clone(), cx)
+                            }),
+                        )
+                        .child(ui::icon("arrow-down", px(13.0), t.muted)),
+                )
+            })
     }
 
     fn error_line(&self) -> impl IntoElement {
@@ -244,8 +343,33 @@ impl Render for SftpPanel {
         }
 
         if self.sftp.is_some() {
-            // Connected: header shows the active connection, body is the listing.
-            body = body.child(ui::section_label(&t, self.conn_name.clone()));
+            // Connected: header shows the active connection + an Upload button.
+            body = body.child(
+                h_flex()
+                    .items_center()
+                    .child(div().flex_1().child(ui::section_label(&t, self.conn_name.clone())))
+                    .child(
+                        h_flex()
+                            .id("sftp-upload")
+                            .items_center()
+                            .gap(px(4.0))
+                            .mr(t.sp3)
+                            .px(t.sp2)
+                            .py(px(3.0))
+                            .rounded(t.radius_sm)
+                            .bg(t.panel_2)
+                            .text_size(t.fs_ui)
+                            .text_color(t.ink_2)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(t.elev))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseDownEvent, _w, cx| this.upload(cx)),
+                            )
+                            .child(ui::icon("arrow-up", px(13.0), t.ink_2))
+                            .child("Upload"),
+                    ),
+            );
             if parent_of(&self.cwd) != self.cwd {
                 body = body.child(self.up_row(cx));
             }

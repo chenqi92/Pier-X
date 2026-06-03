@@ -13,6 +13,7 @@ use std::time::SystemTime;
 use pier_core::connections::ConnectionStore;
 use pier_core::services::git::{FileStatus, GitClient};
 use pier_core::services::local_monitor;
+use pier_core::ssh::{HostKeyVerifier, SshConfig, SshSession};
 
 /// One entry in the Files sidebar.
 pub struct FileEntry {
@@ -76,6 +77,21 @@ pub fn list_dir(path: &Path) -> Vec<FileEntry> {
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     entries
+}
+
+/// Raw saved SSH configs (for panels that need to connect, not just display).
+pub fn connections_raw() -> Vec<SshConfig> {
+    ConnectionStore::load_default()
+        .map(|s| s.connections)
+        .unwrap_or_default()
+}
+
+/// Open a blocking SSH session to `cfg`. Trust-on-first-use host-key policy
+/// (logs the fingerprint) — fine for the spike. Run OFF the render path: this
+/// blocks on the network. Returns a display error string on failure.
+pub fn connect_blocking(cfg: &SshConfig) -> Result<SshSession, String> {
+    SshSession::connect_blocking(cfg, HostKeyVerifier::accept_all_log_fingerprint())
+        .map_err(|e| e.to_string())
 }
 
 /// Saved connections from the default store, or empty if none/unreadable.

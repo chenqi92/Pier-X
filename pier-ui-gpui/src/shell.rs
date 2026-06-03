@@ -476,6 +476,22 @@ impl Shell {
             .child(div().flex_1().child(".."))
     }
 
+    /// Open a new SSH terminal tab for saved connection `idx`.
+    fn open_ssh_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(cfg) = data::connections_raw().into_iter().nth(idx) else {
+            return;
+        };
+        let title = format!("{}@{}", cfg.user, cfg.host);
+        let terminal = cx.new(|cx| TerminalView::new_ssh(cx, cfg));
+        self.tabs.push(Tab {
+            title,
+            kind: TabKind::Ssh,
+            terminal,
+        });
+        self.active_tab = self.tabs.len() - 1;
+        cx.notify();
+    }
+
     fn conn_row(&self, cx: &mut Context<Self>, idx: usize, c: &ConnRow) -> impl IntoElement {
         let t = &self.theme;
         let selected = self.selected_conn == idx;
@@ -486,13 +502,14 @@ impl Shell {
             .gap(t.sp2)
             .h(px(42.0))
             .px(t.sp3)
+            .cursor_pointer()
             .when(selected, |d| d.bg(t.accent_dim))
             .when(!selected, |d| d.hover(|s| s.bg(t.hover)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
                     this.selected_conn = idx;
-                    cx.notify();
+                    this.open_ssh_tab(idx, cx);
                 }),
             )
             .child(div().w(px(7.0)).h(px(7.0)).rounded_full().bg(dot))

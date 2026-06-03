@@ -18,8 +18,10 @@ use gpui::{
 };
 use gpui_component::v_flex;
 
+use pier_core::ssh::{SshConfig, SshSession};
 use pier_core::terminal::{Color, GridSnapshot, PierTerminal};
 
+use crate::data;
 use crate::theme::Theme;
 
 // Initial grid; replaced on first paint once the real viewport is known.
@@ -44,14 +46,21 @@ extern "C" fn notify_dirty(user_data: *mut c_void, _event: u32) {
 }
 
 pub struct TerminalView {
-    // Declared first so it drops (and joins its reader thread) before `dirty`.
+    // Declared first so it drops (and joins its reader thread) before `session`
+    // and `dirty`: the PTY borrows the SSH channel and the notify callback reads
+    // the dirty flag, so both must outlive the terminal.
     term: Option<PierTerminal>,
+    /// Kept alive for the lifetime of an SSH terminal so its shell channel stays
+    /// open; `None` for local terminals.
+    session: Option<SshSession>,
     snapshot: Option<GridSnapshot>,
     dirty: Arc<AtomicBool>,
     theme: Theme,
     focus: FocusHandle,
     did_focus: bool,
     error: Option<String>,
+    /// Pre-ready message (e.g. "Connecting to host…") shown until `term` exists.
+    status: Option<String>,
     cols: u16,
     rows: u16,
     scroll_offset: usize,
@@ -73,9 +82,95 @@ impl TerminalView {
             Err(e) => (None, Some(format!("failed to start shell: {e}"))),
         };
 
-        // Per-frame poll: when the reader thread flagged new output, pull a
-        // fresh snapshot and request a repaint. Coalesced to one IPC-free
-        // snapshot copy per ~16ms tick.
+        Self::spawn_poll(cx);
+
+        Self {
+            term,
+            session: None,
+            snapshot: None,
+            dirty,
+            theme: Theme::dark(),
+            focus,
+            did_focus: false,
+            error,
+            status: None,
+            cols: COLS,
+            rows: ROWS,
+            scroll_offset: 0,
+        }
+    }
+
+    /// A terminal backed by an SSH shell channel to `cfg`. The connect + channel
+    /// open run on the background executor; the `PierTerminal` is built on the
+    /// main thread once the channel is ready (so it binds to this view's dirty
+    /// flag). Until then the view shows a "Connecting…" status.
+    pub fn new_ssh(cx: &mut Context<Self>, cfg: SshConfig) -> Self {
+        let dirty = Arc::new(AtomicBool::new(true));
+        let focus = cx.focus_handle();
+        let label = format!("{}@{}", cfg.user, cfg.host);
+
+        Self::spawn_poll(cx);
+
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    let session = data::connect_blocking(&cfg)?;
+                    let pty = session
+                        .open_shell_channel_blocking(COLS, ROWS)
+                        .map_err(|e| e.to_string())?;
+                    Ok::<_, String>((session, pty))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match res {
+                    Ok((session, pty)) => {
+                        match PierTerminal::with_pty(
+                            Box::new(pty),
+                            COLS,
+                            ROWS,
+                            notify_dirty,
+                            Arc::as_ptr(&this.dirty) as *mut c_void,
+                        ) {
+                            Ok(mut term) => {
+                                // Sync to whatever size the live viewport settled on.
+                                let _ = term.resize(this.cols, this.rows);
+                                this.term = Some(term);
+                                this.session = Some(session);
+                                this.status = None;
+                                this.dirty.store(true, Ordering::Release);
+                            }
+                            Err(e) => {
+                                this.error = Some(format!("failed to start remote shell: {e}"))
+                            }
+                        }
+                    }
+                    Err(e) => this.error = Some(format!("connect failed: {e}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+
+        Self {
+            term: None,
+            session: None,
+            snapshot: None,
+            dirty,
+            theme: Theme::dark(),
+            focus,
+            did_focus: false,
+            error: None,
+            status: Some(format!("Connecting to {label}…")),
+            cols: COLS,
+            rows: ROWS,
+            scroll_offset: 0,
+        }
+    }
+
+    /// Per-frame poll: when the reader thread flagged new output, pull a fresh
+    /// snapshot and request a repaint. Coalesced to one snapshot copy per ~16ms.
+    fn spawn_poll(cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
                 .timer(Duration::from_millis(16))
@@ -97,19 +192,6 @@ impl TerminalView {
             }
         })
         .detach();
-
-        Self {
-            term,
-            snapshot: None,
-            dirty,
-            theme: Theme::dark(),
-            focus,
-            did_focus: false,
-            error,
-            cols: COLS,
-            rows: ROWS,
-            scroll_offset: 0,
-        }
     }
 
     /// Recompute the grid size from the live viewport and resize the PTY when
@@ -289,7 +371,11 @@ impl Render for TerminalView {
             (None, Some(snap)) => self.grid(snap).into_any_element(),
             (None, None) => div()
                 .text_color(t.muted)
-                .child("starting shell…")
+                .child(
+                    self.status
+                        .clone()
+                        .unwrap_or_else(|| "starting shell…".to_string()),
+                )
                 .into_any_element(),
         };
 

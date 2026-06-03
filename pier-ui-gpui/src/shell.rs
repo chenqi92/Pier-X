@@ -145,6 +145,9 @@ pub struct Shell {
     commit_focus: FocusHandle,
     /// Open tab context menu: (window position, tab index).
     tab_menu: Option<(Point<Pixels>, usize)>,
+    /// Files sidebar filter text + its focus handle.
+    file_filter: String,
+    file_focus: FocusHandle,
     /// New Connection form: [name, host, port, user] + focused field + focus.
     conn_form: [String; 4],
     conn_field: usize,
@@ -279,6 +282,8 @@ impl Shell {
             commit_msg: String::new(),
             commit_focus: cx.focus_handle(),
             tab_menu: None,
+            file_filter: String::new(),
+            file_focus: cx.focus_handle(),
             conn_form: Default::default(),
             conn_field: 0,
             conn_focus: cx.focus_handle(),
@@ -946,13 +951,146 @@ impl Shell {
                 )
             })
             .child(icon(glyph, px(14.0), glyph_color))
-            .child(div().flex_1().overflow_hidden().child(f.name.clone()))
+            .child(div().flex_1().min_w(px(0.0)).truncate().child(f.name.clone()))
             .child(
                 div()
+                    .w(px(40.0))
+                    .flex_none()
                     .text_size(t.fs_sm)
                     .text_color(t.muted)
                     .child(f.age.clone()),
             )
+            .child(
+                div()
+                    .w(px(56.0))
+                    .flex_none()
+                    .text_size(t.fs_sm)
+                    .text_color(t.dim)
+                    .child(f.size.map(human_size).unwrap_or_default()),
+            )
+    }
+
+    /// NAME / MOD / SIZE column header for the Files list.
+    fn files_header(&self) -> impl IntoElement {
+        let t = &self.theme;
+        h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .h(px(22.0))
+            .px(t.sp3)
+            .text_size(t.fs_sm)
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(t.muted)
+            .child(div().w(px(14.0)))
+            .child(div().flex_1().child("NAME"))
+            .child(div().w(px(40.0)).flex_none().child("MOD"))
+            .child(div().w(px(56.0)).flex_none().child("SIZE"))
+    }
+
+    /// Breadcrumb + home/up/refresh toolbar for the Files tree.
+    fn files_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let nav = |key: &'static str, glyph: &'static str, cx: &mut Context<Self>, f: fn(&mut Self, &mut Context<Self>)| {
+            div()
+                .id(SharedString::from(format!("fnav-{key}")))
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(22.0))
+                .h(px(22.0))
+                .rounded(t.radius_sm)
+                .cursor_pointer()
+                .hover(|s| s.bg(t.hover))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, _w, cx| f(this, cx)),
+                )
+                .child(icon(glyph, px(14.0), t.muted))
+        };
+        h_flex()
+            .items_center()
+            .gap(px(2.0))
+            .px(t.sp2)
+            .py(px(4.0))
+            .child(nav("up", "chevron-up", cx, |this, cx| {
+                if let Some(p) = this.cwd.parent().map(|p| p.to_path_buf()) {
+                    this.navigate_to(p, cx);
+                }
+            }))
+            .child(nav("home", "folder", cx, |this, cx| {
+                this.navigate_to(data::current_dir(), cx);
+            }))
+            .child(nav("refresh", "redo-2", cx, |this, cx| {
+                let cwd = this.cwd.clone();
+                this.navigate_to(cwd, cx);
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .ml(t.sp1)
+                    .truncate()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.ink_2)
+                    .child(breadcrumb(&self.cwd)),
+            )
+    }
+
+    fn on_files_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        match ks.key.as_str() {
+            "backspace" => {
+                if self.file_filter.pop().is_some() {
+                    cx.notify();
+                }
+                return;
+            }
+            "escape" => {
+                if !self.file_filter.is_empty() {
+                    self.file_filter.clear();
+                    cx.notify();
+                }
+                return;
+            }
+            _ => {}
+        }
+        let m = &ks.modifiers;
+        if m.control || m.alt || m.platform {
+            return;
+        }
+        if let Some(kc) = &ks.key_char {
+            if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) {
+                self.file_filter.push_str(kc);
+                cx.notify();
+            }
+        }
+    }
+
+    /// The "Filter files…" input row.
+    fn files_filter(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let empty = self.file_filter.is_empty();
+        div()
+            .track_focus(&self.file_focus)
+            .key_context("FileFilter")
+            .on_key_down(cx.listener(Self::on_files_key))
+            .mx(t.sp3)
+            .mb(t.sp1)
+            .h(px(26.0))
+            .px(t.sp2)
+            .flex()
+            .items_center()
+            .gap(t.sp2)
+            .rounded(t.radius_sm)
+            .bg(t.panel_2)
+            .border_1()
+            .border_color(t.line_2)
+            .child(icon("search", px(13.0), t.muted))
+            .when(empty, |d| d.child(div().text_size(t.fs_sm).text_color(t.dim).child("Filter files…")))
+            .when(!empty, |d| {
+                d.child(div().flex_1().text_size(t.fs_sm).text_color(t.ink).child(self.file_filter.clone()))
+            })
     }
 
     /// The ".." row that ascends to the parent directory.
@@ -1078,11 +1216,18 @@ impl Shell {
             }
             col
         } else {
-            let mut col = v_flex().child(self.section_label(self.cwd_label.clone()));
-            if self.cwd.parent().is_some() {
+            let q = self.file_filter.to_lowercase();
+            let mut col = v_flex()
+                .child(self.files_toolbar(cx))
+                .child(self.files_filter(cx))
+                .child(self.files_header());
+            if self.cwd.parent().is_some() && q.is_empty() {
                 col = col.child(self.parent_row(cx));
             }
             for f in &self.files {
+                if !q.is_empty() && !f.name.to_lowercase().contains(&q) {
+                    continue;
+                }
                 col = col.child(self.file_row(cx, f));
             }
             col
@@ -2333,6 +2478,41 @@ impl Render for Shell {
             })
             .when(show_overlay, |d| d.child(self.overlay_layer(cx)))
     }
+}
+
+/// Compact human-readable byte size, e.g. `4.0K`, `1.2M`.
+fn human_size(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n}B")
+    } else {
+        format!("{v:.1}{}", UNITS[i])
+    }
+}
+
+/// Last few path components joined with " / " for the Files breadcrumb.
+fn breadcrumb(path: &std::path::Path) -> String {
+    let parts: Vec<String> = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().trim_end_matches('\\').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let tail = if parts.len() > 3 {
+        &parts[parts.len() - 3..]
+    } else {
+        &parts[..]
+    };
+    let mut s = tail.join("  /  ");
+    if parts.len() > 3 {
+        s = format!("…  /  {s}");
+    }
+    s
 }
 
 /// Single-char mark + colour for a git file status.

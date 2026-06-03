@@ -22,6 +22,8 @@ pub struct FileEntry {
     pub is_dir: bool,
     /// Relative modification age, e.g. "2h", "3d".
     pub age: String,
+    /// File size in bytes; `None` for directories.
+    pub size: Option<u64>,
 }
 
 /// One saved SSH connection in the Servers sidebar.
@@ -65,10 +67,16 @@ pub fn list_dir(path: &Path) -> Vec<FileEntry> {
                 .and_then(|m| m.modified().ok())
                 .map(rel_age)
                 .unwrap_or_default();
+            let size = if is_dir {
+                None
+            } else {
+                md.as_ref().map(|m| m.len())
+            };
             entries.push(FileEntry {
                 name: e.file_name().to_string_lossy().into_owned(),
                 is_dir,
                 age,
+                size,
             });
         }
     }

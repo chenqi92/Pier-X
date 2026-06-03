@@ -1073,6 +1073,7 @@ impl Shell {
         let active = self.active_tab == idx;
         h_flex()
             .id(SharedString::from(format!("tab-{idx}")))
+            .flex_none()
             .items_center()
             .gap(t.sp2)
             .h_full()
@@ -1130,32 +1131,36 @@ impl Shell {
 
     fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
-        let mut row = h_flex()
+        // Tabs scroll horizontally when they overflow; the new-tab button is pinned.
+        let mut tabs = h_flex().id("tabs-scroll").flex_1().min_w(px(0.0)).overflow_x_scroll();
+        for idx in 0..self.tabs.len() {
+            tabs = tabs.child(self.tab_item(cx, idx));
+        }
+        h_flex()
             .w_full()
             .h(t.tabbar_h)
             .bg(t.surface)
             .border_b_1()
-            .border_color(t.line);
-        for idx in 0..self.tabs.len() {
-            row = row.child(self.tab_item(cx, idx));
-        }
-        row.child(
-            div()
-                .id("new-tab")
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(px(34.0))
-                .h_full()
-                .hover(|s| s.bg(t.hover))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _w, cx| {
-                        this.open_terminal_tab(cx);
-                    }),
-                )
-                .child(icon("plus", px(15.0), t.muted)),
-        )
+            .border_color(t.line)
+            .child(tabs)
+            .child(
+                div()
+                    .id("new-tab")
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .w(px(34.0))
+                    .h_full()
+                    .hover(|s| s.bg(t.hover))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _w, cx| {
+                            this.open_terminal_tab(cx);
+                        }),
+                    )
+                    .child(icon("plus", px(15.0), t.muted)),
+            )
     }
 
     // ── Right zone: panel + tool strip ───────────────────────────

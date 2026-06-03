@@ -228,7 +228,16 @@ const MENUS: &[(&str, &[(&str, Cmd)])] = &[
 
 impl Shell {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let cwd = data::current_dir();
+        // Restore persisted layout/state from the last session.
+        let st = data::load_ui_state();
+        if !st.dark {
+            cx.set_global(Theme::light());
+        }
+        let cwd = if !st.cwd.is_empty() && std::path::Path::new(&st.cwd).is_dir() {
+            PathBuf::from(&st.cwd)
+        } else {
+            data::current_dir()
+        };
         let cwd_label = cwd.display().to_string();
         let files = data::list_dir(&cwd);
         let conns = data::load_connections();
@@ -241,14 +250,13 @@ impl Shell {
         let panels = PanelViews::new(cx);
         Self::start_monitor(cx);
         Self {
-            theme: Theme::dark(),
+            theme: if st.dark { Theme::dark() } else { Theme::light() },
             tabs: vec![Tab { title: tab_title, kind: TabKind::Local, terminal }],
             active_tab: 0,
-            // default to Git so the right panel matches the reference screenshot
-            active_tool: 1,
-            show_servers: false,
+            active_tool: st.active_tool.min(TOOLS.len() - 1),
+            show_servers: st.show_servers,
             selected_conn: 0,
-            right_collapsed: false,
+            right_collapsed: st.right_collapsed,
             cwd,
             cwd_label,
             files,
@@ -263,8 +271,8 @@ impl Shell {
             panels,
             open_menu: None,
             overlay: Overlay::None,
-            sidebar_w: None,
-            right_w: None,
+            sidebar_w: st.sidebar_w.map(px),
+            right_w: st.right_w.map(px),
             dragging: None,
             palette_query: String::new(),
             palette_focus: cx.focus_handle(),
@@ -501,6 +509,19 @@ impl Shell {
             )
     }
 
+    /// Persist the current layout/state for the next launch.
+    fn persist(&self, cx: &mut Context<Self>) {
+        data::save_ui_state(&data::UiState {
+            active_tool: self.active_tool,
+            right_collapsed: self.right_collapsed,
+            show_servers: self.show_servers,
+            dark: cx.global::<Theme>().dark,
+            sidebar_w: self.sidebar_w.map(f32::from),
+            right_w: self.right_w.map(f32::from),
+            cwd: self.cwd.display().to_string(),
+        });
+    }
+
     /// Dispatch a shell-wide command from a menu / palette / title-bar button.
     fn run(&mut self, cmd: Cmd, window: &mut Window, cx: &mut Context<Self>) {
         self.open_menu = None;
@@ -515,6 +536,7 @@ impl Shell {
                 let dark = cx.global::<Theme>().dark;
                 cx.set_global(if dark { Theme::light() } else { Theme::dark() });
                 window.refresh();
+                self.persist(cx);
                 return;
             }
             Cmd::ToggleRightPanel => self.right_collapsed = !self.right_collapsed,
@@ -565,6 +587,7 @@ impl Shell {
                 }
             }
         }
+        self.persist(cx);
         cx.notify();
     }
 
@@ -845,6 +868,7 @@ impl Shell {
                 MouseButton::Left,
                 cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
                     this.show_servers = servers;
+                    this.persist(cx);
                     cx.notify();
                 }),
             )
@@ -883,6 +907,7 @@ impl Shell {
         self.files = data::list_dir(&path);
         self.git = data::git_status(&path);
         self.cwd = path;
+        self.persist(cx);
         cx.notify();
     }
 
@@ -2297,6 +2322,7 @@ impl Render for Shell {
                     MouseButton::Left,
                     cx.listener(|this, _: &MouseUpEvent, _w, cx| {
                         this.dragging = None;
+                        this.persist(cx);
                         cx.notify();
                     }),
                 )

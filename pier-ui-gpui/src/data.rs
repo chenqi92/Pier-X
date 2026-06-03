@@ -253,6 +253,85 @@ pub fn git_pull(path: &Path) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Persisted shell layout/state, restored on launch. Terminals aren't restored
+/// (PTYs are live), but tool/panel/theme/widths/cwd are.
+pub struct UiState {
+    pub active_tool: usize,
+    pub right_collapsed: bool,
+    pub show_servers: bool,
+    pub dark: bool,
+    pub sidebar_w: Option<f32>,
+    pub right_w: Option<f32>,
+    pub cwd: String,
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            active_tool: 1, // Git
+            right_collapsed: false,
+            show_servers: false,
+            dark: true,
+            sidebar_w: None,
+            right_w: None,
+            cwd: String::new(),
+        }
+    }
+}
+
+fn ui_state_path() -> Option<std::path::PathBuf> {
+    pier_core::paths::config_dir().map(|d| d.join("pier-x-gpui-ui.conf"))
+}
+
+/// Load persisted UI state, or defaults if absent/unreadable.
+pub fn load_ui_state() -> UiState {
+    let mut s = UiState::default();
+    let Some(p) = ui_state_path() else { return s };
+    let Ok(text) = std::fs::read_to_string(&p) else {
+        return s;
+    };
+    for line in text.lines() {
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        match k {
+            "active_tool" => {
+                if let Ok(n) = v.parse() {
+                    s.active_tool = n;
+                }
+            }
+            "right_collapsed" => s.right_collapsed = v == "true",
+            "show_servers" => s.show_servers = v == "true",
+            "dark" => s.dark = v == "true",
+            "sidebar_w" => s.sidebar_w = v.parse().ok(),
+            "right_w" => s.right_w = v.parse().ok(),
+            "cwd" => s.cwd = v.to_string(),
+            _ => {}
+        }
+    }
+    s
+}
+
+/// Persist UI state (best-effort; ignores IO errors).
+pub fn save_ui_state(s: &UiState) {
+    let Some(p) = ui_state_path() else { return };
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let opt = |o: Option<f32>| o.map(|v| v.to_string()).unwrap_or_default();
+    let body = format!(
+        "active_tool={}\nright_collapsed={}\nshow_servers={}\ndark={}\nsidebar_w={}\nright_w={}\ncwd={}\n",
+        s.active_tool,
+        s.right_collapsed,
+        s.show_servers,
+        s.dark,
+        opt(s.sidebar_w),
+        opt(s.right_w),
+        s.cwd,
+    );
+    let _ = std::fs::write(&p, body);
+}
+
 fn rel_age(t: SystemTime) -> String {
     let secs = SystemTime::now()
         .duration_since(t)

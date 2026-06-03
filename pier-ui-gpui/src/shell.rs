@@ -143,6 +143,12 @@ pub struct Shell {
     /// Git commit message buffer + its focus handle.
     commit_msg: String,
     commit_focus: FocusHandle,
+    /// New Connection form: [name, host, port, user] + focused field + focus.
+    conn_form: [String; 4],
+    conn_field: usize,
+    conn_focus: FocusHandle,
+    /// Error from the last add-connection attempt.
+    conn_error: Option<String>,
 }
 
 /// A per-file staging action in the Git panel.
@@ -166,7 +172,11 @@ enum Overlay {
     None,
     Settings,
     Palette,
+    NewConn,
 }
+
+/// Labels for the New Connection form fields (index = `conn_field`).
+const CONN_FIELDS: [&str; 4] = ["Name", "Host", "Port", "User"];
 
 /// A shell-wide command, dispatched from menus, the command palette, and
 /// title-bar buttons through `Shell::run`.
@@ -178,6 +188,7 @@ enum Cmd {
     SelectTool(usize),
     OpenSettings,
     OpenPalette,
+    OpenNewConn,
     CloseOverlay,
 }
 
@@ -248,6 +259,90 @@ impl Shell {
             palette_focus: cx.focus_handle(),
             commit_msg: String::new(),
             commit_focus: cx.focus_handle(),
+            conn_form: Default::default(),
+            conn_field: 0,
+            conn_focus: cx.focus_handle(),
+            conn_error: None,
+        }
+    }
+
+    fn on_conn_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        match ks.key.as_str() {
+            "tab" => {
+                let n = CONN_FIELDS.len();
+                self.conn_field = if ks.modifiers.shift {
+                    (self.conn_field + n - 1) % n
+                } else {
+                    (self.conn_field + 1) % n
+                };
+                cx.notify();
+                return;
+            }
+            "enter" => {
+                self.submit_conn(window, cx);
+                return;
+            }
+            "escape" => {
+                self.run(Cmd::CloseOverlay, window, cx);
+                return;
+            }
+            "backspace" => {
+                if self.conn_form[self.conn_field].pop().is_some() {
+                    cx.notify();
+                }
+                return;
+            }
+            _ => {}
+        }
+        let m = &ks.modifiers;
+        if m.control || m.alt || m.platform {
+            return;
+        }
+        if let Some(kc) = &ks.key_char {
+            if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) {
+                self.conn_form[self.conn_field].push_str(kc);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Validate the New Connection form, persist it, and reload the list.
+    fn submit_conn(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.conn_form[0].trim();
+        let host = self.conn_form[1].trim();
+        let port_s = self.conn_form[2].trim();
+        let user = self.conn_form[3].trim();
+        if host.is_empty() || user.is_empty() {
+            self.conn_error = Some("Host and User are required".to_string());
+            cx.notify();
+            return;
+        }
+        let port: u16 = if port_s.is_empty() {
+            22
+        } else {
+            match port_s.parse() {
+                Ok(p) => p,
+                Err(_) => {
+                    self.conn_error = Some("Port must be a number".to_string());
+                    cx.notify();
+                    return;
+                }
+            }
+        };
+        let label = if name.is_empty() { host } else { name };
+        let mut cfg = pier_core::ssh::SshConfig::new(label, host, user);
+        cfg.port = port;
+        match data::add_connection(cfg) {
+            Ok(()) => {
+                self.conns = data::load_connections();
+                self.conn_error = None;
+                self.run(Cmd::CloseOverlay, window, cx);
+            }
+            Err(e) => {
+                self.conn_error = Some(e);
+                cx.notify();
+            }
         }
     }
 
@@ -315,6 +410,7 @@ impl Shell {
     fn palette_entries() -> Vec<(&'static str, &'static str, Cmd)> {
         let mut v = vec![
             ("plus", "New Terminal", Cmd::NewTerminal),
+            ("server", "New Connection", Cmd::OpenNewConn),
             ("settings", "Settings", Cmd::OpenSettings),
         ];
         for (i, (_, glyph, name, _)) in TOOLS.iter().enumerate() {
@@ -422,6 +518,13 @@ impl Shell {
                 self.overlay = Overlay::Palette;
                 self.palette_query.clear();
                 window.focus(&self.palette_focus, cx);
+            }
+            Cmd::OpenNewConn => {
+                self.overlay = Overlay::NewConn;
+                self.conn_form = Default::default();
+                self.conn_field = 0;
+                self.conn_error = None;
+                window.focus(&self.conn_focus, cx);
             }
             Cmd::CloseOverlay => self.overlay = Overlay::None,
         }
@@ -876,8 +979,27 @@ impl Shell {
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let body = if self.show_servers {
-            let mut col =
-                v_flex().child(self.section_label(format!("SERVERS · {}", self.conns.len())));
+            let mut col = v_flex()
+                .child(self.section_label(format!("SERVERS · {}", self.conns.len())))
+                .child(
+                    h_flex()
+                        .id("add-conn")
+                        .items_center()
+                        .gap(t.sp2)
+                        .h(px(26.0))
+                        .px(t.sp3)
+                        .text_color(t.muted)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(t.hover))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                this.run(Cmd::OpenNewConn, window, cx)
+                            }),
+                        )
+                        .child(icon("plus", px(14.0), t.muted))
+                        .child(div().flex_1().child("Add connection")),
+                );
             if self.conns.is_empty() {
                 col = col.child(
                     div()
@@ -1843,12 +1965,115 @@ impl Shell {
             .child(div().p(t.sp2).child(list))
     }
 
+    fn conn_field_row(&self, cx: &mut Context<Self>, idx: usize) -> impl IntoElement {
+        let t = &self.theme;
+        let label = CONN_FIELDS[idx];
+        let val = self.conn_form[idx].clone();
+        let active = self.conn_field == idx;
+        let empty = val.is_empty();
+        let ph = match idx {
+            0 => "optional label",
+            1 => "host or IP",
+            2 => "22",
+            _ => "user",
+        };
+        v_flex()
+            .gap(px(3.0))
+            .child(div().text_size(t.fs_sm).text_color(t.muted).child(label))
+            .child(
+                div()
+                    .id(SharedString::from(format!("cf-{idx}")))
+                    .h(px(30.0))
+                    .px(t.sp2)
+                    .flex()
+                    .items_center()
+                    .rounded(t.radius_sm)
+                    .bg(t.panel_2)
+                    .border_1()
+                    .border_color(if active { t.accent } else { t.line_2 })
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            this.conn_field = idx;
+                            window.focus(&this.conn_focus, cx);
+                            cx.notify();
+                        }),
+                    )
+                    .when(empty, |d| d.text_color(t.dim).child(ph))
+                    .when(!empty, |d| d.text_color(t.ink).child(val)),
+            )
+    }
+
+    fn conn_btn(&self, cx: &mut Context<Self>, label: &'static str, primary: bool, cmd: Option<Cmd>) -> impl IntoElement {
+        let t = &self.theme;
+        div()
+            .id(SharedString::from(format!("connbtn-{label}")))
+            .px(t.sp3)
+            .py(px(5.0))
+            .rounded(t.radius_sm)
+            .text_size(t.fs_ui)
+            .cursor_pointer()
+            .when(primary, |d| d.bg(t.accent).text_color(t.accent_ink))
+            .when(!primary, |d| d.bg(t.panel_2).text_color(t.ink_2))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, window, cx| match cmd {
+                    Some(c) => this.run(c, window, cx),
+                    None => this.submit_conn(window, cx),
+                }),
+            )
+            .child(label)
+    }
+
+    fn conn_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        v_flex()
+            .track_focus(&self.conn_focus)
+            .key_context("NewConn")
+            .on_key_down(cx.listener(Self::on_conn_key))
+            .w(px(420.0))
+            .p(t.sp4)
+            .gap(t.sp3)
+            .bg(t.panel)
+            .border_1()
+            .border_color(t.line_2)
+            .rounded(t.radius_lg)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(t.sp2)
+                    .child(icon("server", px(16.0), t.accent))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(t.ink)
+                            .child("New Connection"),
+                    ),
+            )
+            .child(self.conn_field_row(cx, 0))
+            .child(self.conn_field_row(cx, 1))
+            .child(self.conn_field_row(cx, 2))
+            .child(self.conn_field_row(cx, 3))
+            .when_some(self.conn_error.clone(), |d, e| {
+                d.child(div().text_size(t.fs_sm).text_color(t.neg).child(e))
+            })
+            .child(
+                h_flex()
+                    .gap(t.sp2)
+                    .justify_end()
+                    .child(self.conn_btn(cx, "Cancel", false, Some(Cmd::CloseOverlay)))
+                    .child(self.conn_btn(cx, "Add", true, None)),
+            )
+    }
+
     /// Full-window scrim + centered modal card for the active overlay.
     fn overlay_layer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let card = match self.overlay {
             Overlay::Settings => self.settings_card(cx).into_any_element(),
             Overlay::Palette => self.palette_card(cx).into_any_element(),
+            Overlay::NewConn => self.conn_card(cx).into_any_element(),
             Overlay::None => div().into_any_element(),
         };
         div()

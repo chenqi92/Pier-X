@@ -87,6 +87,13 @@ pub fn connections_raw() -> Vec<SshConfig> {
         .unwrap_or_default()
 }
 
+/// Append a connection to the default store and persist it.
+pub fn add_connection(cfg: SshConfig) -> Result<(), String> {
+    let mut store = ConnectionStore::load_default().unwrap_or_default();
+    store.add(cfg);
+    store.save_default().map_err(|e| e.to_string())
+}
+
 /// Open a blocking SSH session to `cfg`. Trust-on-first-use host-key policy
 /// (logs the fingerprint) — fine for the spike. Run OFF the render path: this
 /// blocks on the network. Returns a display error string on failure.

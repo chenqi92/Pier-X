@@ -107,6 +107,39 @@ impl Render for MarkdownPanel {
 // ── Loading ──────────────────────────────────────────────────────
 
 /// Find the first preview-worthy markdown file under `dir` and parse it.
+impl MarkdownPanel {
+    /// Load and render a specific markdown file (e.g. clicked in the sidebar).
+    pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.state = PanelState::Loading;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let state = cx
+                .background_executor()
+                .spawn(async move { load_path(path) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.state = state;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+
+fn load_path(path: PathBuf) -> PanelState {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    match pier_core::markdown::load_file(&path) {
+        Ok(src) => PanelState::Loaded {
+            file: name,
+            blocks: parse_blocks(&src),
+        },
+        Err(e) => PanelState::Error(format!("{name}: {e}")),
+    }
+}
+
 fn load_doc(dir: PathBuf) -> PanelState {
     const CANDIDATES: &[&str] = &[
         "CHANGELOG.md",

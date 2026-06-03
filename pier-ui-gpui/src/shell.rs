@@ -541,6 +541,20 @@ impl Shell {
             .child(text.into())
     }
 
+    /// Open a clicked file. Markdown files render in the Markdown panel; other
+    /// types are ignored for now.
+    fn open_file(&mut self, name: String, cx: &mut Context<Self>) {
+        let lower = name.to_lowercase();
+        if lower.ends_with(".md") || lower.ends_with(".markdown") {
+            if let Some(i) = TOOLS.iter().position(|(s, _, _, _)| matches!(s, Svc::Markdown)) {
+                self.active_tool = i;
+                self.right_collapsed = false;
+            }
+            self.panels.open_markdown(self.cwd.join(&name), cx);
+            cx.notify();
+        }
+    }
+
     /// Point the Files tree at a new directory and reload its contents + git.
     fn navigate_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.cwd_label = path.display().to_string();
@@ -563,13 +577,24 @@ impl Shell {
             .h(px(26.0))
             .px(t.sp3)
             .text_color(t.ink_2)
+            .cursor_pointer()
             .hover(|s| s.bg(t.hover))
             .when(is_dir, |d| {
-                d.cursor_pointer().on_mouse_down(
+                let name = name.clone();
+                d.on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
                         let target = this.cwd.join(&name);
                         this.navigate_to(target, cx);
+                    }),
+                )
+            })
+            .when(!is_dir, |d| {
+                let name = name.clone();
+                d.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                        this.open_file(name.clone(), cx)
                     }),
                 )
             })

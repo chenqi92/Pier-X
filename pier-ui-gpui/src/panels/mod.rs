@@ -19,6 +19,8 @@ pub mod sftp;
 pub mod software;
 pub mod webserver;
 
+use std::path::PathBuf;
+
 use gpui::{AnyElement, AppContext, Context, Entity, IntoElement};
 
 use crate::shell::{Shell, Svc};
@@ -49,6 +51,11 @@ impl PanelViews {
             webserver: cx.new(webserver::WebserverPanel::new),
             software: cx.new(software::SoftwarePanel::new),
         }
+    }
+
+    /// Load a markdown file into the Markdown panel (sidebar file click).
+    pub fn open_markdown(&self, path: PathBuf, cx: &mut Context<Shell>) {
+        self.markdown.update(cx, |p, cx| p.open(path, cx));
     }
 
     /// The panel element for `svc`, or `None` for Git/Monitor (handled by the

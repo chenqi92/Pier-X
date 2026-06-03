@@ -15,10 +15,13 @@
 // Connection / query failures surface as a single `t.neg` line under the header.
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, SharedString, Window};
+use gpui::{
+    div, px, AnyElement, Context, FocusHandle, FontWeight, KeyDownEvent, MouseButton,
+    MouseDownEvent, SharedString, Window,
+};
 use gpui_component::{h_flex, v_flex};
 
-use pier_core::services::sqlite::SqliteClient;
+use pier_core::services::sqlite::{SqliteClient, SqliteQueryResult};
 use pier_core::ssh::SshConfig;
 
 use crate::data;
@@ -110,13 +113,18 @@ pub struct DbPanel {
     selected_conn: Option<usize>,
     databases: Vec<String>,
 
+    // SQLite query console.
+    query: String,
+    query_focus: FocusHandle,
+    result: Option<SqliteQueryResult>,
+
     // Shared.
     busy: bool,
     error: Option<String>,
 }
 
 impl DbPanel {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             theme: Theme::dark(),
             engine: Engine::Sqlite,
@@ -128,9 +136,89 @@ impl DbPanel {
             conns: data::connections_raw(),
             selected_conn: None,
             databases: Vec::new(),
+            query: String::new(),
+            query_focus: cx.focus_handle(),
+            result: None,
             busy: false,
             error: None,
         }
+    }
+
+    fn on_query_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        match ks.key.as_str() {
+            "enter" => {
+                self.run_query(cx);
+                return;
+            }
+            "backspace" => {
+                if self.query.pop().is_some() {
+                    cx.notify();
+                }
+                return;
+            }
+            _ => {}
+        }
+        let m = &ks.modifiers;
+        if m.control || m.alt || m.platform {
+            return;
+        }
+        if let Some(kc) = &ks.key_char {
+            if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) {
+                self.query.push_str(kc);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Run the SQLite query box against the open file (read-only intent).
+    fn run_query(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.open_db.clone() else {
+            return;
+        };
+        let sql = self.query.trim().to_string();
+        if sql.is_empty() {
+            return;
+        }
+        // Honour the read-only default: only allow read statements.
+        let head = sql
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        if !matches!(head.as_str(), "SELECT" | "PRAGMA" | "EXPLAIN" | "WITH") {
+            self.error = Some("Read-only: only SELECT / WITH / PRAGMA / EXPLAIN".to_string());
+            cx.notify();
+            return;
+        }
+        self.busy = true;
+        self.error = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    match SqliteClient::open(&path) {
+                        Ok(c) => Ok(c.execute(&sql)),
+                        Err(e) => Err(e.to_string()),
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = false;
+                match res {
+                    Ok(r) => {
+                        if let Some(err) = &r.error {
+                            this.error = Some(err.clone());
+                        }
+                        this.result = Some(r);
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     // ── Actions (all blocking work happens on the background executor) ──
@@ -400,6 +488,13 @@ impl DbPanel {
             }
         }
 
+        if self.open_db.is_some() {
+            col = col
+                .child(ui::section_label(t, "QUERY"))
+                .child(self.query_console(cx))
+                .child(self.result_table());
+        }
+
         col.into_any_element()
     }
 
@@ -482,6 +577,114 @@ impl DbPanel {
         }
 
         col.into_any_element()
+    }
+
+    /// SQLite query input + Run button.
+    fn query_console(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let empty = self.query.is_empty();
+        h_flex()
+            .gap(t.sp2)
+            .px(t.sp3)
+            .pb(t.sp2)
+            .child(
+                div()
+                    .track_focus(&self.query_focus)
+                    .key_context("SqlQuery")
+                    .on_key_down(cx.listener(Self::on_query_key))
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h(px(30.0))
+                    .px(t.sp2)
+                    .flex()
+                    .items_center()
+                    .rounded(t.radius_sm)
+                    .bg(t.panel_2)
+                    .border_1()
+                    .border_color(t.line_2)
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .when(empty, |d| d.text_color(t.dim).child("SELECT … (read-only)"))
+                    .when(!empty, |d| d.text_color(t.ink).child(self.query.clone())),
+            )
+            .child(
+                div()
+                    .id("sql-run")
+                    .px(t.sp3)
+                    .py(px(5.0))
+                    .rounded(t.radius_sm)
+                    .bg(t.accent)
+                    .text_color(t.accent_ink)
+                    .text_size(t.fs_ui)
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _w, cx| this.run_query(cx)),
+                    )
+                    .child("Run"),
+            )
+    }
+
+    /// Render the last query result as a scrollable table (capped at 200 rows).
+    fn result_table(&self) -> AnyElement {
+        let t = &self.theme;
+        let Some(r) = &self.result else {
+            return div().into_any_element();
+        };
+        if r.columns.is_empty() {
+            return hint(
+                t,
+                if r.error.is_some() {
+                    "Query failed"
+                } else {
+                    "OK (no rows returned)"
+                },
+            )
+            .into_any_element();
+        }
+        let cw = px(150.0);
+        let cell = |text: String, header: bool| {
+            div()
+                .w(cw)
+                .flex_none()
+                .px(t.sp2)
+                .py(px(3.0))
+                .overflow_hidden()
+                .font_family(t.mono.clone())
+                .text_size(t.fs_sm)
+                .text_color(if header { t.ink } else { t.ink_2 })
+                .when(header, |d| d.font_weight(FontWeight::SEMIBOLD))
+                .child(text)
+        };
+        let mut table = v_flex().child(
+            h_flex()
+                .border_b_1()
+                .border_color(t.line)
+                .children(r.columns.iter().map(|c| cell(c.clone(), true))),
+        );
+        for row in r.rows.iter().take(200) {
+            table = table.child(
+                h_flex()
+                    .border_b_1()
+                    .border_color(t.line)
+                    .children(row.iter().map(|v| cell(v.clone(), false))),
+            );
+        }
+        let total = r.rows.len();
+        v_flex()
+            .child(ui::section_label(
+                t,
+                format!("RESULT · {} rows · {} ms", total, r.elapsed_ms),
+            ))
+            .child(
+                div()
+                    .id("sql-result")
+                    .overflow_x_scroll()
+                    .px(t.sp3)
+                    .child(table),
+            )
+            .when(total > 200, |d| d.child(hint(t, "Showing first 200 rows")))
+            .into_any_element()
     }
 }
 

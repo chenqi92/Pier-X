@@ -19,7 +19,7 @@ use gpui::prelude::*;
 use gpui::{
     deferred, div, px, svg, AnyElement, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla,
     InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, SharedString, Svg, Window,
+    Pixels, Point, SharedString, Svg, Window,
 };
 use gpui_component::{h_flex, v_flex, TitleBar};
 
@@ -143,6 +143,8 @@ pub struct Shell {
     /// Git commit message buffer + its focus handle.
     commit_msg: String,
     commit_focus: FocusHandle,
+    /// Open tab context menu: (window position, tab index).
+    tab_menu: Option<(Point<Pixels>, usize)>,
     /// New Connection form: [name, host, port, user] + focused field + focus.
     conn_form: [String; 4],
     conn_field: usize,
@@ -191,6 +193,8 @@ enum Cmd {
     OpenNewConn,
     CloseOverlay,
     CloseTab,
+    CloseTabAt(usize),
+    CloseOthers(usize),
 }
 
 // Global actions bound to keyboard shortcuts in main.rs. Each maps to a Cmd.
@@ -266,6 +270,7 @@ impl Shell {
             palette_focus: cx.focus_handle(),
             commit_msg: String::new(),
             commit_focus: cx.focus_handle(),
+            tab_menu: None,
             conn_form: Default::default(),
             conn_field: 0,
             conn_focus: cx.focus_handle(),
@@ -499,6 +504,7 @@ impl Shell {
     /// Dispatch a shell-wide command from a menu / palette / title-bar button.
     fn run(&mut self, cmd: Cmd, window: &mut Window, cx: &mut Context<Self>) {
         self.open_menu = None;
+        self.tab_menu = None;
         match cmd {
             Cmd::NewTerminal => {
                 self.overlay = Overlay::None;
@@ -540,6 +546,22 @@ impl Shell {
                     if self.active_tab >= self.tabs.len() {
                         self.active_tab = self.tabs.len() - 1;
                     }
+                }
+            }
+            Cmd::CloseTabAt(i) => {
+                if self.tabs.len() > 1 && i < self.tabs.len() {
+                    self.tabs.remove(i);
+                    if self.active_tab >= self.tabs.len() {
+                        self.active_tab = self.tabs.len() - 1;
+                    }
+                }
+            }
+            Cmd::CloseOthers(i) => {
+                if i < self.tabs.len() {
+                    let keep = self.tabs.remove(i);
+                    self.tabs.clear();
+                    self.tabs.push(keep);
+                    self.active_tab = 0;
                 }
             }
         }
@@ -1082,6 +1104,13 @@ impl Shell {
             .border_color(t.line)
             .when(active, |d| d.bg(t.bg).border_b_2().border_color(t.accent))
             .when(!active, |d| d.hover(|s| s.bg(t.hover)))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, ev: &MouseDownEvent, _w, cx| {
+                    this.tab_menu = Some((ev.position, idx));
+                    cx.notify();
+                }),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _: &MouseDownEvent, window, cx| {
@@ -2087,6 +2116,51 @@ impl Shell {
             )
     }
 
+    /// Right-click menu for a tab, anchored at the cursor (paints on top).
+    fn tab_context_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = &self.theme;
+        let Some((pos, idx)) = self.tab_menu else {
+            return div().into_any_element();
+        };
+        let item = |key: &'static str, label: &'static str, cmd: Cmd, cx: &mut Context<Self>| {
+            div()
+                .id(SharedString::from(format!("tabctx-{key}")))
+                .px(t.sp3)
+                .py(px(5.0))
+                .text_size(t.fs_ui)
+                .text_color(t.ink_2)
+                .cursor_pointer()
+                .hover(|s| s.bg(t.hover))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                        this.run(cmd, window, cx)
+                    }),
+                )
+                .child(label)
+        };
+        deferred(
+            v_flex()
+                .id("tab-ctx")
+                .absolute()
+                .left(pos.x)
+                .top(pos.y)
+                .min_w(px(160.0))
+                .py(t.sp1)
+                .bg(t.elev)
+                .border_1()
+                .border_color(t.line_2)
+                .rounded(t.radius_md)
+                .on_mouse_down_out(cx.listener(|this, _, _w, cx| {
+                    this.tab_menu = None;
+                    cx.notify();
+                }))
+                .child(item("close", "Close", Cmd::CloseTabAt(idx), cx))
+                .child(item("others", "Close Others", Cmd::CloseOthers(idx), cx)),
+        )
+        .into_any_element()
+    }
+
     /// Full-window scrim + centered modal card for the active overlay.
     fn overlay_layer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
@@ -2228,6 +2302,9 @@ impl Render for Shell {
                 )
             })
             .child(body)
+            .when(self.tab_menu.is_some(), |d| {
+                d.child(self.tab_context_menu(cx))
+            })
             .when(show_overlay, |d| d.child(self.overlay_layer(cx)))
     }
 }

@@ -24,10 +24,10 @@ use gpui::{
 };
 use gpui_component::{h_flex, v_flex, TitleBar};
 
-use pier_core::services::git::FileStatus;
 use pier_core::ssh::{AuthMethod, SshConfig};
 
-use crate::data::{self, ConnRow, FileEntry, GitData, MonStat};
+use crate::data::{self, ConnRow, DetectedService, FileEntry, MonStat, ServiceStatus};
+use crate::git_panel::GitPanelView;
 use crate::panels::PanelViews;
 use crate::settings::SettingsView;
 use crate::terminal::TerminalView;
@@ -92,15 +92,6 @@ enum TabKind {
     Markdown,
 }
 
-/// Sub-views inside the Git panel.
-#[derive(Clone, Copy, PartialEq)]
-enum GitTab {
-    Changes,
-    History,
-    Branches,
-    Stash,
-}
-
 struct Tab {
     title: String,
     kind: TabKind,
@@ -152,16 +143,9 @@ pub struct Shell {
     cwd_label: String,
     files: Vec<FileEntry>,
     conns: Vec<ConnRow>,
-    git: Option<GitData>,
-    /// Per-file `+adds -dels` line counts for the current cwd, keyed
-    /// by repo-relative path (refreshed alongside `git`).
-    git_numstat: HashMap<String, (u32, u32)>,
-    git_tab: GitTab,
-    git_history: Vec<data::CommitInfo>,
-    git_branch_list: Vec<String>,
-    git_stashes: Vec<data::StashEntry>,
-    /// Transient Push/Pull result line.
-    git_msg: Option<String>,
+    /// The Git panel's independent view (hosted by `right_panel`; owns all git
+    /// state and is fed the browse cwd via `set_cwd`).
+    git_panel_view: Entity<GitPanelView>,
     mon: Option<MonStat>,
     panels: PanelViews,
     /// The Settings overlay's independent view (hosted in overlay_layer).
@@ -178,9 +162,6 @@ pub struct Shell {
     /// Command-palette filter text + its focus handle for keyboard input.
     palette_query: String,
     palette_focus: FocusHandle,
-    /// Git commit message buffer + its focus handle.
-    commit_msg: String,
-    commit_focus: FocusHandle,
     /// Open tab context menu: (window position, tab index).
     tab_menu: Option<(Point<Pixels>, usize)>,
     /// Files sidebar filter text + its focus handle.
@@ -214,35 +195,16 @@ pub struct Shell {
     conn_favorites: HashSet<String>,
     /// Store index of the connection row awaiting delete confirmation.
     conn_confirm_delete: Option<usize>,
-}
-
-/// A per-file staging action in the Git panel.
-#[derive(Clone, Copy)]
-enum GitFileOp {
-    Stage,
-    Unstage,
-    Discard,
-}
-
-/// A remote/branch git action dispatched off the render path.
-#[derive(Clone, Copy)]
-enum GitRemoteOp {
-    Push,
-    Pull,
-    Fetch,
-    Rebase,
-}
-
-impl GitRemoteOp {
-    /// Transient "in progress" line shown while the op runs.
-    fn pending(self) -> &'static str {
-        match self {
-            GitRemoteOp::Push => "Pushing…",
-            GitRemoteOp::Pull => "Pulling…",
-            GitRemoteOp::Fetch => "Fetching…",
-            GitRemoteOp::Rebase => "Rebasing…",
-        }
-    }
+    /// True while a background connection-health probe is in flight, so the
+    /// periodic driver never stacks overlapping probes.
+    health_probing: bool,
+    /// Services detected per connected SSH host, keyed by its `user@host`
+    /// identity (the SSH tab title). Keyed by connection identity rather than
+    /// tab index so the cache survives tab reorder/close without going stale
+    /// and same-host tabs share a result; drives the Servers sidebar chips.
+    detected_services: HashMap<String, Vec<DetectedService>>,
+    /// `user@host` keys whose service detection is currently in flight.
+    detecting_services: HashSet<String>,
 }
 
 /// A draggable layout divider.
@@ -351,8 +313,7 @@ impl Shell {
         let cwd_label = cwd.display().to_string();
         let files = data::list_dir(&cwd);
         let conns = data::load_connections();
-        let git = data::git_status(&cwd);
-        let git_numstat = data::git_numstat(&cwd);
+        let git_panel_view = cx.new(|cx| GitPanelView::new(cwd.clone(), cx));
         let tab_title = cwd
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -361,6 +322,7 @@ impl Shell {
         let panels = PanelViews::new(cx);
         let settings_view = cx.new(SettingsView::new);
         Self::start_monitor(cx);
+        Self::start_sidebar_tasks(cx);
         Self {
             theme: if st.dark { Theme::dark() } else { Theme::light() },
             tabs: vec![Tab {
@@ -378,13 +340,7 @@ impl Shell {
             cwd_label,
             files,
             conns,
-            git,
-            git_numstat,
-            git_tab: GitTab::Changes,
-            git_history: Vec::new(),
-            git_branch_list: Vec::new(),
-            git_stashes: Vec::new(),
-            git_msg: None,
+            git_panel_view,
             mon: None,
             panels,
             settings_view,
@@ -395,8 +351,6 @@ impl Shell {
             dragging: None,
             palette_query: String::new(),
             palette_focus: cx.focus_handle(),
-            commit_msg: String::new(),
-            commit_focus: cx.focus_handle(),
             tab_menu: None,
             file_filter: String::new(),
             file_focus: cx.focus_handle(),
@@ -412,6 +366,9 @@ impl Shell {
             conn_search_focus: cx.focus_handle(),
             conn_favorites: data::load_favorites(),
             conn_confirm_delete: None,
+            health_probing: false,
+            detected_services: HashMap::new(),
+            detecting_services: HashSet::new(),
         }
     }
 
@@ -560,6 +517,7 @@ impl Shell {
         match result {
             Ok(()) => {
                 self.conns = data::load_connections();
+                self.probe_connections_async(cx);
                 self.conn_error = None;
                 self.conn_edit = None;
                 self.conn_orig_auth = None;
@@ -669,6 +627,8 @@ impl Shell {
                     if self.selected_conn >= self.conns.len() {
                         self.selected_conn = self.conns.len().saturating_sub(1);
                     }
+                    // The reload reset every dot to unprobed; refresh promptly.
+                    self.probe_connections_async(cx);
                 }
                 self.conn_confirm_delete = None;
             }
@@ -701,106 +661,6 @@ impl Shell {
         if let Some(kc) = &ks.key_char {
             if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) {
                 self.conn_search.push_str(kc);
-                cx.notify();
-            }
-        }
-    }
-
-    /// Reload working-tree status + per-file line counts for the cwd off the
-    /// render path — each call spawns up to three `git` subprocesses
-    /// (`status` + two `diff --numstat`) — then write the result back on the
-    /// main thread. A reload whose captured `cwd` no longer matches the
-    /// shell's is dropped, so switching folders quickly can't clobber the new
-    /// repo's status with a slower in-flight reload of the old one.
-    fn reload_git_async(&mut self, cx: &mut Context<Self>) {
-        let cwd = self.cwd.clone();
-        cx.spawn(async move |this, cx| {
-            let probe = cwd.clone();
-            let (git, numstat) = cx
-                .background_executor()
-                .spawn(async move { (data::git_status(&probe), data::git_numstat(&probe)) })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if this.cwd != cwd {
-                    return;
-                }
-                this.git = git;
-                this.git_numstat = numstat;
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    /// Run a per-file staging action, then refresh status.
-    fn git_file_op(&mut self, op: GitFileOp, file: String, cx: &mut Context<Self>) {
-        let res = match op {
-            GitFileOp::Stage => data::git_stage(&self.cwd, &file),
-            GitFileOp::Unstage => data::git_unstage(&self.cwd, &file),
-            GitFileOp::Discard => data::git_discard(&self.cwd, &file),
-        };
-        self.git_msg = res.err();
-        self.reload_git_async(cx);
-        cx.notify();
-    }
-
-    /// Commit the staged changes with the current message off the render path
-    /// (a commit can run pre-commit hooks), then refresh status.
-    fn do_commit(&mut self, cx: &mut Context<Self>) {
-        let msg = self.commit_msg.trim().to_string();
-        if msg.is_empty() {
-            self.git_msg = Some("Enter a commit message".to_string());
-            cx.notify();
-            return;
-        }
-        self.git_msg = Some("Committing…".to_string());
-        cx.notify();
-        let cwd = self.cwd.clone();
-        cx.spawn(async move |this, cx| {
-            let res = cx
-                .background_executor()
-                .spawn(async move { data::git_commit(&cwd, &msg) })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                match res {
-                    Ok(hash) => {
-                        this.commit_msg.clear();
-                        let short: String = hash.chars().take(7).collect();
-                        this.git_msg = Some(format!("Committed {short}"));
-                    }
-                    Err(e) => this.git_msg = Some(e),
-                }
-                this.reload_git_async(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn on_commit_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        let ks = &ev.keystroke;
-        let m = &ks.modifiers;
-        match ks.key.as_str() {
-            // Enter commits. The message box is single-line, so there is no
-            // newline insertion — any Enter, modified or not, submits.
-            "enter" => {
-                self.do_commit(cx);
-                return;
-            }
-            "backspace" => {
-                if self.commit_msg.pop().is_some() {
-                    cx.notify();
-                }
-                return;
-            }
-            _ => {}
-        }
-        if m.control || m.alt || m.platform {
-            return;
-        }
-        if let Some(kc) = &ks.key_char {
-            if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) {
-                self.commit_msg.push_str(kc);
                 cx.notify();
             }
         }
@@ -1049,83 +909,6 @@ impl Shell {
         ]
     }
 
-    /// Switch the Git sub-tab, loading its data on demand (local git reads are
-    /// fast; this runs in a click handler, never in render).
-    fn set_git_tab(&mut self, tab: GitTab, cx: &mut Context<Self>) {
-        self.git_tab = tab;
-        match tab {
-            GitTab::History => self.git_history = data::git_log(&self.cwd, 50),
-            GitTab::Branches => self.git_branch_list = data::git_branches(&self.cwd),
-            GitTab::Stash => self.git_stashes = data::git_stash(&self.cwd),
-            GitTab::Changes => {}
-        }
-        cx.notify();
-    }
-
-    /// Run a remote git op (push/pull/fetch/rebase) off the render
-    /// path and surface the result line.
-    fn git_remote_op(&mut self, op: GitRemoteOp, cx: &mut Context<Self>) {
-        self.git_msg = Some(op.pending().to_string());
-        cx.notify();
-        let cwd = self.cwd.clone();
-        cx.spawn(async move |this, cx| {
-            let res = cx
-                .background_executor()
-                .spawn(async move {
-                    match op {
-                        GitRemoteOp::Push => data::git_push(&cwd),
-                        GitRemoteOp::Pull => data::git_pull(&cwd),
-                        GitRemoteOp::Fetch => data::git_fetch(&cwd),
-                        GitRemoteOp::Rebase => data::git_rebase(&cwd),
-                    }
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.git_msg = Some(match res {
-                    Ok(s) => {
-                        let s = s.trim().to_string();
-                        if s.is_empty() {
-                            "Done".to_string()
-                        } else {
-                            s
-                        }
-                    }
-                    Err(e) => e,
-                });
-                this.reload_git_async(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    /// Switch the working tree to `branch` off the render path (a checkout can
-    /// touch many files) and reload status + the branch list.
-    fn checkout_branch(&mut self, branch: String, cx: &mut Context<Self>) {
-        self.git_msg = Some(format!("Switching to {branch}…"));
-        cx.notify();
-        let cwd = self.cwd.clone();
-        cx.spawn(async move |this, cx| {
-            let (res, branches) = cx
-                .background_executor()
-                .spawn(async move {
-                    let res = data::git_checkout(&cwd, &branch);
-                    (res.map(|_| branch), data::git_branches(&cwd))
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.git_msg = Some(match res {
-                    Ok(branch) => format!("Switched to {branch}"),
-                    Err(e) => e,
-                });
-                this.git_branch_list = branches;
-                this.reload_git_async(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     /// Refresh the Monitor snapshot on an interval while the Monitor panel is
     /// the visible tool. Sampling is gated so we don't poll sysinfo when the
     /// panel is hidden.
@@ -1146,6 +929,109 @@ impl Shell {
                 .is_ok();
             if !alive {
                 break;
+            }
+        })
+        .detach();
+    }
+
+    /// TCP-probe every saved connection off the render path and write the
+    /// result back onto `conns[i].online` by store index. Skipped while a probe
+    /// is already in flight or there are no connections.
+    fn probe_connections_async(&mut self, cx: &mut Context<Self>) {
+        if self.health_probing || self.conns.is_empty() {
+            return;
+        }
+        self.health_probing = true;
+        cx.spawn(async move |this, cx| {
+            let results = cx
+                .background_executor()
+                .spawn(async move { data::probe_connections(2000) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.health_probing = false;
+                for (i, online) in results {
+                    if let Some(c) = this.conns.get_mut(i) {
+                        c.online = Some(online);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// When the active tab is a connected SSH shell, detect the services on its
+    /// host (off the render path, over a clone of the live session) and cache
+    /// them by connection identity (`user@host`) for the sidebar chips. Runs
+    /// once per host: a cache hit or an in-flight probe short-circuits, and a
+    /// not-yet-connected session simply returns so a later tick can retry.
+    fn detect_services_async(&mut self, cx: &mut Context<Self>) {
+        let idx = self.active_tab;
+        let (kind, key) = match self.tabs.get(idx) {
+            Some(tab) => (tab.kind, tab.title.clone()),
+            None => return,
+        };
+        if !matches!(kind, TabKind::Ssh) {
+            return;
+        }
+        if self.detected_services.contains_key(&key) || self.detecting_services.contains(&key) {
+            return;
+        }
+        let Some(session) = self.tabs[idx].terminal.read(cx).session() else {
+            return;
+        };
+        self.detecting_services.insert(key.clone());
+        cx.spawn(async move |this, cx| {
+            let services = cx
+                .background_executor()
+                .spawn(async move { data::detect_services(&session) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.detecting_services.remove(&key);
+                this.detected_services.insert(key, services);
+                // Drop cache entries for hosts no longer open in any tab.
+                let live: HashSet<String> = this
+                    .tabs
+                    .iter()
+                    .filter(|t| matches!(t.kind, TabKind::Ssh))
+                    .map(|t| t.title.clone())
+                    .collect();
+                this.detected_services.retain(|k, _| live.contains(k));
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Background driver for the Servers sidebar's live bits: it TCP-probes the
+    /// saved connections for their health dots and, once the active SSH tab's
+    /// shell session is up, detects the services on that host for the per-row
+    /// chips. Both checks are cheap each tick and only spawn real network work
+    /// when there is something new to do (guarded by `health_probing` /
+    /// `detecting_services`). Health probing is throttled to ~20s and gated on
+    /// the Servers panel / welcome being visible, mirroring how `start_monitor`
+    /// only samples while the Monitor panel is shown.
+    fn start_sidebar_tasks(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let mut tick: u32 = 0;
+            loop {
+                let alive = this
+                    .update(cx, |this, cx| {
+                        if this.show_servers {
+                            this.detect_services_async(cx);
+                        }
+                        if tick % 20 == 0 && (this.show_servers || this.tabs.is_empty()) {
+                            this.probe_connections_async(cx);
+                        }
+                    })
+                    .is_ok();
+                if !alive {
+                    break;
+                }
+                tick = tick.wrapping_add(1);
+                cx.background_executor()
+                    .timer(Duration::from_millis(1000))
+                    .await;
             }
         })
         .detach();
@@ -1356,6 +1242,12 @@ impl Shell {
                 MouseButton::Left,
                 cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
                     this.show_servers = servers;
+                    if servers {
+                        // Refresh the health dots and (if an SSH tab is active)
+                        // its service chips the moment the panel is revealed.
+                        this.probe_connections_async(cx);
+                        this.detect_services_async(cx);
+                    }
                     this.persist(cx);
                     cx.notify();
                 }),
@@ -1378,6 +1270,9 @@ impl Shell {
     /// Open a clicked file. Markdown files render in the Markdown panel; other
     /// types are ignored for now.
     fn open_file(&mut self, name: String, cx: &mut Context<Self>) {
+        // Keep the Git panel pointed at the browse cwd (no-op when unchanged).
+        let cwd = self.cwd.clone();
+        self.git_panel_view.update(cx, |v, cx| v.set_cwd(cwd, cx));
         let lower = name.to_lowercase();
         if lower.ends_with(".md") || lower.ends_with(".markdown") {
             if let Some(i) = TOOLS.iter().position(|(s, _, _, _)| matches!(s, Svc::Markdown)) {
@@ -1394,7 +1289,8 @@ impl Shell {
         self.cwd_label = path.display().to_string();
         self.files = data::list_dir(&path);
         self.cwd = path;
-        self.reload_git_async(cx);
+        let cwd = self.cwd.clone();
+        self.git_panel_view.update(cx, |v, cx| v.set_cwd(cwd, cx));
         self.persist(cx);
         cx.notify();
     }
@@ -1666,12 +1562,23 @@ impl Shell {
             .child(icon(glyph, px(12.0), t.dim))
     }
 
+    /// Three-state health dot colour: unprobed grey, reachable green,
+    /// unreachable red.
+    fn conn_dot_color(&self, online: Option<bool>) -> Hsla {
+        let t = &self.theme;
+        match online {
+            None => t.dim,
+            Some(true) => t.pos,
+            Some(false) => t.neg,
+        }
+    }
+
     fn conn_row(&self, cx: &mut Context<Self>, idx: usize, c: &ConnRow) -> impl IntoElement {
         let t = &self.theme;
         let selected = self.selected_conn == idx;
         let confirming = self.conn_confirm_delete == Some(idx);
         let fav = self.conn_favorites.contains(&c.name);
-        let dot = if c.online { t.pos } else { t.muted };
+        let dot = self.conn_dot_color(c.online);
         let mut row = h_flex()
             .id(SharedString::from(format!("conn-{idx}")))
             .items_center()
@@ -1797,6 +1704,75 @@ impl Shell {
             })
     }
 
+    /// Map a detected service name to the existing right-side tool that handles
+    /// it (PRODUCT-SPEC §5: mysql → MySQL, redis → Redis, postgresql →
+    /// PostgreSQL, docker → Docker). Returns the `TOOLS` index, or `None` for a
+    /// name with no tool — no new tools are introduced.
+    fn service_tool_index(name: &str) -> Option<usize> {
+        let want = match name {
+            "mysql" => Svc::Mysql,
+            "redis" => Svc::Redis,
+            "postgresql" => Svc::Postgres,
+            "docker" => Svc::Docker,
+            _ => return None,
+        };
+        TOOLS.iter().position(|(s, _, _, _)| *s == want)
+    }
+
+    /// A wrapped row of service chips hung under the active SSH connection row.
+    fn service_chips(
+        &self,
+        cx: &mut Context<Self>,
+        row: usize,
+        services: &[DetectedService],
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        let mut chips = h_flex().flex_wrap().gap(t.sp1).pl(t.sp6).pr(t.sp3).pb(t.sp2);
+        for svc in services {
+            if let Some(tool) = Self::service_tool_index(&svc.name) {
+                chips = chips.child(self.service_chip(cx, row, svc, tool));
+            }
+        }
+        chips
+    }
+
+    /// One service chip: the tool's glyph + the service name, tinted by running
+    /// state, that selects the matching right-side tool when clicked.
+    fn service_chip(
+        &self,
+        cx: &mut Context<Self>,
+        row: usize,
+        svc: &DetectedService,
+        tool: usize,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        let (svc_enum, glyph, _, _) = TOOLS[tool];
+        let running = matches!(svc.status, ServiceStatus::Running);
+        let tint = if running { self.svc_color(svc_enum) } else { t.muted };
+        h_flex()
+            .id(SharedString::from(format!("svc-chip-{row}-{}", svc.name)))
+            .items_center()
+            .gap(t.sp1)
+            .h(px(20.0))
+            .px(t.sp2)
+            .rounded(t.radius_sm)
+            .bg(t.panel_2)
+            .border_1()
+            .border_color(t.line_2)
+            .text_size(t.fs_sm)
+            .text_color(if running { t.ink_2 } else { t.muted })
+            .cursor_pointer()
+            .hover(|s| s.bg(t.hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                    this.run(Cmd::SelectTool(tool), window, cx)
+                }),
+            )
+            .child(icon(glyph, px(11.0), tint))
+            .child(svc.name.clone())
+    }
+
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let body = if self.show_servers {
@@ -1823,6 +1799,12 @@ impl Shell {
                 )
                 .child(self.conn_search_box(cx));
             let q = self.conn_search.to_lowercase();
+            // When an SSH tab is active, its `user@host` identity tags which
+            // connection row gets the detected-service chips beneath it.
+            let active_ssh_key: Option<String> = match self.tabs.get(self.active_tab) {
+                Some(tab) if matches!(tab.kind, TabKind::Ssh) => Some(tab.title.clone()),
+                _ => None,
+            };
             if self.conns.is_empty() {
                 col = col.child(
                     div()
@@ -1847,6 +1829,17 @@ impl Shell {
                         continue;
                     }
                     col = col.child(self.conn_row(cx, i, c));
+                    // Hang the detected-service chips under the row matching the
+                    // active SSH tab's host.
+                    if let Some(key) = &active_ssh_key {
+                        if *key == format!("{}@{}", c.user, c.host) {
+                            if let Some(svcs) = self.detected_services.get(key) {
+                                if !svcs.is_empty() {
+                                    col = col.child(self.service_chips(cx, i, svcs));
+                                }
+                            }
+                        }
+                    }
                     shown += 1;
                 }
                 if shown == 0 {
@@ -2137,489 +2130,6 @@ impl Shell {
             .child(div().text_size(t.fs_sm).text_color(t.muted).child(meta.into()))
     }
 
-    /// A small icon button performing a per-file git op.
-    fn git_file_btn(
-        &self,
-        cx: &mut Context<Self>,
-        key: &str,
-        glyph: &'static str,
-        color: Hsla,
-        op: GitFileOp,
-        file: String,
-    ) -> impl IntoElement {
-        let t = &self.theme;
-        div()
-            .id(SharedString::from(format!("gfb-{key}")))
-            .flex()
-            .items_center()
-            .justify_center()
-            .w(px(18.0))
-            .h(px(18.0))
-            .rounded(t.radius_sm)
-            .cursor_pointer()
-            .hover(|s| s.bg(t.hover))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
-                    this.git_file_op(op, file.clone(), cx)
-                }),
-            )
-            .child(icon(glyph, px(13.0), color))
-    }
-
-    fn git_change_row(&self, cx: &mut Context<Self>, c: &data::GitChange, staged: bool) -> impl IntoElement {
-        let t = &self.theme;
-        let (mark, mark_color) = status_style(t, &c.status);
-        let path = c.path.clone();
-        let numstat = self
-            .git_numstat
-            .get(&c.path)
-            .copied()
-            .filter(|(add, del)| *add > 0 || *del > 0);
-        h_flex()
-            .id(SharedString::from(format!("gch-{}-{}", staged, c.path)))
-            .items_center()
-            .gap(t.sp2)
-            .h(px(26.0))
-            .px(t.sp3)
-            .border_l_2()
-            .border_color(mark_color)
-            .hover(|s| s.bg(t.hover))
-            .child(
-                div()
-                    .w(px(14.0))
-                    .font_family(t.mono.clone())
-                    .text_color(mark_color)
-                    .child(mark),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .font_family(t.mono.clone())
-                    .text_size(t.fs_sm)
-                    .text_color(t.ink_2)
-                    .child(c.path.clone()),
-            )
-            .when_some(numstat, |d, (add, del)| {
-                d.child(
-                    h_flex()
-                        .flex_none()
-                        .gap(px(4.0))
-                        .font_family(t.mono.clone())
-                        .text_size(t.fs_sm)
-                        .when(add > 0, |d| {
-                            d.child(div().text_color(t.pos).child(format!("+{add}")))
-                        })
-                        .when(del > 0, |d| {
-                            d.child(div().text_color(t.neg).child(format!("-{del}")))
-                        }),
-                )
-            })
-            .when(staged, |d| {
-                d.child(self.git_file_btn(
-                    cx,
-                    &format!("uns-{}", c.path),
-                    "minus",
-                    t.muted,
-                    GitFileOp::Unstage,
-                    path.clone(),
-                ))
-            })
-            .when(!staged, |d| {
-                d.child(self.git_file_btn(
-                    cx,
-                    &format!("dis-{}", c.path),
-                    "delete",
-                    t.neg,
-                    GitFileOp::Discard,
-                    path.clone(),
-                ))
-                .child(self.git_file_btn(
-                    cx,
-                    &format!("stg-{}", c.path),
-                    "plus",
-                    t.pos,
-                    GitFileOp::Stage,
-                    path.clone(),
-                ))
-            })
-    }
-
-    /// Commit message input + Commit button (shown above staged files).
-    fn commit_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = &self.theme;
-        let empty = self.commit_msg.is_empty();
-        h_flex()
-            .items_center()
-            .gap(t.sp2)
-            .mx(t.sp3)
-            .mb(t.sp2)
-            .child(
-                div()
-                    .track_focus(&self.commit_focus)
-                    .key_context("CommitMsg")
-                    .on_key_down(cx.listener(Self::on_commit_key))
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .h(px(28.0))
-                    .px(t.sp2)
-                    .flex()
-                    .items_center()
-                    .rounded(t.radius_sm)
-                    .bg(t.panel_2)
-                    .border_1()
-                    .border_color(t.line_2)
-                    .when(empty, |d| {
-                        d.text_color(t.dim).child("Commit message…")
-                    })
-                    .when(!empty, |d| {
-                        d.text_color(t.ink).child(self.commit_msg.clone())
-                    }),
-            )
-            .child(
-                div()
-                    .id("git-commit")
-                    .px(t.sp3)
-                    .py(px(5.0))
-                    .rounded(t.radius_sm)
-                    .text_size(t.fs_ui)
-                    .cursor_pointer()
-                    .bg(t.accent)
-                    .text_color(t.accent_ink)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _: &MouseDownEvent, _w, cx| this.do_commit(cx)),
-                    )
-                    .child("Commit"),
-            )
-    }
-
-    fn git_chip(
-        &self,
-        cx: &mut Context<Self>,
-        label: &'static str,
-        count: Option<usize>,
-        tab: GitTab,
-    ) -> impl IntoElement {
-        let t = &self.theme;
-        let active = self.git_tab == tab;
-        h_flex()
-            .id(SharedString::from(format!("gtab-{label}")))
-            .items_center()
-            .gap(px(4.0))
-            .px(t.sp2)
-            .py(px(2.0))
-            .text_size(t.fs_ui)
-            .cursor_pointer()
-            .text_color(if active { t.ink } else { t.muted })
-            .when(active, |d| d.border_b_2().border_color(t.accent))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _: &MouseDownEvent, _w, cx| this.set_git_tab(tab, cx)),
-            )
-            .child(label)
-            .when_some(count, |d, n| {
-                d.child(
-                    div()
-                        .flex_none()
-                        .min_w(px(16.0))
-                        .px(px(5.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_full()
-                        .bg(t.accent_dim)
-                        .text_size(t.fs_sm)
-                        .text_color(t.accent)
-                        .child(n.to_string()),
-                )
-            })
-    }
-
-    /// `Some(op)` makes the button run that remote op; `None` renders
-    /// it inert/dim.
-    fn git_btn(
-        &self,
-        cx: &mut Context<Self>,
-        label: &'static str,
-        primary: bool,
-        op: Option<GitRemoteOp>,
-    ) -> impl IntoElement {
-        let t = &self.theme;
-        let mut d = div()
-            .id(SharedString::from(format!("gbtn-{label}")))
-            .px(t.sp3)
-            .py(px(4.0))
-            .rounded(t.radius_sm)
-            .text_size(t.fs_ui)
-            .when(primary, |d| d.bg(t.accent).text_color(t.accent_ink))
-            .when(!primary, |d| d.bg(t.panel_2).text_color(t.ink_2))
-            .child(label);
-        match op {
-            Some(op) => {
-                d = d.cursor_pointer().on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
-                        this.git_remote_op(op, cx)
-                    }),
-                );
-            }
-            None => d = d.text_color(t.dim),
-        }
-        d
-    }
-
-    fn git_commit_row(&self, c: &data::CommitInfo) -> impl IntoElement {
-        let t = &self.theme;
-        v_flex()
-            .gap(px(2.0))
-            .px(t.sp3)
-            .py(t.sp2)
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap(t.sp2)
-                    .child(
-                        div()
-                            .font_family(t.mono.clone())
-                            .text_size(t.fs_sm)
-                            .text_color(t.accent)
-                            .child(c.short_hash.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .text_color(t.ink_2)
-                            .child(c.message.clone()),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .gap(t.sp2)
-                    .child(div().text_size(t.fs_sm).text_color(t.muted).child(c.author.clone()))
-                    .child(
-                        div()
-                            .text_size(t.fs_sm)
-                            .text_color(t.dim)
-                            .child(c.relative_date.clone()),
-                    ),
-            )
-    }
-
-    fn git_branch_row(&self, cx: &mut Context<Self>, name: &str, current: bool) -> impl IntoElement {
-        let t = &self.theme;
-        let branch = name.to_string();
-        h_flex()
-            .id(SharedString::from(format!("gbr-{name}")))
-            .items_center()
-            .gap(t.sp2)
-            .h(px(26.0))
-            .px(t.sp3)
-            .hover(|s| s.bg(t.hover))
-            .when(!current, |d| {
-                let branch = branch.clone();
-                d.cursor_pointer().on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
-                        this.checkout_branch(branch.clone(), cx)
-                    }),
-                )
-            })
-            .child(icon("git-branch", px(13.0), if current { t.accent } else { t.muted }))
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .font_family(t.mono.clone())
-                    .text_color(if current { t.ink } else { t.ink_2 })
-                    .child(name.to_string()),
-            )
-            .when(current, |d| {
-                d.child(div().text_size(t.fs_sm).text_color(t.accent).child("current"))
-            })
-            .when(!current, |d| {
-                d.child(icon("chevron-right", px(13.0), t.dim))
-            })
-    }
-
-    fn git_stash_row(&self, s: &data::StashEntry) -> impl IntoElement {
-        let t = &self.theme;
-        v_flex()
-            .gap(px(2.0))
-            .px(t.sp3)
-            .py(t.sp2)
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap(t.sp2)
-                    .child(
-                        div()
-                            .font_family(t.mono.clone())
-                            .text_size(t.fs_sm)
-                            .text_color(t.accent)
-                            .child(s.index.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .text_color(t.ink_2)
-                            .child(s.message.clone()),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(t.fs_sm)
-                    .text_color(t.dim)
-                    .child(s.relative_date.clone()),
-            )
-    }
-
-    fn git_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        let t = &self.theme;
-        let Some(git) = &self.git else {
-            return v_flex()
-                .flex_1()
-                .child(self.panel_header("git-branch", "GIT", ""))
-                .child(
-                    div()
-                        .p(t.sp4)
-                        .text_color(t.muted)
-                        .child("Not a git repository"),
-                )
-                .into_any_element();
-        };
-        let total = git.staged.len() + git.unstaged.len();
-        let ahead_behind = format!("↑{} ↓{}", git.ahead, git.behind);
-        let tracking = if git.tracking.is_empty() {
-            "no upstream".to_string()
-        } else {
-            format!("tracking {}", git.tracking)
-        };
-
-        let mut col = v_flex()
-            .flex_1()
-            .min_h(px(0.0))
-            .child(self.panel_header("git-branch", "GIT", git.branch.clone()))
-            .child(
-                h_flex()
-                    .gap(t.sp3)
-                    .px(t.sp3)
-                    .py(t.sp2)
-                    .border_b_1()
-                    .border_color(t.line)
-                    .child(self.git_chip(cx, "Changes", Some(total), GitTab::Changes))
-                    .child(self.git_chip(cx, "History", None, GitTab::History))
-                    .child(self.git_chip(cx, "Branches", None, GitTab::Branches))
-                    .child(self.git_chip(cx, "Stash", None, GitTab::Stash)),
-            )
-            .child(
-                v_flex()
-                    .m(t.sp3)
-                    .p(t.sp3)
-                    .gap(t.sp2)
-                    .rounded(t.radius_md)
-                    .bg(t.panel)
-                    .border_1()
-                    .border_color(t.line)
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .font_family(t.mono.clone())
-                                    .text_color(t.ink)
-                                    .child(git.branch.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(t.fs_sm)
-                                    .text_color(t.muted)
-                                    .child(ahead_behind),
-                            ),
-                    )
-                    .child(div().text_size(t.fs_sm).text_color(t.muted).child(tracking))
-                    .child(
-                        h_flex()
-                            .gap(t.sp2)
-                            .pt(t.sp1)
-                            .child(self.git_btn(cx, "Push", true, Some(GitRemoteOp::Push)))
-                            .child(self.git_btn(cx, "Pull", false, Some(GitRemoteOp::Pull)))
-                            .child(self.git_btn(cx, "Fetch", false, Some(GitRemoteOp::Fetch)))
-                            .child(self.git_btn(cx, "Rebase", false, Some(GitRemoteOp::Rebase))),
-                    )
-                    .when_some(self.git_msg.clone(), |d, msg| {
-                        d.child(
-                            div()
-                                .text_size(t.fs_sm)
-                                .font_family(t.mono.clone())
-                                .text_color(t.ink_2)
-                                .child(msg),
-                        )
-                    }),
-            );
-
-        match self.git_tab {
-            GitTab::Changes => {
-                if !git.staged.is_empty() {
-                    col = col
-                        .child(self.section_label(format!("STAGED · {}", git.staged.len())))
-                        .child(self.commit_box(cx));
-                    for c in &git.staged {
-                        col = col.child(self.git_change_row(cx, c, true));
-                    }
-                }
-                if !git.unstaged.is_empty() {
-                    col = col.child(self.section_label(format!("CHANGES · {}", git.unstaged.len())));
-                    for c in &git.unstaged {
-                        col = col.child(self.git_change_row(cx, c, false));
-                    }
-                }
-                if total == 0 {
-                    col = col.child(
-                        div().p(t.sp4).text_color(t.muted).child("Working tree clean"),
-                    );
-                }
-            }
-            GitTab::History => {
-                col = col.child(self.section_label(format!("HISTORY · {}", self.git_history.len())));
-                if self.git_history.is_empty() {
-                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No commits"));
-                } else {
-                    for c in &self.git_history {
-                        col = col.child(self.git_commit_row(c));
-                    }
-                }
-            }
-            GitTab::Branches => {
-                col = col
-                    .child(self.section_label(format!("BRANCHES · {}", self.git_branch_list.len())));
-                if self.git_branch_list.is_empty() {
-                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No branches"));
-                } else {
-                    for b in &self.git_branch_list {
-                        col = col.child(self.git_branch_row(cx, b, b == &git.branch));
-                    }
-                }
-            }
-            GitTab::Stash => {
-                col = col.child(self.section_label(format!("STASH · {}", self.git_stashes.len())));
-                if self.git_stashes.is_empty() {
-                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No stashes"));
-                } else {
-                    for s in &self.git_stashes {
-                        col = col.child(self.git_stash_row(s));
-                    }
-                }
-            }
-        }
-        col.into_any_element()
-    }
-
     /// PROCESS / CPU% / MEM% header for a Monitor top-process table.
     fn mon_proc_header(&self) -> impl IntoElement {
         let t = &self.theme;
@@ -2764,16 +2274,11 @@ impl Shell {
         col.into_any_element()
     }
 
-    fn right_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn right_panel(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let (svc, glyph, name, _) = TOOLS[self.active_tool];
         if matches!(svc, Svc::Git) {
-            div()
-                .id("git-scroll")
-                .flex_1()
-                .min_h(px(0.0))
-                .overflow_y_scroll()
-                .child(self.git_panel(cx))
-                .into_any_element()
+            // The Git panel is an independent View owning its layout + scroll.
+            self.git_panel_view.clone().into_any_element()
         } else if matches!(svc, Svc::Monitor) {
             div()
                 .id("mon-scroll")
@@ -2799,13 +2304,15 @@ impl Shell {
         div().text_color(color).child(text.into())
     }
 
-    fn status_bar(&self, cols: u16, rows: u16) -> impl IntoElement {
+    fn status_bar(
+        &self,
+        cols: u16,
+        rows: u16,
+        branch: String,
+        ahead_behind: String,
+    ) -> impl IntoElement {
         let t = &self.theme;
         let (_, _, tool_name, _) = TOOLS[self.active_tool];
-        let (branch, ahead_behind) = match &self.git {
-            Some(g) => (g.branch.clone(), format!("↑{} ↓{}", g.ahead, g.behind)),
-            None => ("—".to_string(), String::new()),
-        };
         h_flex()
             .items_center()
             .justify_between()
@@ -3304,7 +2811,7 @@ impl Shell {
     /// A saved-connection shortcut row on the Welcome view (opens SSH).
     fn welcome_conn_row(&self, cx: &mut Context<Self>, idx: usize, c: &ConnRow) -> impl IntoElement {
         let t = &self.theme;
-        let dot = if c.online { t.pos } else { t.muted };
+        let dot = self.conn_dot_color(c.online);
         h_flex()
             .id(SharedString::from(format!("wc-{idx}")))
             .items_center()
@@ -3449,6 +2956,11 @@ impl Render for Shell {
             Some(term) => term.read(cx).size(),
             None => (0, 0),
         };
+        // Branch + ahead/behind for the status bar, read from the Git panel view.
+        let (branch, ahead_behind) = match self.git_panel_view.read(cx).status_summary() {
+            Some((b, ahead, behind)) => (b, format!("↑{ahead} ↓{behind}")),
+            None => ("—".to_string(), String::new()),
+        };
 
         // Right zone: optional panel (with a drag handle) + tool strip.
         let mut right_zone = h_flex().h_full();
@@ -3498,7 +3010,7 @@ impl Render for Shell {
                     )
                     .child(right_zone),
             )
-            .child(self.status_bar(cols, rows));
+            .child(self.status_bar(cols, rows, branch, ahead_behind));
 
         // Overlay layer (Settings / command palette) paints on top of the shell.
         let show_overlay = self.overlay != Overlay::None;
@@ -3603,16 +3115,5 @@ fn breadcrumb(path: &std::path::Path) -> String {
     s
 }
 
-/// Single-char mark + colour for a git file status.
-fn status_style(t: &Theme, s: &FileStatus) -> (&'static str, Hsla) {
-    let color = match s {
-        FileStatus::Modified => t.warn,
-        FileStatus::Added => t.pos,
-        FileStatus::Deleted => t.neg,
-        FileStatus::Renamed => t.info,
-        FileStatus::Untracked => t.muted,
-        FileStatus::Conflicted => t.neg,
-        FileStatus::Copied => t.info,
-    };
-    (s.code(), color)
-}
+// Git file-status mark/colour and the Git panel itself now live in git_panel.rs
+// (GitPanelView), extracted from this shell.

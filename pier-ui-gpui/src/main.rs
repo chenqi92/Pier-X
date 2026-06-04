@@ -7,6 +7,7 @@
 mod assets;
 mod data;
 mod dialogs;
+mod git_panel;
 mod panels;
 mod settings;
 mod shell;

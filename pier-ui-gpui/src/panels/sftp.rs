@@ -44,6 +44,33 @@ enum Edit {
     ConfirmDelete { path: String, is_dir: bool },
 }
 
+/// The inline text editor that temporarily replaces the listing. It is a plain
+/// append / end-backspace buffer — no cursor positioning, selection, or
+/// mid-line insertion (gpui has no text-input widget here). Meant for tweaking
+/// small remote config files, not as an IDE.
+struct Editor {
+    /// Absolute remote path being edited.
+    path: String,
+    /// Leaf name, shown in the editor header.
+    name: String,
+    /// The editable text. Edits only ever append to or pop from the end.
+    buf: String,
+    /// Buffer differs from the loaded contents.
+    dirty: bool,
+    /// The contents loaded successfully and the buffer is safe to write back.
+    /// Stays false on a read or decode failure so Save can't clobber the remote
+    /// file with an empty/partial buffer.
+    ready: bool,
+    /// A read is in flight off the render path.
+    loading: bool,
+    /// A write is in flight off the render path.
+    saving: bool,
+    /// Last load/save error, shown in the editor header area.
+    error: Option<String>,
+    /// Set after one close request on a dirty buffer; the next one discards.
+    confirm_close: bool,
+}
+
 pub struct SftpPanel {
     theme: Theme,
     /// Saved connections, loaded once on construction.
@@ -65,6 +92,16 @@ pub struct SftpPanel {
     input_focus: FocusHandle,
     /// The in-progress inline action, if any.
     edit: Edit,
+    /// `"{user}@{host}:{port}"` of the live connection — the bookmark key.
+    host_key: String,
+    /// Bookmarked directory paths for the current host (persisted on change).
+    bookmarks: Vec<String>,
+    /// Whether the bookmarks dropdown is expanded under the toolbar.
+    bookmarks_open: bool,
+    /// The open file editor, if any. While set it takes over the panel body.
+    editor: Option<Editor>,
+    /// Focus handle for the editor's key capture.
+    editor_focus: FocusHandle,
 }
 
 impl SftpPanel {
@@ -81,6 +118,11 @@ impl SftpPanel {
             error: None,
             input_focus: cx.focus_handle(),
             edit: Edit::None,
+            host_key: String::new(),
+            bookmarks: Vec::new(),
+            bookmarks_open: false,
+            editor: None,
+            editor_focus: cx.focus_handle(),
         }
     }
 
@@ -94,6 +136,7 @@ impl SftpPanel {
         self.loading = true;
         self.error = None;
         let name = cfg.name.clone();
+        let host_key = format!("{}@{}:{}", cfg.user, cfg.host, cfg.port);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -118,6 +161,10 @@ impl SftpPanel {
                         this.cwd = cwd;
                         this.entries = entries;
                         this.error = None;
+                        this.bookmarks = data::load_sftp_bookmarks(&host_key);
+                        this.host_key = host_key;
+                        this.bookmarks_open = false;
+                        this.editor = None;
                     }
                     Err(e) => this.error = Some(e),
                 }
@@ -133,6 +180,7 @@ impl SftpPanel {
             return;
         };
         self.edit = Edit::None;
+        self.bookmarks_open = false;
         self.loading = true;
         self.error = None;
         cx.notify();
@@ -379,6 +427,212 @@ impl SftpPanel {
         }
     }
 
+    /// Toggle the current directory in this host's bookmarks and persist.
+    fn toggle_bookmark(&mut self, cx: &mut Context<Self>) {
+        if self.cwd.is_empty() {
+            return;
+        }
+        if let Some(pos) = self.bookmarks.iter().position(|b| *b == self.cwd) {
+            self.bookmarks.remove(pos);
+        } else {
+            self.bookmarks.push(self.cwd.clone());
+        }
+        data::save_sftp_bookmarks(&self.host_key, &self.bookmarks);
+        cx.notify();
+    }
+
+    /// Drop `path` from this host's bookmarks and persist.
+    fn remove_bookmark(&mut self, path: String, cx: &mut Context<Self>) {
+        if let Some(pos) = self.bookmarks.iter().position(|b| *b == path) {
+            self.bookmarks.remove(pos);
+            data::save_sftp_bookmarks(&self.host_key, &self.bookmarks);
+            if self.bookmarks.is_empty() {
+                self.bookmarks_open = false;
+            }
+            cx.notify();
+        }
+    }
+
+    /// Open the text editor on a remote file. Files over 1 MiB are refused (use
+    /// download). The read runs off the render path; until it lands the editor
+    /// shows "Loading…".
+    fn open_editor(
+        &mut self,
+        path: String,
+        name: String,
+        size: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        const MAX_EDIT_BYTES: u64 = 1024 * 1024;
+        if size > MAX_EDIT_BYTES {
+            self.error = Some(format!("{name} is larger than 1 MiB — download to edit"));
+            cx.notify();
+            return;
+        }
+        let Some(sftp) = self.sftp.clone() else {
+            return;
+        };
+        self.error = None;
+        self.editor = Some(Editor {
+            path: path.clone(),
+            name,
+            buf: String::new(),
+            dirty: false,
+            ready: false,
+            loading: true,
+            saving: false,
+            error: None,
+            confirm_close: false,
+        });
+        window.focus(&self.editor_focus, cx);
+        cx.notify();
+        let read_path = path.clone();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { sftp.read_file_blocking(&read_path).map_err(|e| e.to_string()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                // Apply only if the editor is still open for this same file.
+                if let Some(ed) = &mut this.editor {
+                    if ed.path == path {
+                        ed.loading = false;
+                        match res {
+                            Ok(bytes) => match String::from_utf8(bytes) {
+                                Ok(text) => {
+                                    ed.buf = text;
+                                    ed.ready = true;
+                                    ed.error = None;
+                                }
+                                Err(_) => {
+                                    ed.error = Some(
+                                        "Not a UTF-8 text file — close and download instead"
+                                            .to_string(),
+                                    );
+                                }
+                            },
+                            Err(e) => ed.error = Some(e),
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Write the editor buffer back to its remote path, then re-list the cwd so
+    /// the row's size/mtime refresh. No-op while loading/saving or before a
+    /// successful load (so an empty buffer can't clobber the file).
+    fn save_editor(&mut self, cx: &mut Context<Self>) {
+        let (path, bytes) = {
+            let Some(ed) = self.editor.as_mut() else {
+                return;
+            };
+            if !ed.ready || ed.loading || ed.saving {
+                return;
+            }
+            ed.saving = true;
+            ed.error = None;
+            (ed.path.clone(), ed.buf.clone().into_bytes())
+        };
+        let Some(sftp) = self.sftp.clone() else {
+            return;
+        };
+        let dir = self.cwd.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    sftp.write_file_blocking(&path, &bytes).map_err(|e| e.to_string())?;
+                    sftp.list_dir_blocking(&dir).map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match res {
+                    Ok(entries) => {
+                        this.entries = entries;
+                        if let Some(ed) = &mut this.editor {
+                            ed.saving = false;
+                            ed.dirty = false;
+                            ed.error = None;
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(ed) = &mut this.editor {
+                            ed.saving = false;
+                            ed.error = Some(e);
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Close the editor. A dirty buffer needs a second request (Esc or the
+    /// Close button) to discard unsaved changes.
+    fn request_close_editor(&mut self, cx: &mut Context<Self>) {
+        let confirm = matches!(&self.editor, Some(ed) if ed.dirty && !ed.confirm_close);
+        if confirm {
+            if let Some(ed) = &mut self.editor {
+                ed.confirm_close = true;
+            }
+        } else {
+            self.editor = None;
+        }
+        cx.notify();
+    }
+
+    /// Feed a keystroke into the open editor: Ctrl+S saves, Escape closes (with
+    /// a dirty-buffer confirm), Enter/Tab/Backspace and printable characters
+    /// mutate the end of the buffer. Buffer edits are ignored until the file has
+    /// loaded successfully.
+    fn on_editor_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        let m = &ks.modifiers;
+        if m.control && !m.alt && ks.key.as_str() == "s" {
+            self.save_editor(cx);
+            return;
+        }
+        if ks.key.as_str() == "escape" {
+            self.request_close_editor(cx);
+            return;
+        }
+        let Some(ed) = self.editor.as_mut() else {
+            return;
+        };
+        if !ed.ready {
+            return;
+        }
+        match ks.key.as_str() {
+            "enter" => ed.buf.push('\n'),
+            "tab" => ed.buf.push('\t'),
+            "backspace" => {
+                if ed.buf.pop().is_none() {
+                    return;
+                }
+            }
+            _ => {
+                if m.control || m.alt || m.platform {
+                    return;
+                }
+                match &ks.key_char {
+                    Some(kc) if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) => {
+                        ed.buf.push_str(kc)
+                    }
+                    _ => return,
+                }
+            }
+        }
+        ed.dirty = true;
+        ed.confirm_close = false;
+        cx.notify();
+    }
+
     fn conn_row(&self, cx: &mut Context<Self>, idx: usize, c: &SshConfig) -> impl IntoElement {
         let t = &self.theme;
         let addr = format!("{}@{}:{}", c.user, c.host, c.port);
@@ -413,9 +667,13 @@ impl SftpPanel {
             )
     }
 
-    /// Header row: connection name + new-folder / new-file / upload buttons.
+    /// Header row: connection name + bookmark / new-folder / new-file / upload
+    /// buttons.
     fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
+        let starred = !self.cwd.is_empty() && self.bookmarks.iter().any(|b| *b == self.cwd);
+        let star_glyph = if starred { "star-fill" } else { "star" };
+        let has_bookmarks = !self.bookmarks.is_empty();
         h_flex()
             .items_center()
             .child(
@@ -430,6 +688,15 @@ impl SftpPanel {
                     .items_center()
                     .gap(px(4.0))
                     .mr(t.sp3)
+                    .child(self.head_btn(cx, "sftp-bookmark", star_glyph, |this, _window, cx| {
+                        this.toggle_bookmark(cx);
+                    }))
+                    .when(has_bookmarks, |d| {
+                        d.child(self.head_btn(cx, "sftp-bookmarks", "book-open", |this, _window, cx| {
+                            this.bookmarks_open = !this.bookmarks_open;
+                            cx.notify();
+                        }))
+                    })
                     .child(self.head_btn(cx, "sftp-new-dir", "folder", |this, window, cx| {
                         this.edit = Edit::New { is_dir: true, name: String::new() };
                         window.focus(&this.input_focus, cx);
@@ -696,6 +963,12 @@ impl SftpPanel {
                     cx.notify();
                 }));
             if !is_dir {
+                let ep = e.path.clone();
+                let en = e.name.clone();
+                let esz = e.size;
+                acts = acts.child(self.row_btn(cx, format!("sftp-ed-{}", e.path), "file-text", t.muted, move |this, window, cx| {
+                    this.open_editor(ep.clone(), en.clone(), esz, window, cx);
+                }));
                 let dlp = e.path.clone();
                 let dln = e.name.clone();
                 acts = acts.child(self.row_btn(cx, format!("sftp-dl-{}", e.path), "arrow-down", t.muted, move |this, _w, cx| {
@@ -721,6 +994,144 @@ impl SftpPanel {
             .child(trailing)
     }
 
+    /// One row in the bookmarks dropdown: a star glyph, the clickable path
+    /// (navigates), and a remove button.
+    fn bookmark_row(&self, cx: &mut Context<Self>, path: String) -> impl IntoElement {
+        let t = &self.theme;
+        let nav_path = path.clone();
+        let del_path = path.clone();
+        h_flex()
+            .id(SharedString::from(format!("sftp-bm-{path}")))
+            .items_center()
+            .gap(t.sp2)
+            .h(px(24.0))
+            .px(t.sp3)
+            .text_color(t.ink_2)
+            .hover(|s| s.bg(t.hover))
+            .child(ui::icon("star-fill", px(12.0), t.warn))
+            .child(
+                div()
+                    .id(SharedString::from(format!("sftp-bm-go-{path}")))
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                            this.navigate(nav_path.clone(), cx);
+                        }),
+                    )
+                    .child(path.clone()),
+            )
+            .child(self.row_btn(cx, format!("sftp-bm-del-{path}"), "star-off", t.muted, move |this, _w, cx| {
+                this.remove_bookmark(del_path.clone(), cx);
+            }))
+    }
+
+    /// The full-height text editor that replaces the listing while a file is
+    /// open: a header (name + state + Save/Close) over a scrollable, monospace
+    /// rendering of the buffer, line by line.
+    fn editor_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        // The outer container owns focus + key capture for the whole editor.
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h(px(0.0))
+            .track_focus(&self.editor_focus)
+            .key_context("SftpEditor")
+            .on_key_down(cx.listener(Self::on_editor_key));
+        let Some(ed) = self.editor.as_ref() else {
+            return col;
+        };
+
+        // Header: file glyph + name, then a state hint and Save/Close buttons.
+        let mut header = h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .h(px(32.0))
+            .px(t.sp3)
+            .border_b_1()
+            .border_color(t.line)
+            .child(ui::icon("file-text", px(14.0), t.accent))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .font_family(t.mono.clone())
+                    .text_color(t.ink)
+                    .child(ed.name.clone()),
+            );
+        if ed.saving {
+            header = header.child(div().text_size(t.fs_sm).text_color(t.muted).child("Saving…"));
+        } else if ed.dirty {
+            header = header.child(ui::status_dot(t.warn));
+        }
+        if ed.ready {
+            header = header.child(self.head_btn(cx, "sftp-ed-save", "check", |this, _w, cx| {
+                this.save_editor(cx);
+            }));
+        }
+        header = header.child(self.head_btn(cx, "sftp-ed-close", "close", |this, _w, cx| {
+            this.request_close_editor(cx);
+        }));
+        col = col.child(header);
+
+        // A load/save error or the discard-confirm hint, just under the header.
+        if let Some(err) = &ed.error {
+            col = col.child(
+                div().px(t.sp3).py(t.sp2).text_size(t.fs_sm).text_color(t.neg).child(err.clone()),
+            );
+        } else if ed.confirm_close {
+            col = col.child(
+                div()
+                    .px(t.sp3)
+                    .py(t.sp2)
+                    .text_size(t.fs_sm)
+                    .text_color(t.warn)
+                    .child("Unsaved changes — press Esc again or Close to discard."),
+            );
+        }
+
+        // The buffer, rendered line by line. `split('\n')` keeps a trailing
+        // blank line visible (so Enter at the end gives feedback); an empty
+        // line renders a space so it keeps its height.
+        let mut text = v_flex().w_full();
+        if ed.loading {
+            text = text.child(div().text_color(t.dim).child("Loading…"));
+        } else {
+            for line in ed.buf.split('\n') {
+                let shown = if line.is_empty() { " ".to_string() } else { line.to_string() };
+                text = text.child(div().w_full().child(shown));
+            }
+        }
+
+        col.child(
+            div()
+                .id("sftp-editor-scroll")
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_y_scroll()
+                .px(t.sp3)
+                .py(t.sp2)
+                .font_family(t.mono.clone())
+                .text_size(t.fs_body)
+                .text_color(t.ink)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                        window.focus(&this.editor_focus, cx);
+                    }),
+                )
+                .child(text),
+        )
+    }
+
     fn error_line(&self) -> impl IntoElement {
         let t = &self.theme;
         div()
@@ -742,6 +1153,14 @@ impl Render for SftpPanel {
             SharedString::default()
         };
 
+        // An open editor takes over the whole area below the header.
+        if self.editor.is_some() {
+            return v_flex()
+                .size_full()
+                .child(ui::panel_header(&t, "folder", "SFTP", meta))
+                .child(self.editor_view(cx));
+        }
+
         let mut body = v_flex().id("sftp-body").flex_1().min_h(px(0.0)).overflow_y_scroll();
 
         if self.error.is_some() {
@@ -758,6 +1177,11 @@ impl Render for SftpPanel {
             };
             if let Some((is_dir, name)) = new_entry {
                 body = body.child(self.new_entry_row(cx, is_dir, name));
+            }
+            if self.bookmarks_open && !self.bookmarks.is_empty() {
+                for bm in &self.bookmarks {
+                    body = body.child(self.bookmark_row(cx, bm.clone()));
+                }
             }
             if parent_of(&self.cwd) != self.cwd {
                 body = body.child(self.up_row(cx));

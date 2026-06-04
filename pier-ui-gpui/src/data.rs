@@ -13,9 +13,11 @@ use std::process::Command;
 use std::time::SystemTime;
 
 use pier_core::connections::ConnectionStore;
-pub use pier_core::services::git::{CommitInfo, StashEntry};
+pub use pier_core::services::git::{BlameLine, CommitInfo, ConfigEntry, RemoteInfo, StashEntry, TagInfo};
 use pier_core::services::git::{FileStatus, GitClient};
+use pier_core::services::host_health::{self, HealthStatus, HostHealthTarget};
 use pier_core::services::local_monitor;
+pub use pier_core::ssh::service_detector::{DetectedService, ServiceStatus};
 use pier_core::ssh::{AuthMethod, HostKeyVerifier, SshConfig, SshSession};
 
 /// One entry in the Files sidebar.
@@ -45,7 +47,10 @@ pub struct ConnRow {
     pub host: String,
     pub user: String,
     pub auth: AuthKind,
-    pub online: bool,
+    /// TCP reachability of the host: `None` until probed, then `Some(true)`
+    /// reachable / `Some(false)` not. Filled in asynchronously by the shell's
+    /// background health probe (see `Shell::probe_connections_async`).
+    pub online: Option<bool>,
 }
 
 /// A single changed file, carrying its porcelain status for mark/colour.
@@ -126,7 +131,8 @@ pub fn connect_blocking(cfg: &SshConfig) -> Result<SshSession, String> {
 }
 
 /// Saved connections from the default store, or empty if none/unreadable.
-/// Online state is unknown here (no probe), so it's reported false.
+/// Online state is unknown here (no probe), so it's reported as `None`
+/// (unprobed) — [`probe_connections`] fills it in later.
 pub fn load_connections() -> Vec<ConnRow> {
     let Ok(store) = ConnectionStore::load_default() else {
         return Vec::new();
@@ -140,7 +146,7 @@ pub fn load_connections() -> Vec<ConnRow> {
             host: c.host.clone(),
             user: c.user.clone(),
             auth: auth_kind(&c.auth),
-            online: false,
+            online: None,
         })
         .collect()
 }
@@ -155,6 +161,38 @@ fn auth_kind(auth: &AuthMethod) -> AuthKind {
             AuthKind::Password
         }
     }
+}
+
+/// TCP-probe every saved connection and report which are reachable, as
+/// `(saved_connection_index, online)` pairs where `online` is true only for
+/// [`HealthStatus::Online`]. One target per saved connection (host + port; a
+/// 0 port resolves to 22 inside the probe). Probes run in parallel on the
+/// shared runtime but the call blocks, so run it off the render path. Indices
+/// line up with [`load_connections`] (same store, same order).
+pub fn probe_connections(timeout_ms: u32) -> Vec<(usize, bool)> {
+    let targets: Vec<HostHealthTarget> = connections_raw()
+        .iter()
+        .enumerate()
+        .map(|(i, c)| HostHealthTarget {
+            saved_connection_index: i,
+            host: c.host.clone(),
+            port: c.port,
+        })
+        .collect();
+    if targets.is_empty() {
+        return Vec::new();
+    }
+    host_health::probe_many_blocking(targets, timeout_ms)
+        .into_iter()
+        .map(|r| (r.saved_connection_index, r.status == HealthStatus::Online))
+        .collect()
+}
+
+/// Detect the well-known services (mysql / redis / postgresql / docker) on the
+/// host behind `session`, reusing its already-authenticated connection. Runs a
+/// handful of SSH execs and blocks, so call it off the render path.
+pub fn detect_services(session: &SshSession) -> Vec<DetectedService> {
+    pier_core::ssh::service_detector::detect_all_blocking(session)
 }
 
 /// Remove the saved connection at `index` and persist. Out-of-range
@@ -206,6 +244,58 @@ pub fn save_favorites(favs: &HashSet<String>) {
     }
     let body = favs.iter().cloned().collect::<Vec<_>>().join("\n");
     let _ = std::fs::write(&p, body);
+}
+
+fn sftp_bookmarks_path() -> Option<PathBuf> {
+    pier_core::paths::config_dir().map(|d| d.join("pier-x-gpui-sftp-bookmarks.conf"))
+}
+
+/// SFTP directory bookmarks for `host_key` (`"user@host:port"`). The file holds
+/// one `host_key\tpath` line per bookmark across every host; this returns just
+/// the paths saved for the given host, in file order.
+pub fn load_sftp_bookmarks(host_key: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(p) = sftp_bookmarks_path() else {
+        return out;
+    };
+    if let Ok(text) = std::fs::read_to_string(&p) {
+        for line in text.lines() {
+            if let Some((k, path)) = line.split_once('\t') {
+                if k == host_key && !path.is_empty() {
+                    out.push(path.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Replace `host_key`'s bookmark set with `paths`, preserving every other
+/// host's lines (best-effort; ignores IO errors).
+pub fn save_sftp_bookmarks(host_key: &str, paths: &[String]) {
+    let Some(p) = sftp_bookmarks_path() else {
+        return;
+    };
+    // Carry over other hosts' lines untouched, then append this host's set.
+    let mut lines: Vec<String> = Vec::new();
+    if let Ok(text) = std::fs::read_to_string(&p) {
+        for line in text.lines() {
+            let other_host = match line.split_once('\t') {
+                Some((k, _)) => k != host_key,
+                None => false,
+            };
+            if other_host {
+                lines.push(line.to_string());
+            }
+        }
+    }
+    for path in paths {
+        lines.push(format!("{host_key}\t{path}"));
+    }
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&p, lines.join("\n"));
 }
 
 /// Git status for the repo at `path`, or `None` if it isn't a repo.
@@ -499,6 +589,160 @@ pub fn git_identity(repo: &Path) -> (String, String) {
     let name = run_git(repo, &["config", "user.name"]).unwrap_or_default();
     let email = run_git(repo, &["config", "user.email"]).unwrap_or_default();
     (name, email)
+}
+
+/// One submodule entry from `git submodule status`. `status` is the human
+/// label derived from the leading porcelain char (' ' ok, '-' uninitialized,
+/// '+' modified, 'U' conflict).
+pub struct SubmoduleInfo {
+    pub path: String,
+    pub short_hash: String,
+    pub status: String,
+}
+
+// ── Git: tags / remotes / config / diff / blame / submodules ─────────
+//
+// Thin wrappers over the GitClient methods of the same name, plus the
+// subprocess `git submodule …` for the one area GitClient doesn't cover.
+// List reads swallow errors to an empty Vec (the panel just shows
+// nothing); mutations surface the error string for the panel to display.
+
+/// Tags for the repo, empty if not a repo.
+pub fn git_tags(repo: &Path) -> Vec<TagInfo> {
+    GitClient::open(&repo.to_string_lossy())
+        .and_then(|c| c.tag_list())
+        .unwrap_or_default()
+}
+
+/// Create a tag. Empty `message` → lightweight tag, else annotated.
+pub fn git_tag_create(repo: &Path, name: &str, message: &str) -> Result<String, String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .tag_create(name, message)
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a tag.
+pub fn git_tag_delete(repo: &Path, name: &str) -> Result<String, String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .tag_delete(name)
+        .map_err(|e| e.to_string())
+}
+
+/// Remotes (name + fetch/push URL) for the repo, empty if not a repo.
+pub fn git_remotes(repo: &Path) -> Vec<RemoteInfo> {
+    GitClient::open(&repo.to_string_lossy())
+        .and_then(|c| c.remote_list())
+        .unwrap_or_default()
+}
+
+/// Add a remote.
+pub fn git_remote_add(repo: &Path, name: &str, url: &str) -> Result<String, String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .remote_add(name, url)
+        .map_err(|e| e.to_string())
+}
+
+/// Remove a remote.
+pub fn git_remote_remove(repo: &Path, name: &str) -> Result<String, String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .remote_remove(name)
+        .map_err(|e| e.to_string())
+}
+
+/// Merged local+global git config entries, empty if not a repo.
+pub fn git_config_list(repo: &Path) -> Vec<ConfigEntry> {
+    GitClient::open(&repo.to_string_lossy())
+        .and_then(|c| c.config_list())
+        .unwrap_or_default()
+}
+
+/// Set a config value (`global` → `--global`, else repo-local).
+pub fn git_config_set(repo: &Path, key: &str, value: &str, global: bool) -> Result<String, String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .config_set(key, value, global)
+        .map_err(|e| e.to_string())
+}
+
+/// Unset a config value (`global` → `--global`, else repo-local).
+pub fn git_config_unset(repo: &Path, key: &str, global: bool) -> Result<String, String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .config_unset(key, global)
+        .map_err(|e| e.to_string())
+}
+
+/// Unified diff for one file. `staged` → index-vs-HEAD, else worktree-vs-index.
+pub fn git_diff(repo: &Path, path: &str, staged: bool) -> Result<String, String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .diff(path, staged)
+        .map_err(|e| e.to_string())
+}
+
+/// Pseudo-diff for an untracked file (its full content as additions).
+pub fn git_diff_untracked(repo: &Path, path: &str) -> Result<String, String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .diff_untracked(path)
+        .map_err(|e| e.to_string())
+}
+
+/// Blame annotation for a file, or the error (e.g. binary / unknown path).
+pub fn git_blame(repo: &Path, path: &str) -> Result<Vec<BlameLine>, String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .blame(path)
+        .map_err(|e| e.to_string())
+}
+
+/// Submodules via `git submodule status --recursive`, empty if none/not a repo.
+pub fn git_submodules(repo: &Path) -> Vec<SubmoduleInfo> {
+    let Ok(out) = run_git(repo, &["submodule", "status", "--recursive"]) else {
+        return Vec::new();
+    };
+    out.lines()
+        .filter_map(|line| {
+            if line.trim().is_empty() {
+                return None;
+            }
+            let symbol = line.chars().next()?;
+            let rest = line.get(1..)?.trim();
+            let mut parts = rest.split_whitespace();
+            let hash = parts.next()?.to_string();
+            let path = parts.next()?.to_string();
+            let status = match symbol {
+                '-' => "uninitialized",
+                '+' => "modified",
+                'U' => "conflict",
+                _ => "ok",
+            };
+            Some(SubmoduleInfo {
+                short_hash: hash.chars().take(7).collect(),
+                path,
+                status: status.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// `git submodule init` (local).
+pub fn git_submodule_init(repo: &Path) -> Result<String, String> {
+    run_git(repo, &["submodule", "init"])
+}
+
+/// `git submodule update --init --recursive` (clones — network, run off render).
+pub fn git_submodule_update(repo: &Path) -> Result<String, String> {
+    run_git(repo, &["submodule", "update", "--init", "--recursive"])
+}
+
+/// `git submodule sync --recursive` (local).
+pub fn git_submodule_sync(repo: &Path) -> Result<String, String> {
+    run_git(repo, &["submodule", "sync", "--recursive"])
 }
 
 /// Persisted shell layout/state, restored on launch. Terminals aren't restored

@@ -302,27 +302,17 @@ impl SoftwarePanel {
         let manager = d.manager.as_deref();
 
         // Environment summary — pinned above the scrolling package list.
-        let mut env = v_flex()
+        let env = v_flex()
             .child(ui::section_label(t, "ENVIRONMENT"))
             .child(ui::info_row(
                 t,
                 "Package manager",
-                d.manager.clone().unwrap_or_else(|| "unknown".to_string()),
+                d.manager.clone().unwrap_or_else(|| "not detected".to_string()),
             ))
             .child(ui::info_row(t, "Distro", d.distro.clone()))
             .child(ui::info_row(t, "Mirror", d.mirror.clone()))
             .child(ui::info_row(t, "Root", if d.is_root { "yes" } else { "no" }))
             .child(ui::info_row(t, "Installed", d.total.to_string()));
-        if d.manager.is_none() {
-            env = env.child(
-                div()
-                    .px(t.sp3)
-                    .py(t.sp1)
-                    .text_size(t.fs_sm)
-                    .text_color(t.warn)
-                    .child("No supported package manager detected"),
-            );
-        }
 
         // Filter, then bucket rows into the registry's category order; the
         // long tail of unrecognised packages collects into "Other".
@@ -782,7 +772,10 @@ fn collect(cfg: SshConfig) -> Result<SoftwareData, String> {
             .collect()
     };
 
-    let total = if names.is_empty() { rows.len() } else { names.len() };
+    // `rows` already mirrors whichever source we chose above (the host list, or
+    // the registry-detected set when the manager reports nothing), so its length
+    // is the count the list actually shows under both paths.
+    let total = rows.len();
     let distro = if env.distro_pretty.is_empty() {
         env.distro_id
     } else {

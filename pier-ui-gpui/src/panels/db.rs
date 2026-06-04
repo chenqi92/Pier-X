@@ -8,11 +8,21 @@
 //     work runs on the background executor; render only paints cached state.
 //   * MySQL / Postgres / Redis (remote): pick a saved SSH connection from
 //     data::connections_raw(), open an SshSession with data::connect_blocking on
-//     the background executor, and run a single READ-ONLY listing command
-//     (`SHOW DATABASES` / `SELECT datname …` / `INFO keyspace`) over it. No
-//     writes or DDL are ever issued — the panel honours the read-only default.
+//     the background executor, and drive a read-only drill-down over it:
+//       database list → table list → columns + a `SELECT * … LIMIT 200` preview.
+//     Redis instead lists keys (`SCAN 0 COUNT 100`) and, per key, its
+//     `TYPE` / `TTL` / value preview. Every remote command is issued through
+//     `ssh exec` against the host's own clients (`mysql` / `psql` / `redis-cli`)
+//     and is read-only — no writes or DDL are ever sent, honouring the
+//     read-only default.
+//
+// The query console (SQLite + MySQL + Postgres) only accepts read statements
+// (SELECT / WITH / PRAGMA / EXPLAIN / SHOW / DESCRIBE). Results land in a shared
+// grid; clicking a row expands its columns inline as a key/value list.
 //
 // Connection / query failures surface as a single `t.neg` line under the header.
+
+use std::time::Instant;
 
 use gpui::prelude::*;
 use gpui::{
@@ -22,7 +32,7 @@ use gpui::{
 use gpui_component::{h_flex, v_flex};
 
 use pier_core::services::sqlite::{SqliteClient, SqliteQueryResult};
-use pier_core::ssh::SshConfig;
+use pier_core::ssh::{SshConfig, SshSession};
 
 use crate::data;
 use crate::theme::Theme;
@@ -87,6 +97,119 @@ impl Engine {
                 .collect(),
         }
     }
+
+    /// Field separator the engine's batch output puts between columns. MySQL's
+    /// `-B` mode is tab-delimited (and escapes literal tabs in data); psql is
+    /// driven with `-F <US>` so an unescaped tab in a value can't split a row.
+    fn sep(self) -> char {
+        match self {
+            Engine::Postgres => '\u{1f}',
+            _ => '\t',
+        }
+    }
+
+    /// Quote `name` as a table identifier for this engine's SQL dialect.
+    fn ident(self, name: &str) -> String {
+        match self {
+            Engine::Postgres => format!("\"{}\"", name.replace('"', "\"\"")),
+            _ => format!("`{}`", name.replace('`', "``")),
+        }
+    }
+
+    /// Read-only command listing the tables in `db` (MySQL / Postgres only).
+    fn tables_command(self, db: &str) -> String {
+        match self {
+            Engine::Mysql => format!("mysql -N -B -e {} {} 2>&1", shq("SHOW TABLES"), shq(db)),
+            Engine::Postgres => {
+                let sql =
+                    "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename";
+                format!("psql -w -At -v ON_ERROR_STOP=1 -d {} -c {} 2>&1", shq(db), shq(sql))
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// Read-only command describing `table`'s columns.
+    fn columns_command(self, db: &str, table: &str) -> String {
+        match self {
+            Engine::Mysql => {
+                let sql = format!("DESCRIBE {}", self.ident(table));
+                format!("mysql -N -B -e {} {} 2>&1", shq(&sql), shq(db))
+            }
+            Engine::Postgres => {
+                let sql = format!(
+                    "SELECT column_name, data_type, is_nullable FROM information_schema.columns \
+                     WHERE table_schema='public' AND table_name={} ORDER BY ordinal_position",
+                    sql_lit(table),
+                );
+                format!(
+                    "psql -w -At -F {} -v ON_ERROR_STOP=1 -d {} -c {} 2>&1",
+                    shq("\u{1f}"),
+                    shq(db),
+                    shq(&sql),
+                )
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// Parse `columns_command` output into normalised columns.
+    fn parse_columns(self, out: &str) -> Vec<Col> {
+        let sep = self.sep();
+        out.lines()
+            .filter(|l| !l.is_empty())
+            .filter_map(|l| {
+                let p: Vec<&str> = l.split(sep).collect();
+                let name = p.first().copied().unwrap_or("").to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                let ty = p.get(1).copied().unwrap_or("").to_string();
+                let key = match self {
+                    // MySQL DESCRIBE: Field, Type, Null, Key, …
+                    Engine::Mysql => {
+                        let null = p.get(2).copied().unwrap_or("");
+                        let key = p.get(3).copied().unwrap_or("");
+                        if key == "PRI" {
+                            "PK"
+                        } else if null == "NO" {
+                            "NN"
+                        } else {
+                            ""
+                        }
+                    }
+                    // information_schema.columns: column_name, data_type, is_nullable
+                    _ => {
+                        if p.get(2).copied().unwrap_or("") == "NO" {
+                            "NN"
+                        } else {
+                            ""
+                        }
+                    }
+                };
+                Some(Col {
+                    name,
+                    ty,
+                    key: key.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    /// A read-only SQL command (preview / query console) against `db`. Keeps the
+    /// header row so the grid has column names; psql's footer is suppressed.
+    fn sql_command(self, db: &str, sql: &str) -> String {
+        match self {
+            Engine::Mysql => format!("mysql -B -e {} {} 2>&1", shq(sql), shq(db)),
+            Engine::Postgres => format!(
+                "psql -w -A -F {} -P footer=off -v ON_ERROR_STOP=1 -d {} -c {} 2>&1",
+                shq("\u{1f}"),
+                shq(db),
+                shq(sql),
+            ),
+            _ => String::new(),
+        }
+    }
 }
 
 /// One column of the selected table, normalised across engines.
@@ -95,6 +218,45 @@ struct Col {
     ty: String,
     /// Short key marker (`PK` / `NN`), empty when neither applies.
     key: String,
+}
+
+/// A generic result grid (columns + rows) rendered by `result_table`, shared by
+/// the SQLite query, the remote query console, and the remote table preview.
+struct Grid {
+    columns: Vec<String>,
+    rows: Vec<Vec<String>>,
+    elapsed_ms: u64,
+    error: Option<String>,
+}
+
+impl From<SqliteQueryResult> for Grid {
+    fn from(r: SqliteQueryResult) -> Self {
+        Grid {
+            columns: r.columns,
+            rows: r.rows,
+            elapsed_ms: r.elapsed_ms,
+            error: r.error,
+        }
+    }
+}
+
+/// The `TYPE` / `TTL` / value preview for one selected Redis key.
+struct RedisDetail {
+    key: String,
+    /// Redis type word (`string` / `list` / `set` / `zset` / `hash` / …).
+    ty: String,
+    /// Human TTL: "no expiry", "missing", or "<n>s".
+    ttl: String,
+    /// Value preview, one element per line (capped by the read command).
+    value: String,
+}
+
+/// Which remote drill-down a clickable list row triggers.
+#[derive(Clone, Copy)]
+enum RowAct {
+    Db,
+    Table,
+    Key,
 }
 
 pub struct DbPanel {
@@ -111,12 +273,25 @@ pub struct DbPanel {
     // Remote (MySQL / Postgres / Redis) state.
     conns: Vec<SshConfig>,
     selected_conn: Option<usize>,
+    /// Live session for the selected host, cached so drill-down reuses it.
+    session: Option<SshSession>,
     databases: Vec<String>,
+    selected_db: Option<usize>,
+    // MySQL / Postgres table drill-down.
+    r_tables: Vec<String>,
+    r_selected_table: Option<usize>,
+    r_columns: Vec<Col>,
+    // Redis key drill-down.
+    redis_keys: Vec<String>,
+    selected_key: Option<usize>,
+    redis_detail: Option<RedisDetail>,
 
-    // SQLite query console.
+    // Query console + shared result grid.
     query: String,
     query_focus: FocusHandle,
-    result: Option<SqliteQueryResult>,
+    result: Option<Grid>,
+    /// Index of the result row expanded inline as a key/value list.
+    expanded_row: Option<usize>,
 
     // Shared.
     busy: bool,
@@ -135,10 +310,19 @@ impl DbPanel {
             columns: Vec::new(),
             conns: data::connections_raw(),
             selected_conn: None,
+            session: None,
             databases: Vec::new(),
+            selected_db: None,
+            r_tables: Vec::new(),
+            r_selected_table: None,
+            r_columns: Vec::new(),
+            redis_keys: Vec::new(),
+            selected_key: None,
+            redis_detail: None,
             query: String::new(),
             query_focus: cx.focus_handle(),
             result: None,
+            expanded_row: None,
             busy: false,
             error: None,
         }
@@ -171,28 +355,35 @@ impl DbPanel {
         }
     }
 
-    /// Run the SQLite query box against the open file (read-only intent).
+    /// Run the query box against the open SQLite file or the selected remote
+    /// database (read-only intent — writes are rejected before dispatch).
     fn run_query(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.open_db.clone() else {
-            return;
-        };
         let sql = self.query.trim().to_string();
         if sql.is_empty() {
             return;
         }
-        // Honour the read-only default: only allow read statements.
-        let head = sql
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_ascii_uppercase();
-        if !matches!(head.as_str(), "SELECT" | "PRAGMA" | "EXPLAIN" | "WITH") {
-            self.error = Some("Read-only: only SELECT / WITH / PRAGMA / EXPLAIN".to_string());
+        // Honour the read-only default across every engine.
+        if !is_readonly_sql(&sql) {
+            self.error =
+                Some("Read-only: only SELECT / WITH / PRAGMA / EXPLAIN / SHOW / DESCRIBE".to_string());
             cx.notify();
             return;
         }
+        match self.engine {
+            Engine::Sqlite => self.run_sqlite_query(sql, cx),
+            Engine::Mysql | Engine::Postgres => self.run_remote_query(sql, cx),
+            Engine::Redis => {}
+        }
+    }
+
+    /// Execute `sql` against the open SQLite file on the background executor.
+    fn run_sqlite_query(&mut self, sql: String, cx: &mut Context<Self>) {
+        let Some(path) = self.open_db.clone() else {
+            return;
+        };
         self.busy = true;
         self.error = None;
+        self.expanded_row = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let res = cx
@@ -211,8 +402,52 @@ impl DbPanel {
                         if let Some(err) = &r.error {
                             this.error = Some(err.clone());
                         }
-                        this.result = Some(r);
+                        this.result = Some(Grid::from(r));
                     }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Execute `sql` against the selected remote database over SSH exec.
+    fn run_remote_query(&mut self, sql: String, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let Some(db) = self
+            .selected_db
+            .and_then(|d| self.databases.get(d))
+            .cloned()
+        else {
+            return;
+        };
+        let engine = self.engine;
+        self.busy = true;
+        self.error = None;
+        self.expanded_row = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    let cmd = engine.sql_command(&db, &sql);
+                    let start = Instant::now();
+                    let (code, out) =
+                        session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
+                    let elapsed = start.elapsed().as_millis() as u64;
+                    if code != 0 {
+                        return Err(err_text(out, "query failed"));
+                    }
+                    Ok::<Grid, String>(parse_grid(&out, engine.sep(), elapsed))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = false;
+                match res {
+                    Ok(grid) => this.result = Some(grid),
                     Err(e) => this.error = Some(e),
                 }
                 cx.notify();
@@ -230,12 +465,29 @@ impl DbPanel {
         cx.notify();
     }
 
+    /// Clear every remote drill-down field — used on engine switch and before a
+    /// fresh connect so stale tables / keys never bleed across hosts.
+    fn reset_remote(&mut self) {
+        self.session = None;
+        self.selected_conn = None;
+        self.databases.clear();
+        self.selected_db = None;
+        self.r_tables.clear();
+        self.r_selected_table = None;
+        self.r_columns.clear();
+        self.redis_keys.clear();
+        self.selected_key = None;
+        self.redis_detail = None;
+    }
+
     /// Open a SQLite file and list its tables.
     fn open_sqlite(&mut self, path: String, cx: &mut Context<Self>) {
         self.open_db = Some(path.clone());
         self.tables.clear();
         self.selected_table = None;
         self.columns.clear();
+        self.result = None;
+        self.expanded_row = None;
         self.error = None;
         self.busy = true;
         cx.notify();
@@ -311,15 +563,17 @@ impl DbPanel {
         .detach();
     }
 
-    /// Open an SSH session to the saved connection at `idx` and run the current
-    /// engine's read-only database-listing command over it.
+    /// Open an SSH session to the saved connection at `idx`, cache it, and run
+    /// the current engine's read-only database-listing command over it.
     fn connect_remote(&mut self, idx: usize, cx: &mut Context<Self>) {
         let Some(cfg) = self.conns.get(idx).cloned() else {
             return;
         };
         let engine = self.engine;
+        self.reset_remote();
         self.selected_conn = Some(idx);
-        self.databases.clear();
+        self.result = None;
+        self.expanded_row = None;
         self.error = None;
         self.busy = true;
         cx.notify();
@@ -331,13 +585,225 @@ impl DbPanel {
                     let (_code, out) = session
                         .exec_command_blocking(engine.list_command())
                         .map_err(|e| e.to_string())?;
-                    Ok::<Vec<String>, String>(engine.parse_list(&out))
+                    let dbs = engine.parse_list(&out);
+                    Ok::<(SshSession, Vec<String>), String>((session, dbs))
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = false;
                 match res {
-                    Ok(dbs) => this.databases = dbs,
+                    Ok((session, dbs)) => {
+                        this.session = Some(session);
+                        this.databases = dbs;
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Select the database at `idx`: list its tables (MySQL / Postgres) or scan
+    /// its keys (Redis) over the cached session.
+    fn select_db(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let Some(db) = self.databases.get(idx).cloned() else {
+            return;
+        };
+        let engine = self.engine;
+        self.selected_db = Some(idx);
+        self.r_tables.clear();
+        self.r_selected_table = None;
+        self.r_columns.clear();
+        self.redis_keys.clear();
+        self.selected_key = None;
+        self.redis_detail = None;
+        self.result = None;
+        self.expanded_row = None;
+        self.error = None;
+        self.busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    if matches!(engine, Engine::Redis) {
+                        let n = redis_db_index(&db);
+                        let cmd = format!("redis-cli -n {n} SCAN 0 COUNT 100 2>&1");
+                        let (code, out) =
+                            session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
+                        if code != 0 {
+                            return Err(err_text(out, "SCAN failed"));
+                        }
+                        // First line is the SCAN cursor; the rest are keys.
+                        let keys = out
+                            .lines()
+                            .skip(1)
+                            .map(|l| l.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        Ok::<Vec<String>, String>(keys)
+                    } else {
+                        let cmd = engine.tables_command(&db);
+                        let (code, out) =
+                            session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
+                        if code != 0 {
+                            return Err(err_text(out, "failed to list tables"));
+                        }
+                        let tables = out
+                            .lines()
+                            .map(|l| l.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        Ok::<Vec<String>, String>(tables)
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = false;
+                match res {
+                    Ok(list) => {
+                        if matches!(engine, Engine::Redis) {
+                            this.redis_keys = list;
+                        } else {
+                            this.r_tables = list;
+                        }
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Load columns for the remote table at `idx` and run its preview SELECT.
+    fn open_remote_table(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let Some(db) = self
+            .selected_db
+            .and_then(|d| self.databases.get(d))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(table) = self.r_tables.get(idx).cloned() else {
+            return;
+        };
+        let engine = self.engine;
+        self.r_selected_table = Some(idx);
+        self.r_columns.clear();
+        self.result = None;
+        self.expanded_row = None;
+        self.error = None;
+        self.busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    let cols_cmd = engine.columns_command(&db, &table);
+                    let (cc, cout) = session
+                        .exec_command_blocking(&cols_cmd)
+                        .map_err(|e| e.to_string())?;
+                    if cc != 0 {
+                        return Err(err_text(cout, "failed to list columns"));
+                    }
+                    let columns = engine.parse_columns(&cout);
+
+                    let preview_sql = format!("SELECT * FROM {} LIMIT 200", engine.ident(&table));
+                    let prev_cmd = engine.sql_command(&db, &preview_sql);
+                    let start = Instant::now();
+                    let (pc, pout) = session
+                        .exec_command_blocking(&prev_cmd)
+                        .map_err(|e| e.to_string())?;
+                    let elapsed = start.elapsed().as_millis() as u64;
+                    if pc != 0 {
+                        return Err(err_text(pout, "preview failed"));
+                    }
+                    let grid = parse_grid(&pout, engine.sep(), elapsed);
+                    Ok::<(Vec<Col>, Grid), String>((columns, grid))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = false;
+                match res {
+                    Ok((cols, grid)) => {
+                        this.r_columns = cols;
+                        this.result = Some(grid);
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Select the Redis key at `idx` and fetch its type, TTL, and value preview.
+    fn select_key(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let Some(db) = self
+            .selected_db
+            .and_then(|d| self.databases.get(d))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(key) = self.redis_keys.get(idx).cloned() else {
+            return;
+        };
+        self.selected_key = Some(idx);
+        self.redis_detail = None;
+        self.error = None;
+        self.busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    let n = redis_db_index(&db);
+                    let kq = shq(&key);
+                    // TYPE + TTL in one round-trip; value command depends on type.
+                    let head = format!(
+                        "redis-cli -n {n} TYPE {kq} 2>&1; redis-cli -n {n} TTL {kq} 2>&1"
+                    );
+                    let (_c, hout) = session
+                        .exec_command_blocking(&head)
+                        .map_err(|e| e.to_string())?;
+                    let mut hl = hout.lines();
+                    let ty = hl.next().unwrap_or("").trim().to_string();
+                    let ttl_raw = hl.next().unwrap_or("").trim().to_string();
+                    let val_cmd = redis_value_command(&n, &ty, &key);
+                    let value = if val_cmd.is_empty() {
+                        String::new()
+                    } else {
+                        session
+                            .exec_command_blocking(&val_cmd)
+                            .map_err(|e| e.to_string())?
+                            .1
+                            .trim_end()
+                            .to_string()
+                    };
+                    Ok::<RedisDetail, String>(RedisDetail {
+                        key,
+                        ty,
+                        ttl: human_ttl(&ttl_raw),
+                        value,
+                    })
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = false;
+                match res {
+                    Ok(detail) => this.redis_detail = Some(detail),
                     Err(e) => this.error = Some(e),
                 }
                 cx.notify();
@@ -364,9 +830,14 @@ impl DbPanel {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
-                    this.engine = e;
-                    this.error = None;
-                    cx.notify();
+                    if this.engine != e {
+                        this.engine = e;
+                        this.reset_remote();
+                        this.result = None;
+                        this.expanded_row = None;
+                        this.error = None;
+                        cx.notify();
+                    }
                 }),
             )
             .child(e.label())
@@ -492,7 +963,7 @@ impl DbPanel {
             col = col
                 .child(ui::section_label(t, "QUERY"))
                 .child(self.query_console(cx))
-                .child(self.result_table());
+                .child(self.result_table(cx));
         }
 
         col.into_any_element()
@@ -550,36 +1021,157 @@ impl DbPanel {
             }
         }
 
-        if !self.databases.is_empty() {
+        if self.session.is_some() {
             col = col.child(ui::section_label(t, format!("DATABASES · {}", self.databases.len())));
-            for (i, db) in self.databases.iter().enumerate() {
-                col = col.child(
-                    h_flex()
-                        .id(SharedString::from(format!("rdb-{i}")))
-                        .items_center()
-                        .gap(t.sp2)
-                        .h(px(26.0))
-                        .px(t.sp3)
-                        .child(ui::icon("database", px(14.0), t.muted))
-                        .child(
-                            div()
-                                .flex_1()
-                                .overflow_hidden()
-                                .font_family(t.mono.clone())
-                                .text_size(t.fs_sm)
-                                .text_color(t.ink_2)
-                                .child(db.clone()),
-                        ),
-                );
+            if self.databases.is_empty() && !self.busy && self.error.is_none() {
+                col = col.child(hint(t, "No databases reported (read-only listing)"));
             }
-        } else if self.selected_conn.is_some() && !self.busy && self.error.is_none() {
-            col = col.child(hint(t, "No databases reported (read-only listing)"));
+            for (i, db) in self.databases.iter().enumerate() {
+                let selected = self.selected_db == Some(i);
+                col = col.child(self.nav_row(cx, RowAct::Db, i, "database", db.clone(), false, selected));
+            }
+        }
+
+        if self.selected_db.is_some() {
+            if matches!(self.engine, Engine::Redis) {
+                col = col.child(ui::section_label(t, format!("KEYS · {}", self.redis_keys.len())));
+                if self.redis_keys.is_empty() && !self.busy {
+                    col = col.child(hint(t, "No keys"));
+                }
+                for (i, k) in self.redis_keys.iter().enumerate() {
+                    let selected = self.selected_key == Some(i);
+                    col = col.child(self.nav_row(cx, RowAct::Key, i, "asterisk", k.clone(), true, selected));
+                }
+                if let Some(detail) = &self.redis_detail {
+                    col = col.child(self.redis_detail_view(detail));
+                }
+            } else {
+                col = col.child(ui::section_label(t, format!("TABLES · {}", self.r_tables.len())));
+                if self.r_tables.is_empty() && !self.busy {
+                    col = col.child(hint(t, "No tables"));
+                }
+                for (i, table) in self.r_tables.iter().enumerate() {
+                    let selected = self.r_selected_table == Some(i);
+                    col = col.child(self.nav_row(cx, RowAct::Table, i, "layers", table.clone(), true, selected));
+                }
+
+                if self.r_selected_table.is_some() {
+                    col = col.child(ui::section_label(t, format!("COLUMNS · {}", self.r_columns.len())));
+                    for c in &self.r_columns {
+                        col = col.child(column_row(t, c));
+                    }
+                }
+
+                col = col
+                    .child(ui::section_label(t, "QUERY"))
+                    .child(self.query_console(cx))
+                    .child(self.result_table(cx));
+            }
         }
 
         col.into_any_element()
     }
 
-    /// SQLite query input + Run button.
+    /// A clickable single-line list row (database / table / Redis key).
+    fn nav_row(
+        &self,
+        cx: &mut Context<Self>,
+        act: RowAct,
+        i: usize,
+        glyph: &'static str,
+        label: String,
+        mono: bool,
+        selected: bool,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        let tag = match act {
+            RowAct::Db => "rdb",
+            RowAct::Table => "rtbl",
+            RowAct::Key => "rkey",
+        };
+        let text = div()
+            .flex_1()
+            .overflow_hidden()
+            .text_color(if selected { t.ink } else { t.ink_2 });
+        let text = if mono {
+            text.font_family(t.mono.clone()).text_size(t.fs_sm)
+        } else {
+            text
+        };
+        h_flex()
+            .id(SharedString::from(format!("{tag}-{i}")))
+            .items_center()
+            .gap(t.sp2)
+            .h(px(26.0))
+            .px(t.sp3)
+            .when(selected, |d| d.bg(t.accent_dim))
+            .when(!selected, |d| d.hover(|s| s.bg(t.hover)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| match act {
+                    RowAct::Db => this.select_db(i, cx),
+                    RowAct::Table => this.open_remote_table(i, cx),
+                    RowAct::Key => this.select_key(i, cx),
+                }),
+            )
+            .child(ui::icon(glyph, px(14.0), if selected { t.accent } else { t.muted }))
+            .child(text.child(label))
+    }
+
+    /// The selected Redis key's type badge, TTL, and value preview.
+    fn redis_detail_view(&self, d: &RedisDetail) -> impl IntoElement {
+        let t = &self.theme;
+        v_flex()
+            .gap(t.sp2)
+            .mx(t.sp3)
+            .mt(t.sp2)
+            .p(t.sp2)
+            .rounded(t.radius_sm)
+            .bg(t.panel_2)
+            .border_1()
+            .border_color(t.line_2)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(t.sp2)
+                    .child(
+                        div()
+                            .px(px(5.0))
+                            .py(px(1.0))
+                            .rounded(t.radius_sm)
+                            .bg(t.accent_subtle)
+                            .font_family(t.mono.clone())
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(t.fs_sm)
+                            .text_color(t.accent)
+                            .child(redis_type_badge(&d.ty)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .font_family(t.mono.clone())
+                            .text_size(t.fs_sm)
+                            .text_color(t.ink)
+                            .child(d.key.clone()),
+                    )
+                    .child(div().text_size(t.fs_sm).text_color(t.muted).child(format!("TTL {}", d.ttl))),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.ink_2)
+                    .child(if d.value.is_empty() {
+                        "(empty)".to_string()
+                    } else {
+                        d.value.clone()
+                    }),
+            )
+    }
+
+    /// Query input + Run button (SQLite + MySQL / Postgres).
     fn query_console(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let empty = self.query.is_empty();
@@ -625,8 +1217,9 @@ impl DbPanel {
             )
     }
 
-    /// Render the last query result as a scrollable table (capped at 200 rows).
-    fn result_table(&self) -> AnyElement {
+    /// Render the last query / preview result as a scrollable table (capped at
+    /// 200 rows). Clicking a row expands its columns inline as key/value pairs.
+    fn result_table(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = &self.theme;
         let Some(r) = &self.result else {
             return div().into_any_element();
@@ -662,15 +1255,37 @@ impl DbPanel {
                 .border_color(t.line)
                 .children(r.columns.iter().map(|c| cell(c.clone(), true))),
         );
-        for row in r.rows.iter().take(200) {
+        for (i, row) in r.rows.iter().take(200).enumerate() {
+            let selected = self.expanded_row == Some(i);
             table = table.child(
                 h_flex()
+                    .id(SharedString::from(format!("res-row-{i}")))
                     .border_b_1()
                     .border_color(t.line)
+                    .cursor_pointer()
+                    .when(selected, |d| d.bg(t.accent_dim))
+                    .when(!selected, |d| d.hover(|s| s.bg(t.hover)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                            this.expanded_row = if this.expanded_row == Some(i) {
+                                None
+                            } else {
+                                Some(i)
+                            };
+                            cx.notify();
+                        }),
+                    )
                     .children(row.iter().map(|v| cell(v.clone(), false))),
             );
         }
         let total = r.rows.len();
+        // The expanded row's key/value detail, rendered full-width below the
+        // horizontally-scrolling grid so long values stay readable.
+        let detail: Option<AnyElement> = self
+            .expanded_row
+            .and_then(|i| r.rows.get(i))
+            .map(|row| row_detail(t, &r.columns, row).into_any_element());
         v_flex()
             .child(ui::section_label(
                 t,
@@ -683,6 +1298,7 @@ impl DbPanel {
                     .px(t.sp3)
                     .child(table),
             )
+            .children(detail)
             .when(total > 200, |d| d.child(hint(t, "Showing first 200 rows")))
             .into_any_element()
     }
@@ -699,6 +1315,8 @@ impl Render for DbPanel {
                 .as_deref()
                 .map(file_name)
                 .unwrap_or_else(|| Engine::Sqlite.label().to_string())
+        } else if let Some(db) = self.selected_db.and_then(|d| self.databases.get(d)) {
+            format!("{} · {}", self.engine.label(), db)
         } else {
             self.engine.label().to_string()
         };
@@ -783,12 +1401,157 @@ fn column_row(t: &Theme, c: &Col) -> impl IntoElement {
         })
 }
 
+/// One result row expanded as a vertical key/value list (column: value).
+fn row_detail(t: &Theme, columns: &[String], row: &[String]) -> impl IntoElement {
+    let mut col = v_flex()
+        .gap(px(2.0))
+        .mx(t.sp3)
+        .my(t.sp2)
+        .p(t.sp2)
+        .rounded(t.radius_sm)
+        .bg(t.panel_2)
+        .border_1()
+        .border_color(t.line_2);
+    for (i, name) in columns.iter().enumerate() {
+        let value = row.get(i).cloned().unwrap_or_default();
+        col = col.child(
+            h_flex()
+                .gap(t.sp2)
+                .items_start()
+                .child(
+                    div()
+                        .w(px(120.0))
+                        .flex_none()
+                        .font_family(t.mono.clone())
+                        .text_size(t.fs_sm)
+                        .text_color(t.muted)
+                        .child(name.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .font_family(t.mono.clone())
+                        .text_size(t.fs_sm)
+                        .text_color(t.ink)
+                        .child(value),
+                ),
+        );
+    }
+    col
+}
+
 /// The trailing path component (file name) of `path`.
 fn file_name(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string())
+}
+
+/// True for read-only statements honoured by the panel's read-only default.
+fn is_readonly_sql(sql: &str) -> bool {
+    let head = sql
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    matches!(
+        head.as_str(),
+        "SELECT" | "WITH" | "PRAGMA" | "EXPLAIN" | "SHOW" | "DESCRIBE" | "DESC"
+    )
+}
+
+/// Wrap `s` in shell single quotes, escaping embedded single quotes so the
+/// remote shell receives it verbatim.
+fn shq(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// A single-quoted SQL string literal (embedded quotes doubled).
+fn sql_lit(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// The numeric index in a Redis `dbN` keyspace name, defaulting to `0`.
+fn redis_db_index(db: &str) -> String {
+    db.strip_prefix("db")
+        .filter(|n| n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty())
+        .unwrap_or("0")
+        .to_string()
+}
+
+/// The read command for a Redis key, chosen by its type. Empty for types with
+/// no simple preview.
+fn redis_value_command(n: &str, ty: &str, key: &str) -> String {
+    let k = shq(key);
+    match ty {
+        "string" => format!("redis-cli -n {n} GET {k} 2>&1"),
+        "list" => format!("redis-cli -n {n} LRANGE {k} 0 50 2>&1"),
+        "set" => format!("redis-cli -n {n} SMEMBERS {k} 2>&1"),
+        "zset" => format!("redis-cli -n {n} ZRANGE {k} 0 50 WITHSCORES 2>&1"),
+        "hash" => format!("redis-cli -n {n} HGETALL {k} 2>&1"),
+        _ => String::new(),
+    }
+}
+
+/// Short uppercase badge for a Redis type word.
+fn redis_type_badge(ty: &str) -> &'static str {
+    match ty {
+        "string" => "STR",
+        "list" => "LIST",
+        "set" => "SET",
+        "zset" => "ZSET",
+        "hash" => "HASH",
+        "stream" => "STRM",
+        _ => "—",
+    }
+}
+
+/// A human TTL: `-1` → no expiry, `-2` → missing, otherwise `<n>s`.
+fn human_ttl(raw: &str) -> String {
+    match raw.trim() {
+        "-1" => "no expiry".to_string(),
+        "-2" => "missing".to_string(),
+        other => match other.parse::<i64>() {
+            Ok(n) => format!("{n}s"),
+            Err(_) => other.to_string(),
+        },
+    }
+}
+
+/// Use `fallback` when the command produced no usable error text.
+fn err_text(out: String, fallback: &str) -> String {
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Parse separator-delimited batch output into a [`Grid`]: first non-empty line
+/// is the header, the rest are rows.
+fn parse_grid(out: &str, sep: char, elapsed_ms: u64) -> Grid {
+    let mut it = out.lines().filter(|l| !l.is_empty());
+    let Some(header) = it.next() else {
+        return Grid {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            elapsed_ms,
+            error: None,
+        };
+    };
+    let columns = header.split(sep).map(|s| s.to_string()).collect();
+    let rows = it
+        .map(|l| l.split(sep).map(|s| s.to_string()).collect())
+        .collect();
+    Grid {
+        columns,
+        rows,
+        elapsed_ms,
+        error: None,
+    }
 }
 
 /// Scan the working dir (one level) for SQLite database files, sorted.

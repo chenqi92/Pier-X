@@ -27,6 +27,9 @@ use gpui_component::{h_flex, v_flex, TitleBar};
 use pier_core::ssh::{AuthMethod, SshConfig};
 
 use crate::data::{self, ConnRow, DetectedService, FileEntry, MonStat, ServiceStatus};
+use crate::dialogs::{
+    BroadcastDialog, BroadcastTarget, DialogEvent, EgressDialog, HostsHealthDialog, TunnelDialog,
+};
 use crate::git_panel::GitPanelView;
 use crate::panels::PanelViews;
 use crate::settings::SettingsView;
@@ -150,6 +153,14 @@ pub struct Shell {
     panels: PanelViews,
     /// The Settings overlay's independent view (hosted in overlay_layer).
     settings_view: Entity<SettingsView>,
+    /// The four overlay dialogs (broadcast/egress/port-forward/hosts-health),
+    /// each an independent view fed its data on open and hosted in
+    /// overlay_layer. Constructed once; each emits [`DialogEvent::Close`] to
+    /// dismiss the overlay (subscribed in `Shell::new`).
+    broadcast_view: Entity<BroadcastDialog>,
+    egress_view: Entity<EgressDialog>,
+    tunnel_view: Entity<TunnelDialog>,
+    hosts_health_view: Entity<HostsHealthDialog>,
     /// Which top-bar menu is open (index into MENUS), if any.
     open_menu: Option<usize>,
     /// Active centered overlay (Settings / command palette), if any.
@@ -221,6 +232,10 @@ enum Overlay {
     Settings,
     Palette,
     NewConn,
+    Broadcast,
+    Egress,
+    PortForward,
+    HostsHealth,
 }
 
 /// Number of text fields in the connection form (name, host, port,
@@ -260,6 +275,10 @@ enum Cmd {
     OpenSettings,
     OpenPalette,
     OpenNewConn,
+    OpenBroadcast,
+    OpenEgress,
+    OpenPortForward,
+    OpenHostsHealth,
     CloseOverlay,
     CloseTab,
     CloseTabAt(usize),
@@ -292,9 +311,18 @@ const MENUS: &[(&str, &[(&str, Cmd)])] = &[
             ("Toggle Theme", Cmd::ToggleTheme),
             ("Toggle Right Panel", Cmd::ToggleRightPanel),
             ("Command Palette", Cmd::OpenPalette),
+            ("Host Health", Cmd::OpenHostsHealth),
+            ("Egress Profiles", Cmd::OpenEgress),
         ],
     ),
-    ("Session", &[("New Terminal", Cmd::NewTerminal)]),
+    (
+        "Session",
+        &[
+            ("New Terminal", Cmd::NewTerminal),
+            ("Broadcast to Terminals", Cmd::OpenBroadcast),
+            ("Port Forwarding", Cmd::OpenPortForward),
+        ],
+    ),
     ("Help", &[("About Pier-X", Cmd::OpenSettings)]),
 ];
 
@@ -321,6 +349,33 @@ impl Shell {
         let terminal = cx.new(|cx| TerminalView::new(cx));
         let panels = PanelViews::new(cx);
         let settings_view = cx.new(SettingsView::new);
+        let broadcast_view = cx.new(BroadcastDialog::new);
+        let egress_view = cx.new(EgressDialog::new);
+        let tunnel_view = cx.new(TunnelDialog::new);
+        let hosts_health_view = cx.new(HostsHealthDialog::new);
+        // Esc / ✕ / scrim-click inside any dialog emits DialogEvent::Close;
+        // dismiss the overlay from here (the scrim itself routes through
+        // Cmd::CloseOverlay, so both paths converge on Overlay::None).
+        for sub in [
+            cx.subscribe(&broadcast_view, |this, _, _: &DialogEvent, cx| {
+                this.overlay = Overlay::None;
+                cx.notify();
+            }),
+            cx.subscribe(&egress_view, |this, _, _: &DialogEvent, cx| {
+                this.overlay = Overlay::None;
+                cx.notify();
+            }),
+            cx.subscribe(&tunnel_view, |this, _, _: &DialogEvent, cx| {
+                this.overlay = Overlay::None;
+                cx.notify();
+            }),
+            cx.subscribe(&hosts_health_view, |this, _, _: &DialogEvent, cx| {
+                this.overlay = Overlay::None;
+                cx.notify();
+            }),
+        ] {
+            sub.detach();
+        }
         Self::start_monitor(cx);
         Self::start_sidebar_tasks(cx);
         Self {
@@ -344,6 +399,10 @@ impl Shell {
             mon: None,
             panels,
             settings_view,
+            broadcast_view,
+            egress_view,
+            tunnel_view,
+            hosts_health_view,
             open_menu: None,
             overlay: Overlay::None,
             sidebar_w: st.sidebar_w.map(px),
@@ -671,6 +730,10 @@ impl Shell {
         let mut v = vec![
             ("plus", "New Terminal", Cmd::NewTerminal),
             ("server", "New Connection", Cmd::OpenNewConn),
+            ("square-terminal", "Broadcast to Terminals", Cmd::OpenBroadcast),
+            ("network", "Port Forwarding", Cmd::OpenPortForward),
+            ("activity", "Host Health", Cmd::OpenHostsHealth),
+            ("shield", "Egress Profiles", Cmd::OpenEgress),
             ("settings", "Settings", Cmd::OpenSettings),
         ];
         for (i, (_, glyph, name, _)) in TOOLS.iter().enumerate() {
@@ -807,6 +870,64 @@ impl Shell {
                 self.conn_edit = None;
                 self.conn_orig_auth = None;
                 window.focus(&self.conn_focus, cx);
+            }
+            Cmd::OpenBroadcast => {
+                // Every tab is a candidate; `live` is true only for tabs with a
+                // real SSH session, so the dialog never targets a local PTY
+                // (and a still-connecting SSH tab reads as not-live until ready).
+                let mut targets = Vec::with_capacity(self.tabs.len());
+                for (i, tab) in self.tabs.iter().enumerate() {
+                    let live = tab.terminal.read(cx).session().is_some();
+                    targets.push(BroadcastTarget {
+                        tab_index: i,
+                        title: tab.title.clone(),
+                        terminal: tab.terminal.clone(),
+                        live,
+                    });
+                }
+                self.broadcast_view
+                    .update(cx, |v, cx| v.set_targets(targets, cx));
+                self.overlay = Overlay::Broadcast;
+                let fh = self.broadcast_view.read(cx).focus_handle();
+                window.focus(&fh, cx);
+            }
+            Cmd::OpenEgress => {
+                self.egress_view.update(cx, |v, cx| v.reload(cx));
+                self.overlay = Overlay::Egress;
+                let fh = self.egress_view.read(cx).focus_handle();
+                window.focus(&fh, cx);
+            }
+            Cmd::OpenPortForward => {
+                // Clone the active tab's live session (if any) so the dialog can
+                // open ssh -L forwards over the same multiplexed connection.
+                let active = self.tabs.get(self.active_tab).and_then(|tab| {
+                    tab.terminal
+                        .read(cx)
+                        .session()
+                        .map(|s| (tab.title.clone(), s))
+                });
+                self.tunnel_view.update(cx, |v, cx| v.set_active(active, cx));
+                self.overlay = Overlay::PortForward;
+                let fh = self.tunnel_view.read(cx).focus_handle();
+                window.focus(&fh, cx);
+            }
+            Cmd::OpenHostsHealth => {
+                // Hand the dialog the live sessions from open SSH tabs, keyed by
+                // `user@host` (the SSH tab title) so its deep probe can ride an
+                // existing connection instead of dialing again.
+                let mut sessions = HashMap::new();
+                for tab in &self.tabs {
+                    if matches!(tab.kind, TabKind::Ssh) {
+                        if let Some(s) = tab.terminal.read(cx).session() {
+                            sessions.insert(tab.title.clone(), s);
+                        }
+                    }
+                }
+                self.hosts_health_view
+                    .update(cx, |v, cx| v.set_sessions(sessions, cx));
+                self.overlay = Overlay::HostsHealth;
+                let fh = self.hosts_health_view.read(cx).focus_handle();
+                window.focus(&fh, cx);
             }
             Cmd::CloseOverlay => self.overlay = Overlay::None,
             Cmd::CloseTab => {
@@ -1212,6 +1333,8 @@ impl Shell {
                     .child(self.menu_btn(cx, 4))
                     .child(div().flex_1())
                     .child(self.action_btn(cx, "command", Cmd::OpenPalette))
+                    .child(self.action_btn(cx, "square-terminal", Cmd::OpenBroadcast))
+                    .child(self.action_btn(cx, "network", Cmd::OpenPortForward))
                     .child(self.action_btn(cx, "plus", Cmd::NewTerminal))
                     .child(self.action_btn(cx, theme_icon, Cmd::ToggleTheme))
                     .child(self.action_btn(cx, "settings", Cmd::OpenSettings)),
@@ -2749,6 +2872,10 @@ impl Shell {
             Overlay::Settings => self.settings_view.clone().into_any_element(),
             Overlay::Palette => self.palette_card(cx).into_any_element(),
             Overlay::NewConn => self.conn_card(cx).into_any_element(),
+            Overlay::Broadcast => self.broadcast_view.clone().into_any_element(),
+            Overlay::Egress => self.egress_view.clone().into_any_element(),
+            Overlay::PortForward => self.tunnel_view.clone().into_any_element(),
+            Overlay::HostsHealth => self.hosts_health_view.clone().into_any_element(),
             Overlay::None => div().into_any_element(),
         };
         div()

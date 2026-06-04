@@ -13,12 +13,6 @@
 // probe) runs on `cx.background_executor()`; the result is written back
 // to the view and `cx.notify()`d. Colours / sizes / fonts come only
 // from `self.theme`.
-//
-// NOTE: the module-wide `dead_code` allow below is temporary. These
-// dialogs are constructed + routed by shell.rs's overlay layer, a change
-// that lands once the concurrent Git-panel extraction releases shell.rs;
-// drop this allow when that wiring is in.
-#![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;

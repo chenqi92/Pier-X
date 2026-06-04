@@ -241,8 +241,13 @@ impl TerminalView {
     /// Feed `text` to the PTY as if it were typed. Used by the Broadcast
     /// dialog to fan one command into many SSH sessions at once. No-op
     /// until the shell channel is ready (a still-connecting tab is skipped).
-    #[allow(dead_code)]
     pub fn send_input(&mut self, text: &str) {
+        // Broadcast must never write a local terminal: only accept fanned-in
+        // input on tabs backed by a live SSH session (defends D3 alongside the
+        // shell's live-target derivation and the dialog's own per-target gate).
+        if self.session.is_none() {
+            return;
+        }
         if let Some(term) = &self.term {
             let _ = term.write(text.as_bytes());
             // Nudge the poll loop so the echoed input shows promptly.

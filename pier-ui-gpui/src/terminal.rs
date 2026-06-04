@@ -238,6 +238,18 @@ impl TerminalView {
         self.session.clone()
     }
 
+    /// Feed `text` to the PTY as if it were typed. Used by the Broadcast
+    /// dialog to fan one command into many SSH sessions at once. No-op
+    /// until the shell channel is ready (a still-connecting tab is skipped).
+    #[allow(dead_code)]
+    pub fn send_input(&mut self, text: &str) {
+        if let Some(term) = &self.term {
+            let _ = term.write(text.as_bytes());
+            // Nudge the poll loop so the echoed input shows promptly.
+            self.dirty.store(true, Ordering::Release);
+        }
+    }
+
     fn on_scroll(&mut self, ev: &ScrollWheelEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let line_h = (f32::from(self.theme.fs_body) * LINE_RATIO).max(1.0);
         let dy = match ev.delta {

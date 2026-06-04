@@ -229,6 +229,15 @@ impl TerminalView {
         (self.cols, self.rows)
     }
 
+    /// The live SSH session backing this terminal, or `None` for a local shell.
+    /// `SshSession` is `Clone` (Arc over a multiplexed russh connection), so the
+    /// returned handle shares the one connection the interactive shell uses —
+    /// reuse it for service detection / port forwarding instead of dialing again.
+    #[allow(dead_code)]
+    pub fn session(&self) -> Option<SshSession> {
+        self.session.clone()
+    }
+
     fn on_scroll(&mut self, ev: &ScrollWheelEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let line_h = (f32::from(self.theme.fs_body) * LINE_RATIO).max(1.0);
         let dy = match ev.delta {

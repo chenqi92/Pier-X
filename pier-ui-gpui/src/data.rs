@@ -6,7 +6,7 @@
 // synchronous and cheap (single git invocation / one read_dir / one JSON
 // load); the shell calls them on construction and on demand, not per frame.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,7 +16,7 @@ use pier_core::connections::ConnectionStore;
 pub use pier_core::services::git::{CommitInfo, StashEntry};
 use pier_core::services::git::{FileStatus, GitClient};
 use pier_core::services::local_monitor;
-use pier_core::ssh::{HostKeyVerifier, SshConfig, SshSession};
+use pier_core::ssh::{AuthMethod, HostKeyVerifier, SshConfig, SshSession};
 
 /// One entry in the Files sidebar.
 pub struct FileEntry {
@@ -28,10 +28,23 @@ pub struct FileEntry {
     pub size: Option<u64>,
 }
 
+/// Which authentication method a saved connection uses, for the
+/// sidebar's auth badge.
+#[derive(Clone, Copy, PartialEq)]
+pub enum AuthKind {
+    Password,
+    Key,
+    Agent,
+}
+
 /// One saved SSH connection in the Servers sidebar.
 pub struct ConnRow {
     pub name: String,
     pub addr: String,
+    /// Host and user kept separately so the sidebar can filter on them.
+    pub host: String,
+    pub user: String,
+    pub auth: AuthKind,
     pub online: bool,
 }
 
@@ -124,9 +137,75 @@ pub fn load_connections() -> Vec<ConnRow> {
         .map(|c| ConnRow {
             name: c.name.clone(),
             addr: format!("{}@{}:{}", c.user, c.host, c.port),
+            host: c.host.clone(),
+            user: c.user.clone(),
+            auth: auth_kind(&c.auth),
             online: false,
         })
         .collect()
+}
+
+/// Collapse the full [`AuthMethod`] enum into the three badge buckets
+/// the sidebar distinguishes.
+fn auth_kind(auth: &AuthMethod) -> AuthKind {
+    match auth {
+        AuthMethod::PublicKeyFile { .. } => AuthKind::Key,
+        AuthMethod::Agent | AuthMethod::Auto | AuthMethod::AutoChain { .. } => AuthKind::Agent,
+        AuthMethod::KeychainPassword { .. } | AuthMethod::DirectPassword { .. } => {
+            AuthKind::Password
+        }
+    }
+}
+
+/// Remove the saved connection at `index` and persist. Out-of-range
+/// indices are a no-op (idempotent).
+pub fn remove_connection(index: usize) -> Result<(), String> {
+    let mut store = ConnectionStore::load_default().map_err(|e| e.to_string())?;
+    store.remove(index);
+    store.save_default().map_err(|e| e.to_string())
+}
+
+/// Replace the saved connection at `index` with `cfg` and persist.
+pub fn update_connection(index: usize, cfg: SshConfig) -> Result<(), String> {
+    let mut store = ConnectionStore::load_default().map_err(|e| e.to_string())?;
+    if index >= store.connections.len() {
+        return Err("connection index out of range".to_string());
+    }
+    store.connections[index] = cfg;
+    store.save_default().map_err(|e| e.to_string())
+}
+
+fn favorites_path() -> Option<PathBuf> {
+    pier_core::paths::config_dir().map(|d| d.join("pier-x-gpui-favorites.conf"))
+}
+
+/// Favorite connection names, persisted locally (one name per line).
+pub fn load_favorites() -> HashSet<String> {
+    let mut set = HashSet::new();
+    let Some(p) = favorites_path() else {
+        return set;
+    };
+    if let Ok(text) = std::fs::read_to_string(&p) {
+        for line in text.lines() {
+            let l = line.trim();
+            if !l.is_empty() {
+                set.insert(l.to_string());
+            }
+        }
+    }
+    set
+}
+
+/// Persist the favorite-connection name set (best-effort).
+pub fn save_favorites(favs: &HashSet<String>) {
+    let Some(p) = favorites_path() else {
+        return;
+    };
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let body = favs.iter().cloned().collect::<Vec<_>>().join("\n");
+    let _ = std::fs::write(&p, body);
 }
 
 /// Git status for the repo at `path`, or `None` if it isn't a repo.

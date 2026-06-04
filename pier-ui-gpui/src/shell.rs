@@ -12,7 +12,7 @@
 // sidebar toggle, connection-row selection, collapse right panel — all native
 // GPUI state on the Shell entity. The center is the real TerminalView.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -158,6 +158,16 @@ pub struct Shell {
     conn_focus: FocusHandle,
     /// Error from the last add-connection attempt.
     conn_error: Option<String>,
+    /// When the New Connection overlay is editing an existing saved
+    /// connection, the store index being edited; `None` = add a new one.
+    conn_edit: Option<usize>,
+    /// Servers sidebar filter text + its focus handle.
+    conn_search: String,
+    conn_search_focus: FocusHandle,
+    /// Favorite connection names (persisted via `data::save_favorites`).
+    conn_favorites: HashSet<String>,
+    /// Store index of the connection row awaiting delete confirmation.
+    conn_confirm_delete: Option<usize>,
 }
 
 /// A per-file staging action in the Git panel.
@@ -207,6 +217,16 @@ enum Overlay {
 
 /// Labels for the New Connection form fields (index = `conn_field`).
 const CONN_FIELDS: [&str; 4] = ["Name", "Host", "Port", "User"];
+
+/// A per-row action in the Servers sidebar (dispatched by store index).
+#[derive(Clone, Copy)]
+enum ConnAction {
+    ToggleFavorite,
+    Edit,
+    AskDelete,
+    ConfirmDelete,
+    CancelDelete,
+}
 
 /// A shell-wide command, dispatched from menus, the command palette, and
 /// title-bar buttons through `Shell::run`.
@@ -315,6 +335,11 @@ impl Shell {
             conn_field: 0,
             conn_focus: cx.focus_handle(),
             conn_error: None,
+            conn_edit: None,
+            conn_search: String::new(),
+            conn_search_focus: cx.focus_handle(),
+            conn_favorites: data::load_favorites(),
+            conn_confirm_delete: None,
         }
     }
 
@@ -359,12 +384,14 @@ impl Shell {
         }
     }
 
-    /// Validate the New Connection form, persist it, and reload the list.
+    /// Validate the New/Edit Connection form, persist it, and reload.
+    /// In edit mode the existing config's auth / group / databases are
+    /// preserved — only the addressing fields are rewritten here.
     fn submit_conn(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let name = self.conn_form[0].trim();
-        let host = self.conn_form[1].trim();
+        let name = self.conn_form[0].trim().to_string();
+        let host = self.conn_form[1].trim().to_string();
         let port_s = self.conn_form[2].trim();
-        let user = self.conn_form[3].trim();
+        let user = self.conn_form[3].trim().to_string();
         if host.is_empty() || user.is_empty() {
             self.conn_error = Some("Host and User are required".to_string());
             cx.notify();
@@ -382,17 +409,116 @@ impl Shell {
                 }
             }
         };
-        let label = if name.is_empty() { host } else { name };
-        let mut cfg = pier_core::ssh::SshConfig::new(label, host, user);
-        cfg.port = port;
-        match data::add_connection(cfg) {
+        let label = if name.is_empty() { host.clone() } else { name };
+        let result = match self.conn_edit {
+            Some(idx) => match data::connections_raw().into_iter().nth(idx) {
+                Some(mut cfg) => {
+                    cfg.name = label;
+                    cfg.host = host;
+                    cfg.user = user;
+                    cfg.port = port;
+                    data::update_connection(idx, cfg)
+                }
+                None => Err("connection no longer exists".to_string()),
+            },
+            None => {
+                let mut cfg = pier_core::ssh::SshConfig::new(label, host, user);
+                cfg.port = port;
+                data::add_connection(cfg)
+            }
+        };
+        match result {
             Ok(()) => {
                 self.conns = data::load_connections();
                 self.conn_error = None;
+                self.conn_edit = None;
                 self.run(Cmd::CloseOverlay, window, cx);
             }
             Err(e) => {
                 self.conn_error = Some(e);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Open the connection overlay pre-filled to edit store row `idx`.
+    fn open_edit_conn(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(cfg) = data::connections_raw().into_iter().nth(idx) else {
+            return;
+        };
+        self.conn_form = [
+            cfg.name.clone(),
+            cfg.host.clone(),
+            cfg.port.to_string(),
+            cfg.user.clone(),
+        ];
+        self.conn_field = 0;
+        self.conn_error = None;
+        self.conn_edit = Some(idx);
+        self.overlay = Overlay::NewConn;
+        window.focus(&self.conn_focus, cx);
+        cx.notify();
+    }
+
+    /// Dispatch a Servers-row action by store index.
+    fn conn_action(
+        &mut self,
+        idx: usize,
+        action: ConnAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            ConnAction::ToggleFavorite => {
+                if let Some(c) = self.conns.get(idx) {
+                    let name = c.name.clone();
+                    if !self.conn_favorites.remove(&name) {
+                        self.conn_favorites.insert(name);
+                    }
+                    data::save_favorites(&self.conn_favorites);
+                }
+            }
+            ConnAction::Edit => self.open_edit_conn(idx, window, cx),
+            ConnAction::AskDelete => self.conn_confirm_delete = Some(idx),
+            ConnAction::CancelDelete => self.conn_confirm_delete = None,
+            ConnAction::ConfirmDelete => {
+                if data::remove_connection(idx).is_ok() {
+                    self.conns = data::load_connections();
+                    if self.selected_conn >= self.conns.len() {
+                        self.selected_conn = self.conns.len().saturating_sub(1);
+                    }
+                }
+                self.conn_confirm_delete = None;
+            }
+        }
+        cx.notify();
+    }
+
+    fn on_conn_search_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        match ks.key.as_str() {
+            "backspace" => {
+                if self.conn_search.pop().is_some() {
+                    cx.notify();
+                }
+                return;
+            }
+            "escape" => {
+                if !self.conn_search.is_empty() {
+                    self.conn_search.clear();
+                    cx.notify();
+                }
+                return;
+            }
+            _ => {}
+        }
+        let m = &ks.modifiers;
+        if m.control || m.alt || m.platform {
+            return;
+        }
+        if let Some(kc) = &ks.key_char {
+            if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) {
+                self.conn_search.push_str(kc);
                 cx.notify();
             }
         }
@@ -597,6 +723,7 @@ impl Shell {
                 self.conn_form = Default::default();
                 self.conn_field = 0;
                 self.conn_error = None;
+                self.conn_edit = None;
                 window.focus(&self.conn_focus, cx);
             }
             Cmd::CloseOverlay => self.overlay = Overlay::None,
@@ -1179,32 +1306,87 @@ impl Shell {
         cx.notify();
     }
 
+    /// A small icon button in a Servers row, dispatching a ConnAction.
+    fn conn_btn_icon(
+        &self,
+        cx: &mut Context<Self>,
+        key: String,
+        glyph: &'static str,
+        color: Hsla,
+        idx: usize,
+        action: ConnAction,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        div()
+            .id(SharedString::from(format!("cab-{key}")))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .w(px(20.0))
+            .h(px(20.0))
+            .rounded(t.radius_sm)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                    this.conn_action(idx, action, window, cx)
+                }),
+            )
+            .child(icon(glyph, px(13.0), color))
+    }
+
+    /// A non-interactive auth-method glyph for a Servers row.
+    fn conn_auth_badge(&self, auth: data::AuthKind) -> impl IntoElement {
+        let t = &self.theme;
+        let glyph = match auth {
+            data::AuthKind::Password => "asterisk",
+            data::AuthKind::Key => "file",
+            data::AuthKind::Agent => "bot",
+        };
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .w(px(18.0))
+            .h(px(18.0))
+            .child(icon(glyph, px(12.0), t.dim))
+    }
+
     fn conn_row(&self, cx: &mut Context<Self>, idx: usize, c: &ConnRow) -> impl IntoElement {
         let t = &self.theme;
         let selected = self.selected_conn == idx;
+        let confirming = self.conn_confirm_delete == Some(idx);
+        let fav = self.conn_favorites.contains(&c.name);
         let dot = if c.online { t.pos } else { t.muted };
-        h_flex()
+        let mut row = h_flex()
             .id(SharedString::from(format!("conn-{idx}")))
             .items_center()
             .gap(t.sp2)
             .h(px(42.0))
             .px(t.sp3)
-            .cursor_pointer()
             .when(selected, |d| d.bg(t.accent_dim))
             .when(!selected, |d| d.hover(|s| s.bg(t.hover)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
-                    this.selected_conn = idx;
-                    this.open_ssh_tab(idx, cx);
-                }),
-            )
-            .child(div().w(px(7.0)).h(px(7.0)).rounded_full().bg(dot))
+            .child(div().w(px(7.0)).h(px(7.0)).flex_none().rounded_full().bg(dot))
             .child(
+                // Clicking the name/addr region opens an SSH tab; the
+                // action buttons are separate siblings so they don't
+                // also trigger a connect.
                 v_flex()
+                    .id(SharedString::from(format!("conn-open-{idx}")))
                     .flex_1()
                     .min_w(px(0.0))
                     .overflow_hidden()
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                            this.selected_conn = idx;
+                            this.open_ssh_tab(idx, cx);
+                        }),
+                    )
                     .child(
                         div()
                             .overflow_hidden()
@@ -1219,7 +1401,89 @@ impl Shell {
                             .text_color(t.muted)
                             .child(c.addr.clone()),
                     ),
-            )
+            );
+        if confirming {
+            row = row
+                .child(div().flex_none().text_size(t.fs_sm).text_color(t.neg).child("Delete?"))
+                .child(self.conn_btn_icon(
+                    cx,
+                    format!("delyes-{idx}"),
+                    "check",
+                    t.neg,
+                    idx,
+                    ConnAction::ConfirmDelete,
+                ))
+                .child(self.conn_btn_icon(
+                    cx,
+                    format!("delno-{idx}"),
+                    "close",
+                    t.muted,
+                    idx,
+                    ConnAction::CancelDelete,
+                ));
+        } else {
+            row = row
+                .child(self.conn_auth_badge(c.auth))
+                .child(self.conn_btn_icon(
+                    cx,
+                    format!("fav-{idx}"),
+                    if fav { "star-fill" } else { "star" },
+                    if fav { t.warn } else { t.muted },
+                    idx,
+                    ConnAction::ToggleFavorite,
+                ))
+                .child(self.conn_btn_icon(
+                    cx,
+                    format!("edit-{idx}"),
+                    "settings-2",
+                    t.muted,
+                    idx,
+                    ConnAction::Edit,
+                ))
+                .child(self.conn_btn_icon(
+                    cx,
+                    format!("del-{idx}"),
+                    "delete",
+                    t.muted,
+                    idx,
+                    ConnAction::AskDelete,
+                ));
+        }
+        row
+    }
+
+    /// The "Search connections…" input row in the Servers sidebar.
+    fn conn_search_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let empty = self.conn_search.is_empty();
+        div()
+            .track_focus(&self.conn_search_focus)
+            .key_context("ConnSearch")
+            .on_key_down(cx.listener(Self::on_conn_search_key))
+            .mx(t.sp3)
+            .mb(t.sp1)
+            .h(px(26.0))
+            .px(t.sp2)
+            .flex()
+            .items_center()
+            .gap(t.sp2)
+            .rounded(t.radius_sm)
+            .bg(t.panel_2)
+            .border_1()
+            .border_color(t.line_2)
+            .child(icon("search", px(13.0), t.muted))
+            .when(empty, |d| {
+                d.child(div().text_size(t.fs_sm).text_color(t.dim).child("Search connections…"))
+            })
+            .when(!empty, |d| {
+                d.child(
+                    div()
+                        .flex_1()
+                        .text_size(t.fs_sm)
+                        .text_color(t.ink)
+                        .child(self.conn_search.clone()),
+                )
+            })
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1245,7 +1509,9 @@ impl Shell {
                         )
                         .child(icon("plus", px(14.0), t.muted))
                         .child(div().flex_1().child("Add connection")),
-                );
+                )
+                .child(self.conn_search_box(cx));
+            let q = self.conn_search.to_lowercase();
             if self.conns.is_empty() {
                 col = col.child(
                     div()
@@ -1256,8 +1522,31 @@ impl Shell {
                         .child("No saved connections"),
                 );
             } else {
-                for (i, c) in self.conns.iter().enumerate() {
+                // Favorites float to the top; the store index travels with
+                // each entry so row actions stay correct after sorting.
+                let mut order: Vec<(usize, &ConnRow)> = self.conns.iter().enumerate().collect();
+                order.sort_by_key(|(_, c)| !self.conn_favorites.contains(&c.name));
+                let mut shown = 0usize;
+                for (i, c) in order {
+                    if !q.is_empty()
+                        && !c.name.to_lowercase().contains(&q)
+                        && !c.host.to_lowercase().contains(&q)
+                        && !c.user.to_lowercase().contains(&q)
+                    {
+                        continue;
+                    }
                     col = col.child(self.conn_row(cx, i, c));
+                    shown += 1;
+                }
+                if shown == 0 {
+                    col = col.child(
+                        div()
+                            .px(t.sp3)
+                            .py(t.sp2)
+                            .text_size(t.fs_sm)
+                            .text_color(t.dim)
+                            .child("No matching connections"),
+                    );
                 }
             }
             col
@@ -2362,7 +2651,11 @@ impl Shell {
                         div()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(t.ink)
-                            .child("New Connection"),
+                            .child(if self.conn_edit.is_some() {
+                                "Edit Connection"
+                            } else {
+                                "New Connection"
+                            }),
                     ),
             )
             .child(self.conn_field_row(cx, 0))
@@ -2377,7 +2670,12 @@ impl Shell {
                     .gap(t.sp2)
                     .justify_end()
                     .child(self.conn_btn(cx, "Cancel", false, Some(Cmd::CloseOverlay)))
-                    .child(self.conn_btn(cx, "Add", true, None)),
+                    .child(self.conn_btn(
+                        cx,
+                        if self.conn_edit.is_some() { "Save" } else { "Add" },
+                        true,
+                        None,
+                    )),
             )
     }
 

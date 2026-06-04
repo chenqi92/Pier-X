@@ -3,15 +3,21 @@
 // Loads CHANGELOG.md / README.md from the launch directory via pier-core's
 // markdown service, parses it into block/inline elements, and paints them with
 // GPUI primitives (headings, paragraphs, bullet/ordered/task lists, blockquotes,
-// fenced code on `t.panel_2`, horizontal rules). The parser is intentionally
-// small but handles the constructs a real README/CHANGELOG uses; raw HTML tags
-// are stripped to their text so the common centered-logo header degrades to
-// plain prose. File IO + parsing run on a background task; render only paints.
+// fenced code on `t.panel_2` with a language chip, GFM pipe tables, horizontal
+// rules, clickable links, and inline images). Image paths are resolved against
+// the file's directory at parse time so render stays path-free. The parser is
+// intentionally small but handles the constructs a real README/CHANGELOG uses;
+// raw HTML tags are stripped to their text so the common centered-logo header
+// degrades to plain prose. File IO + parsing run on a background task; render
+// only paints.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Context, FontWeight, Hsla, Pixels, SharedString, Window};
+use gpui::{
+    div, img, px, AnyElement, Context, FontWeight, Hsla, MouseButton, Pixels, SharedString,
+    StyledImage, Window,
+};
 use gpui_component::{h_flex, v_flex};
 
 use crate::data;
@@ -131,10 +137,11 @@ fn load_path(path: PathBuf) -> PanelState {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
+    let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
     match pier_core::markdown::load_file(&path) {
         Ok(src) => PanelState::Loaded {
             file: name,
-            blocks: parse_blocks(&src),
+            blocks: parse_blocks(&src, &base),
         },
         Err(e) => PanelState::Error(format!("{name}: {e}")),
     }
@@ -155,7 +162,7 @@ fn load_doc(dir: PathBuf) -> PanelState {
             return match pier_core::markdown::load_file(&path) {
                 Ok(src) => PanelState::Loaded {
                     file: (*name).to_string(),
-                    blocks: parse_blocks(&src),
+                    blocks: parse_blocks(&src, &dir),
                 },
                 Err(e) => PanelState::Error(format!("{name}: {e}")),
             };
@@ -179,9 +186,17 @@ enum Block {
         num: String,
         spans: Vec<Span>,
     },
-    Code(String),
+    Code {
+        lang: Option<String>,
+        code: String,
+    },
     Quote(Vec<Span>),
     Rule,
+    /// A GFM pipe table: header cells + body rows, each cell parsed inline.
+    Table {
+        header: Vec<Vec<Span>>,
+        rows: Vec<Vec<Vec<Span>>>,
+    },
 }
 
 enum Span {
@@ -190,12 +205,39 @@ enum Span {
     Emph(String),
     Strike(String),
     Code(String),
-    Link(String),
+    Link { label: String, url: String },
+    Image { alt: String, src: ImgSrc },
+}
+
+/// A resolved image reference: a remote URL or an absolute local path. Paths
+/// are joined against the document's directory at parse time so render never
+/// touches the filesystem to figure out where an image lives.
+enum ImgSrc {
+    Remote(String),
+    Local(PathBuf),
+}
+
+/// Resolve a markdown image target against the document directory. `http(s)`
+/// and `data:` URIs are kept verbatim; everything else is treated as a path,
+/// made absolute via `base` so GPUI loads it from disk (not the asset embed).
+fn resolve_img(base: &Path, url: &str) -> ImgSrc {
+    let u = url.trim();
+    if u.starts_with("http://") || u.starts_with("https://") || u.starts_with("data:") {
+        ImgSrc::Remote(u.to_string())
+    } else {
+        let p = Path::new(u);
+        let abs = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            base.join(p)
+        };
+        ImgSrc::Local(abs)
+    }
 }
 
 // ── Block parser ─────────────────────────────────────────────────
 
-fn parse_blocks(src: &str) -> Vec<Block> {
+fn parse_blocks(src: &str, base: &Path) -> Vec<Block> {
     let lines: Vec<&str> = src.lines().collect();
     let mut blocks: Vec<Block> = Vec::new();
     let mut para: Vec<String> = Vec::new();
@@ -207,7 +249,7 @@ fn parse_blocks(src: &str) -> Vec<Block> {
         }
         let text = para.join(" ");
         para.clear();
-        let spans = parse_inline(text.trim());
+        let spans = parse_inline(text.trim(), base);
         if !spans.is_empty() {
             blocks.push(Block::Paragraph(spans));
         }
@@ -218,10 +260,17 @@ fn parse_blocks(src: &str) -> Vec<Block> {
         let raw = lines[i];
         let traw = raw.trim_start();
 
-        // Fenced code: collect raw lines verbatim until the closing fence.
+        // Fenced code: collect raw lines verbatim until the closing fence. The
+        // info string's first word (` ```rust `) becomes the language chip.
         if traw.starts_with("```") || traw.starts_with("~~~") {
             flush(&mut para, &mut blocks);
-            let fence = if traw.starts_with("```") { "```" } else { "~~~" };
+            let fence_char = if traw.starts_with("```") { '`' } else { '~' };
+            let fence = if fence_char == '`' { "```" } else { "~~~" };
+            let lang = traw
+                .trim_start_matches(fence_char)
+                .split_whitespace()
+                .next()
+                .map(str::to_string);
             i += 1;
             let mut code: Vec<&str> = Vec::new();
             while i < lines.len() {
@@ -232,7 +281,10 @@ fn parse_blocks(src: &str) -> Vec<Block> {
                 code.push(lines[i]);
                 i += 1;
             }
-            blocks.push(Block::Code(code.join("\n")));
+            blocks.push(Block::Code {
+                lang,
+                code: code.join("\n"),
+            });
             continue;
         }
 
@@ -248,7 +300,7 @@ fn parse_blocks(src: &str) -> Vec<Block> {
         }
         if let Some((level, rest)) = atx_heading(t) {
             flush(&mut para, &mut blocks);
-            blocks.push(Block::Heading(level, parse_inline(rest)));
+            blocks.push(Block::Heading(level, parse_inline(rest, base)));
             i += 1;
             continue;
         }
@@ -260,7 +312,7 @@ fn parse_blocks(src: &str) -> Vec<Block> {
         }
         if let Some(rest) = t.strip_prefix('>') {
             flush(&mut para, &mut blocks);
-            blocks.push(Block::Quote(parse_inline(rest.trim())));
+            blocks.push(Block::Quote(parse_inline(rest.trim(), base)));
             i += 1;
             continue;
         }
@@ -269,7 +321,7 @@ fn parse_blocks(src: &str) -> Vec<Block> {
             blocks.push(Block::Bullet {
                 indent,
                 task,
-                spans: parse_inline(&rest),
+                spans: parse_inline(&rest, base),
             });
             i += 1;
             continue;
@@ -279,9 +331,16 @@ fn parse_blocks(src: &str) -> Vec<Block> {
             blocks.push(Block::Ordered {
                 indent,
                 num,
-                spans: parse_inline(&rest),
+                spans: parse_inline(&rest, base),
             });
             i += 1;
+            continue;
+        }
+        // A pipe table: header row followed by a `|---|` delimiter row.
+        if let Some((table, next)) = parse_table(&lines, i, base) {
+            flush(&mut para, &mut blocks);
+            blocks.push(table);
+            i = next;
             continue;
         }
 
@@ -290,6 +349,72 @@ fn parse_blocks(src: &str) -> Vec<Block> {
     }
     flush(&mut para, &mut blocks);
     blocks
+}
+
+/// A GFM pipe table at `lines[start]`: a row of `|`-separated cells whose next
+/// line is a delimiter (`|---|:--:|`). Returns the parsed table and the index
+/// of the first line past it, or `None` if `start` isn't a table head.
+fn parse_table(lines: &[&str], start: usize, base: &Path) -> Option<(Block, usize)> {
+    let header_cells = split_table_row(&strip_html_tags(lines[start]))?;
+    if start + 1 >= lines.len() || !is_table_delimiter(&strip_html_tags(lines[start + 1])) {
+        return None;
+    }
+    let cols = header_cells.len();
+    let header: Vec<Vec<Span>> = header_cells.iter().map(|c| parse_inline(c, base)).collect();
+
+    let mut rows: Vec<Vec<Vec<Span>>> = Vec::new();
+    let mut i = start + 2;
+    while i < lines.len() {
+        let line = strip_html_tags(lines[i]);
+        if line.trim().is_empty() {
+            break;
+        }
+        let Some(cells) = split_table_row(&line) else {
+            break;
+        };
+        let mut row: Vec<Vec<Span>> = cells.iter().map(|c| parse_inline(c, base)).collect();
+        // Square the grid so every row paints `cols` columns.
+        row.resize_with(cols, Vec::new);
+        rows.push(row);
+        i += 1;
+    }
+    Some((Block::Table { header, rows }, i))
+}
+
+/// Split a `| a | b |` line into trimmed cells, or `None` if it has no pipe.
+/// One optional leading/trailing pipe is dropped; `\|` is an escaped literal.
+fn split_table_row(line: &str) -> Option<Vec<String>> {
+    let trimmed = line.trim();
+    if !trimmed.contains('|') {
+        return None;
+    }
+    let inner = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let inner = inner.strip_suffix('|').unwrap_or(inner);
+    let mut cells: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut chars = inner.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => {
+                cur.push('|');
+                chars.next();
+            }
+            '|' => cells.push(std::mem::take(&mut cur).trim().to_string()),
+            _ => cur.push(c),
+        }
+    }
+    cells.push(cur.trim().to_string());
+    Some(cells)
+}
+
+/// A table delimiter row: every cell is `-`/`:` only and holds at least one `-`.
+fn is_table_delimiter(line: &str) -> bool {
+    match split_table_row(line) {
+        Some(cells) if !cells.is_empty() => cells.iter().all(|c| {
+            c.contains('-') && c.chars().all(|ch| ch == '-' || ch == ':')
+        }),
+        _ => false,
+    }
 }
 
 /// `#`..`######` heading → (level, trimmed text). `#foo` (no space) is not one.
@@ -403,7 +528,7 @@ fn strip_html_tags(s: &str) -> String {
 
 // ── Inline parser ────────────────────────────────────────────────
 
-fn parse_inline(text: &str) -> Vec<Span> {
+fn parse_inline(text: &str, base: &Path) -> Vec<Span> {
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
     let mut spans: Vec<Span> = Vec::new();
@@ -414,6 +539,7 @@ fn parse_inline(text: &str) -> Vec<Span> {
             .or_else(|| try_strong(&chars, i))
             .or_else(|| try_strike(&chars, i))
             .or_else(|| try_emph(&chars, i))
+            .or_else(|| try_image(&chars, i, base))
             .or_else(|| try_link(&chars, i));
         if let Some((span, next)) = hit {
             if !buf.is_empty() {
@@ -505,7 +631,7 @@ fn try_strike(chars: &[char], i: usize) -> Option<(Span, usize)> {
     None
 }
 
-/// `[label](url)` — keeps the label, drops the target.
+/// `[label](url)` — keeps both the label and the target.
 fn try_link(chars: &[char], i: usize) -> Option<(Span, usize)> {
     let n = chars.len();
     if chars[i] != '[' {
@@ -525,7 +651,46 @@ fn try_link(chars: &[char], i: usize) -> Option<(Span, usize)> {
     if p >= n {
         return None;
     }
-    Some((Span::Link(slice(chars, i + 1, r)), p + 1))
+    Some((
+        Span::Link {
+            label: slice(chars, i + 1, r),
+            url: slice(chars, r + 2, p),
+        },
+        p + 1,
+    ))
+}
+
+/// `![alt](src)` — an inline image; `src` is resolved against the doc dir.
+fn try_image(chars: &[char], i: usize, base: &Path) -> Option<(Span, usize)> {
+    let n = chars.len();
+    if chars[i] != '!' || i + 1 >= n || chars[i + 1] != '[' {
+        return None;
+    }
+    let mut r = i + 2;
+    while r < n && chars[r] != ']' {
+        r += 1;
+    }
+    if r >= n || r + 1 >= n || chars[r + 1] != '(' {
+        return None;
+    }
+    let mut p = r + 2;
+    while p < n && chars[p] != ')' {
+        p += 1;
+    }
+    if p >= n {
+        return None;
+    }
+    let url = slice(chars, r + 2, p);
+    if url.trim().is_empty() {
+        return None;
+    }
+    Some((
+        Span::Image {
+            alt: slice(chars, i + 2, r),
+            src: resolve_img(base, &url),
+        },
+        p + 1,
+    ))
 }
 
 // ── Block rendering ──────────────────────────────────────────────
@@ -552,7 +717,9 @@ fn render_block(t: &Theme, idx: usize, b: &Block) -> AnyElement {
             num,
             spans,
         } => list_row(t, ordered_marker(t, num), *indent, spans).into_any_element(),
-        Block::Code(code) => code_block(t, idx, code).into_any_element(),
+        Block::Code { lang, code } => {
+            code_block(t, idx, lang.as_deref(), code).into_any_element()
+        }
         Block::Quote(spans) => div()
             .w_full()
             .pl(t.sp3)
@@ -561,7 +728,48 @@ fn render_block(t: &Theme, idx: usize, b: &Block) -> AnyElement {
             .child(inline(t, spans, quote_base(t)))
             .into_any_element(),
         Block::Rule => div().w_full().h(px(1.0)).bg(t.line_2).into_any_element(),
+        Block::Table { header, rows } => table_block(t, header, rows).into_any_element(),
     }
+}
+
+/// A pipe table: equal-width columns, a header row in `muted` semibold, and a
+/// hairline under every row (matching the web preview's `border-bottom` cells).
+fn table_block(t: &Theme, header: &[Vec<Span>], rows: &[Vec<Vec<Span>>]) -> impl IntoElement {
+    let mut col = v_flex().w_full();
+    col = col.child(table_row(t, header, true));
+    for row in rows {
+        col = col.child(table_row(t, row, false));
+    }
+    col
+}
+
+fn table_row(t: &Theme, cells: &[Vec<Span>], header: bool) -> impl IntoElement {
+    let mut row = h_flex()
+        .w_full()
+        .items_start()
+        .py(t.sp1)
+        .border_b_1()
+        .border_color(t.line);
+    for cell in cells {
+        let base = if header {
+            Base {
+                size: t.fs_sm,
+                color: t.muted,
+                weight: FontWeight::SEMIBOLD,
+                italic: false,
+            }
+        } else {
+            body_base(t)
+        };
+        row = row.child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .pr(t.sp3)
+                .child(inline(t, cell, base)),
+        );
+    }
+    row
 }
 
 /// A list item: leading marker + wrapping inline body, indented by nesting.
@@ -609,8 +817,9 @@ fn ordered_marker(t: &Theme, num: &str) -> AnyElement {
 }
 
 /// Fenced code: mono text on `panel_2`, one div per line, horizontally
-/// scrollable so long lines stay reachable instead of wrapping.
-fn code_block(t: &Theme, idx: usize, code: &str) -> impl IntoElement {
+/// scrollable so long lines stay reachable instead of wrapping. When the fence
+/// carried a language, a small chip floats over the top-right corner.
+fn code_block(t: &Theme, idx: usize, lang: Option<&str>, code: &str) -> impl IntoElement {
     let mut col = v_flex()
         .id(SharedString::from(format!("md-code-{idx}")))
         .overflow_x_scroll()
@@ -631,7 +840,25 @@ fn code_block(t: &Theme, idx: usize, code: &str) -> impl IntoElement {
         };
         col = col.child(div().whitespace_nowrap().child(text));
     }
-    col
+    let chip = lang.filter(|l| !l.is_empty()).map(|l| lang_chip(t, l));
+    div().relative().w_full().child(col).children(chip)
+}
+
+/// The language label that floats over a code block's top-right corner.
+fn lang_chip(t: &Theme, lang: &str) -> impl IntoElement {
+    div()
+        .absolute()
+        .top(t.sp1)
+        .right(t.sp1)
+        .px(t.sp1)
+        .rounded(t.radius_sm)
+        .bg(t.elev)
+        .border_1()
+        .border_color(t.line_2)
+        .font_family(t.mono.clone())
+        .text_size(t.fs_sm)
+        .text_color(t.muted)
+        .child(lang.to_string())
 }
 
 // ── Inline rendering ─────────────────────────────────────────────
@@ -722,14 +949,53 @@ fn inline(t: &Theme, spans: &[Span], base: Base) -> impl IntoElement {
                     row = row.child(word(w, base.size, t.muted, base.weight, base.italic, true, false));
                 }
             }
-            Span::Link(x) => {
-                for w in x.split_whitespace() {
-                    row = row.child(word(w, base.size, t.accent, base.weight, base.italic, false, true));
+            Span::Link { label, url } => {
+                for w in label.split_whitespace() {
+                    let url = url.clone();
+                    row = row.child(
+                        div()
+                            .text_size(base.size)
+                            .text_color(t.accent)
+                            .font_weight(base.weight)
+                            .when(base.italic, |d| d.italic())
+                            .underline()
+                            .cursor_pointer()
+                            .child(w.to_string())
+                            .on_mouse_down(MouseButton::Left, move |_, _, cx| cx.open_url(&url)),
+                    );
                 }
+            }
+            Span::Image { alt, src } => {
+                row = row.child(image_el(t, alt, src));
             }
         }
     }
     row
+}
+
+/// An inline or standalone image, capped to the panel width. On load failure
+/// (missing file, or a remote URL with no network) the alt text renders in its
+/// place so the reader still sees what the image was meant to be.
+fn image_el(t: &Theme, alt: &str, src: &ImgSrc) -> AnyElement {
+    let image = match src {
+        ImgSrc::Remote(u) => img(u.clone()),
+        ImgSrc::Local(p) => img(p.clone()),
+    };
+    let alt = alt.to_string();
+    let color = t.muted;
+    let size = t.fs_sm;
+    image
+        .max_w_full()
+        .rounded(t.radius_sm)
+        .with_fallback(move || {
+            div()
+                .text_size(size)
+                .text_color(color)
+                .italic()
+                .child(alt.clone())
+                .into_any_element()
+        })
+        .into_any_element()
 }
 
 #[allow(clippy::too_many_arguments)]

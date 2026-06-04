@@ -430,7 +430,18 @@ fn atx_heading(t: &str) -> Option<(u8, &str)> {
     if !rest.starts_with(' ') {
         return None;
     }
-    Some((level as u8, rest.trim().trim_end_matches('#').trim_end()))
+    // Strip an optional closing `#` run, but only when it is preceded by
+    // whitespace (CommonMark): `# a #` → "a", yet `# C#` keeps its trailing `#`.
+    let content = rest.trim();
+    let stripped = content.trim_end_matches('#');
+    let text = if stripped.len() < content.len()
+        && (stripped.is_empty() || stripped.ends_with(char::is_whitespace))
+    {
+        stripped.trim_end()
+    } else {
+        content
+    };
+    Some((level as u8, text))
 }
 
 /// A `---` / `***` / `___` rule (≥3 of one char, spaces ignored).
@@ -487,6 +498,42 @@ fn parse_ordered(line: &str) -> Option<(usize, String, String)> {
     Some((indent, t[..k].to_string(), t[k + 2..].to_string()))
 }
 
+/// If `chars[i..]` opens a `<scheme://…>` autolink, return the index just past
+/// its closing `>`. The scheme is ASCII letters; the body runs to `>` and holds
+/// no whitespace or `<`. Shared by the HTML-tag stripper (to keep autolinks) and
+/// the inline lexer (to render them).
+fn autolink_end(chars: &[char], i: usize) -> Option<usize> {
+    let n = chars.len();
+    if i >= n || chars[i] != '<' {
+        return None;
+    }
+    let mut j = i + 1;
+    let scheme_start = j;
+    while j < n && chars[j].is_ascii_alphabetic() {
+        j += 1;
+    }
+    if j == scheme_start
+        || j + 2 >= n
+        || chars[j] != ':'
+        || chars[j + 1] != '/'
+        || chars[j + 2] != '/'
+    {
+        return None;
+    }
+    j += 3;
+    let body_start = j;
+    while j < n && chars[j] != '>' {
+        if chars[j].is_whitespace() || chars[j] == '<' {
+            return None;
+        }
+        j += 1;
+    }
+    if j >= n || j == body_start {
+        return None;
+    }
+    Some(j + 1)
+}
+
 /// Remove `<tag …>`, `</tag>`, and `<!-- … -->`, keeping inner text. A bare
 /// `<` not starting a tag (e.g. `a < b`) is preserved.
 fn strip_html_tags(s: &str) -> String {
@@ -496,6 +543,12 @@ fn strip_html_tags(s: &str) -> String {
     let mut i = 0;
     while i < n {
         if chars[i] == '<' {
+            // A `<scheme://…>` autolink is content, not a tag — keep it verbatim.
+            if let Some(end) = autolink_end(&chars, i) {
+                out.extend(chars[i..end].iter());
+                i = end;
+                continue;
+            }
             let mut j = i + 1;
             // HTML comment <!-- … -->
             if j < n && chars[j] == '!' {
@@ -540,7 +593,8 @@ fn parse_inline(text: &str, base: &Path) -> Vec<Span> {
             .or_else(|| try_strike(&chars, i))
             .or_else(|| try_emph(&chars, i))
             .or_else(|| try_image(&chars, i, base))
-            .or_else(|| try_link(&chars, i));
+            .or_else(|| try_link(&chars, i))
+            .or_else(|| try_autolink(&chars, i));
         if let Some((span, next)) = hit {
             if !buf.is_empty() {
                 spans.push(Span::Text(std::mem::take(&mut buf)));
@@ -657,6 +711,19 @@ fn try_link(chars: &[char], i: usize) -> Option<(Span, usize)> {
             url: slice(chars, r + 2, p),
         },
         p + 1,
+    ))
+}
+
+/// `<scheme://…>` — a bare-URL autolink; its label and url are the inner text.
+fn try_autolink(chars: &[char], i: usize) -> Option<(Span, usize)> {
+    let end = autolink_end(chars, i)?;
+    let url = slice(chars, i + 1, end - 1);
+    Some((
+        Span::Link {
+            label: url.clone(),
+            url,
+        },
+        end,
     ))
 }
 

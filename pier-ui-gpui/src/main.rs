@@ -7,6 +7,7 @@
 mod assets;
 mod data;
 mod panels;
+mod settings;
 mod shell;
 mod terminal;
 mod theme;

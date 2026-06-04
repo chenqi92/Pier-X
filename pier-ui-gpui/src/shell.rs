@@ -29,6 +29,7 @@ use pier_core::ssh::{AuthMethod, SshConfig};
 
 use crate::data::{self, ConnRow, FileEntry, GitData, MonStat};
 use crate::panels::PanelViews;
+use crate::settings::SettingsView;
 use crate::terminal::TerminalView;
 use crate::theme::Theme;
 use crate::ui;
@@ -163,6 +164,8 @@ pub struct Shell {
     git_msg: Option<String>,
     mon: Option<MonStat>,
     panels: PanelViews,
+    /// The Settings overlay's independent view (hosted in overlay_layer).
+    settings_view: Entity<SettingsView>,
     /// Which top-bar menu is open (index into MENUS), if any.
     open_menu: Option<usize>,
     /// Active centered overlay (Settings / command palette), if any.
@@ -350,6 +353,7 @@ impl Shell {
             .unwrap_or_else(|| cwd_label.clone());
         let terminal = cx.new(|cx| TerminalView::new(cx));
         let panels = PanelViews::new(cx);
+        let settings_view = cx.new(SettingsView::new);
         Self::start_monitor(cx);
         Self {
             theme: if st.dark { Theme::dark() } else { Theme::light() },
@@ -377,6 +381,7 @@ impl Shell {
             git_msg: None,
             mon: None,
             panels,
+            settings_view,
             open_menu: None,
             overlay: Overlay::None,
             sidebar_w: st.sidebar_w.map(px),
@@ -855,7 +860,10 @@ impl Shell {
                     self.mon = Some(data::monitor_snapshot());
                 }
             }
-            Cmd::OpenSettings => self.overlay = Overlay::Settings,
+            Cmd::OpenSettings => {
+                self.settings_view.update(cx, |v, cx| v.reload(cx));
+                self.overlay = Overlay::Settings;
+            }
             Cmd::OpenPalette => {
                 self.overlay = Overlay::Palette;
                 self.palette_query.clear();
@@ -2727,65 +2735,7 @@ impl Shell {
             )
     }
 
-    // ── Overlays (Settings / command palette) ────────────────────
-    fn theme_btn(&self, cx: &mut Context<Self>, label: &'static str, want_dark: bool) -> impl IntoElement {
-        let t = &self.theme;
-        let active = t.dark == want_dark;
-        div()
-            .id(SharedString::from(format!("themebtn-{label}")))
-            .px(t.sp3)
-            .py(px(5.0))
-            .rounded(t.radius_sm)
-            .text_size(t.fs_ui)
-            .cursor_pointer()
-            .when(active, |d| d.bg(t.accent).text_color(t.accent_ink))
-            .when(!active, |d| d.bg(t.panel_2).text_color(t.ink_2))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_this, _: &MouseDownEvent, window, cx| {
-                    if cx.global::<Theme>().dark != want_dark {
-                        cx.set_global(if want_dark { Theme::dark() } else { Theme::light() });
-                        window.refresh();
-                    }
-                }),
-            )
-            .child(label)
-    }
-
-    fn settings_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = &self.theme;
-        v_flex()
-            .w(px(420.0))
-            .p(t.sp4)
-            .gap(t.sp3)
-            .bg(t.panel)
-            .border_1()
-            .border_color(t.line_2)
-            .rounded(t.radius_lg)
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap(t.sp2)
-                    .child(icon("settings", px(16.0), t.accent))
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(t.ink)
-                            .child("Settings"),
-                    ),
-            )
-            .child(self.section_label("APPEARANCE"))
-            .child(
-                h_flex()
-                    .gap(t.sp2)
-                    .child(self.theme_btn(cx, "Dark", true))
-                    .child(self.theme_btn(cx, "Light", false)),
-            )
-            .child(self.section_label("ABOUT"))
-            .child(ui::info_row(t, "Version", "0.7.2"))
-            .child(ui::info_row(t, "UI engine", "GPUI (native)"))
-            .child(ui::info_row(t, "Backend", "pier-core"))
-    }
+    // ── Overlays (command palette / dialogs) ─────────────────────
 
     fn palette_row(
         &self,
@@ -3174,7 +3124,7 @@ impl Shell {
     fn overlay_layer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let card = match self.overlay {
-            Overlay::Settings => self.settings_card(cx).into_any_element(),
+            Overlay::Settings => self.settings_view.clone().into_any_element(),
             Overlay::Palette => self.palette_card(cx).into_any_element(),
             Overlay::NewConn => self.conn_card(cx).into_any_element(),
             Overlay::None => div().into_any_element(),

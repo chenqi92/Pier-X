@@ -8,6 +8,7 @@ mod assets;
 mod data;
 mod dialogs;
 mod git_panel;
+mod i18n;
 mod panels;
 mod settings;
 mod shell;

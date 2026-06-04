@@ -10,15 +10,23 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::SystemTime;
 
+use futures::channel::{mpsc, oneshot};
 use pier_core::connections::ConnectionStore;
 pub use pier_core::services::git::{BlameLine, CommitInfo, ConfigEntry, RemoteInfo, StashEntry, TagInfo};
 use pier_core::services::git::{FileStatus, GitClient};
 use pier_core::services::host_health::{self, HealthStatus, HostHealthTarget};
 use pier_core::services::local_monitor;
 pub use pier_core::ssh::service_detector::{DetectedService, ServiceStatus};
-use pier_core::ssh::{AuthMethod, HostKeyVerifier, SshConfig, SshSession};
+// `HostKeyPromptCb` is the async callback the verifier consults on unknown /
+// changed keys; the dialog/shell import the request + decision types straight
+// from `pier_core::ssh`, so they're not re-exported here.
+use pier_core::ssh::{
+    AuthMethod, HostKeyDecision, HostKeyPromptCb, HostKeyPromptRequest, HostKeyVerifier, SshConfig,
+    SshSession,
+};
 
 /// One entry in the Files sidebar.
 pub struct FileEntry {
@@ -122,11 +130,59 @@ pub fn add_connection(cfg: SshConfig) -> Result<(), String> {
     store.save_default().map_err(|e| e.to_string())
 }
 
-/// Open a blocking SSH session to `cfg`. Trust-on-first-use host-key policy
-/// (logs the fingerprint) — fine for the spike. Run OFF the render path: this
-/// blocks on the network. Returns a display error string on failure.
+/// Open a blocking SSH session to `cfg` with the escape-hatch verifier that
+/// accepts any host key and logs its fingerprint. Used by the side-session
+/// probes (Test-connection + the read-only panels: docker / firewall / sftp /
+/// db / webserver / search / software) which have no overlay to prompt
+/// through — the interactive terminal path uses [`connect_blocking_prompt`]
+/// instead, which routes unknown / changed keys to the user. Run OFF the
+/// render path: this blocks on the network. Returns a display error on failure.
 pub fn connect_blocking(cfg: &SshConfig) -> Result<SshSession, String> {
     SshSession::connect_blocking(cfg, HostKeyVerifier::accept_all_log_fingerprint())
+        .map_err(|e| e.to_string())
+}
+
+/// A pending host-key decision handed from a background connect task to the
+/// shell: the [`HostKeyPromptRequest`] to display plus the oneshot the connect
+/// task is blocked on. The shell shows [`crate::dialogs::HostKeyDialog`] and
+/// sends the user's [`HostKeyDecision`] back through the sender; **dropping the
+/// sender resolves to `Reject`**, so a dismissed dialog (scrim click, Esc, app
+/// exit) never leaves the connect task hung.
+pub type HostKeyPrompt = (HostKeyPromptRequest, oneshot::Sender<HostKeyDecision>);
+
+/// Open a blocking SSH session to `cfg`, routing unknown / changed host keys
+/// through `prompt_tx` for interactive confirmation. Backed by the real
+/// `~/.ssh/known_hosts` verifier ([`HostKeyVerifier::default`]): already-known
+/// and previously-accepted hosts connect silently, and only a first-contact
+/// (unknown) key or a changed key sends a [`HostKeyPrompt`] and blocks until
+/// the user — or a dropped channel — decides.
+///
+/// MUST run off the render path: it blocks on both the network and the user's
+/// decision. The block happens on the caller's (background) thread; the prompt
+/// callback ships the request to the shell over `prompt_tx` and parks on a
+/// oneshot, leaving the UI thread free to paint the dialog and collect the
+/// click. A send failure (shell gone) or a dropped decision sender both resolve
+/// to [`HostKeyDecision::Reject`]. Returns a display error on failure (an
+/// implicit/explicit rejection surfaces as the verifier's typed error string).
+pub fn connect_blocking_prompt(
+    cfg: &SshConfig,
+    prompt_tx: mpsc::UnboundedSender<HostKeyPrompt>,
+) -> Result<SshSession, String> {
+    let cb: HostKeyPromptCb = Arc::new(move |req: HostKeyPromptRequest| {
+        let tx = prompt_tx.clone();
+        Box::pin(async move {
+            let (decision_tx, decision_rx) = oneshot::channel();
+            // Shell gone before we could ask → fail safe (reject).
+            if tx.unbounded_send((req, decision_tx)).is_err() {
+                return HostKeyDecision::Reject;
+            }
+            // Park here (on the background connect thread, never the UI thread)
+            // until the user decides; a dropped sender — dismissed dialog or app
+            // exit — resolves to Reject so this task is never orphaned.
+            decision_rx.await.unwrap_or(HostKeyDecision::Reject)
+        })
+    });
+    SshSession::connect_blocking(cfg, HostKeyVerifier::default().with_prompt(cb))
         .map_err(|e| e.to_string())
 }
 
@@ -755,6 +811,8 @@ pub struct UiState {
     pub sidebar_w: Option<f32>,
     pub right_w: Option<f32>,
     pub cwd: String,
+    /// Interface language code ("en" / "zh"); see `crate::i18n`.
+    pub lang: String,
 }
 
 impl Default for UiState {
@@ -767,6 +825,7 @@ impl Default for UiState {
             sidebar_w: None,
             right_w: None,
             cwd: String::new(),
+            lang: String::from("en"),
         }
     }
 }
@@ -798,6 +857,7 @@ pub fn load_ui_state() -> UiState {
             "sidebar_w" => s.sidebar_w = v.parse().ok(),
             "right_w" => s.right_w = v.parse().ok(),
             "cwd" => s.cwd = v.to_string(),
+            "lang" => s.lang = v.to_string(),
             _ => {}
         }
     }
@@ -812,7 +872,7 @@ pub fn save_ui_state(s: &UiState) {
     }
     let opt = |o: Option<f32>| o.map(|v| v.to_string()).unwrap_or_default();
     let body = format!(
-        "active_tool={}\nright_collapsed={}\nshow_servers={}\ndark={}\nsidebar_w={}\nright_w={}\ncwd={}\n",
+        "active_tool={}\nright_collapsed={}\nshow_servers={}\ndark={}\nsidebar_w={}\nright_w={}\ncwd={}\nlang={}\n",
         s.active_tool,
         s.right_collapsed,
         s.show_servers,
@@ -820,6 +880,7 @@ pub fn save_ui_state(s: &UiState) {
         opt(s.sidebar_w),
         opt(s.right_w),
         s.cwd,
+        s.lang,
     );
     let _ = std::fs::write(&p, body);
 }

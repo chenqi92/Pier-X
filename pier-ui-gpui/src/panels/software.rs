@@ -26,6 +26,7 @@ use gpui_component::{h_flex, v_flex};
 
 use crate::data::{self, PkgAction};
 use crate::theme::Theme;
+use crate::i18n;
 use crate::ui;
 
 use pier_core::services::package_manager::{self, PackageDescriptor, PackageManager};
@@ -211,8 +212,10 @@ impl SoftwarePanel {
     /// The saved-server picker, always visible above the body.
     fn selector(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
-        let mut col =
-            v_flex().child(ui::section_label(t, format!("SERVER · {}", self.conns.len())));
+        let mut col = v_flex().child(ui::section_label(
+            t,
+            format!("{} · {}", i18n::t("sw.server"), self.conns.len()),
+        ));
         if self.conns.is_empty() {
             return col.child(
                 div()
@@ -220,7 +223,7 @@ impl SoftwarePanel {
                     .py(t.sp2)
                     .text_size(t.fs_sm)
                     .text_color(t.dim)
-                    .child("No saved connections"),
+                    .child(i18n::t("side.no_saved_connections")),
             );
         }
         for (i, c) in self.conns.iter().enumerate() {
@@ -276,10 +279,10 @@ impl SoftwarePanel {
         let t = &self.theme;
         match &self.load {
             Load::Idle => {
-                ui::empty_state(t, "Select a server to inspect installed software")
+                ui::empty_state(t, i18n::t("panel.select_server_software"))
                     .into_any_element()
             }
-            Load::Loading => ui::empty_state(t, "Connecting…").into_any_element(),
+            Load::Loading => ui::empty_state(t, i18n::t("panel.connecting")).into_any_element(),
             Load::Failed(err) => v_flex()
                 .flex_1()
                 .child(
@@ -288,7 +291,7 @@ impl SoftwarePanel {
                         .py(t.sp2)
                         .text_size(t.fs_ui)
                         .text_color(t.neg)
-                        .child(format!("Connection failed: {err}")),
+                        .child(format!("{}: {err}", i18n::t("sw.connection_failed"))),
                 )
                 .into_any_element(),
             Load::Ready(data) => self.ready(data, focused, cx).into_any_element(),
@@ -303,16 +306,23 @@ impl SoftwarePanel {
 
         // Environment summary — pinned above the scrolling package list.
         let env = v_flex()
-            .child(ui::section_label(t, "ENVIRONMENT"))
+            .child(ui::section_label(t, i18n::t("sw.environment")))
             .child(ui::info_row(
                 t,
-                "Package manager",
-                d.manager.clone().unwrap_or_else(|| "not detected".to_string()),
+                i18n::t("sw.package_manager"),
+                d.manager
+                    .clone()
+                    .map(SharedString::from)
+                    .unwrap_or_else(|| i18n::t("sw.not_detected")),
             ))
-            .child(ui::info_row(t, "Distro", d.distro.clone()))
-            .child(ui::info_row(t, "Mirror", d.mirror.clone()))
-            .child(ui::info_row(t, "Root", if d.is_root { "yes" } else { "no" }))
-            .child(ui::info_row(t, "Installed", d.total.to_string()));
+            .child(ui::info_row(t, i18n::t("sw.distro"), d.distro.clone()))
+            .child(ui::info_row(t, i18n::t("sw.mirror"), d.mirror.clone()))
+            .child(ui::info_row(
+                t,
+                i18n::t("sw.root"),
+                if d.is_root { i18n::t("sw.yes") } else { i18n::t("sw.no") },
+            ))
+            .child(ui::info_row(t, i18n::t("sw.installed"), d.total.to_string()));
 
         // Filter, then bucket rows into the registry's category order; the
         // long tail of unrecognised packages collects into "Other".
@@ -334,19 +344,25 @@ impl SoftwarePanel {
 
         let mut col = v_flex();
         let mut any = false;
-        for (_, label, rows) in &groups {
+        for (id, _, rows) in &groups {
             if rows.is_empty() {
                 continue;
             }
             any = true;
-            col = col.child(ui::section_label(t, format!("{label} · {}", rows.len())));
+            col = col.child(ui::section_label(
+                t,
+                format!("{} · {}", i18n::t(category_label_key(id)), rows.len()),
+            ));
             for r in rows.iter().copied() {
                 col = col.child(self.pkg_row(cx, r, manager, d.is_root));
             }
         }
         if !other.is_empty() {
             any = true;
-            col = col.child(ui::section_label(t, format!("OTHER · {}", other.len())));
+            col = col.child(ui::section_label(
+                t,
+                format!("{} · {}", i18n::t("sw.cat_other"), other.len()),
+            ));
             for r in other.iter().take(MAX_ROWS).copied() {
                 col = col.child(self.pkg_row(cx, r, manager, d.is_root));
             }
@@ -357,15 +373,15 @@ impl SoftwarePanel {
                         .py(t.sp1)
                         .text_size(t.fs_sm)
                         .text_color(t.muted)
-                        .child(format!("+{} more", other.len() - MAX_ROWS)),
+                        .child(i18n::tf("sw.more", &[&(other.len() - MAX_ROWS).to_string()])),
                 );
             }
         }
         if !any {
             let msg = if q.is_empty() {
-                "none"
+                i18n::t("sw.none")
             } else {
-                "No matching packages"
+                i18n::t("sw.no_matching")
             };
             col = col.child(
                 div()
@@ -428,7 +444,7 @@ impl SoftwarePanel {
             } else {
                 div()
                     .text_color(t.dim)
-                    .child("Filter by name, id, or category…")
+                    .child(i18n::t("sw.search"))
                     .into_any_element()
             }
         } else {
@@ -632,7 +648,7 @@ impl Render for SoftwarePanel {
         };
         v_flex()
             .size_full()
-            .child(ui::panel_header(t, "package", "SOFTWARE", meta))
+            .child(ui::panel_header(t, "package", i18n::t("tool.software"), meta))
             .child(self.selector(cx))
             .child(self.body(focused, cx))
     }
@@ -650,6 +666,25 @@ fn pkgs_for(d: &PackageDescriptor, manager: PackageManager) -> Option<Vec<String
     d.install_packages
         .iter()
         .find_map(|(m, ps)| (*m == manager).then(|| ps.iter().map(|s| s.to_string()).collect()))
+}
+
+/// Map a registry category id (the first column of [`CATEGORY_ORDER`]) to its
+/// i18n key. Anything unmapped falls back to the catch-all "Other" key, which
+/// keeps the section header populated even for an id added without a string.
+fn category_label_key(id: &str) -> &'static str {
+    match id {
+        "database" => "sw.cat_database",
+        "container" => "sw.cat_container",
+        "web" => "sw.cat_web",
+        "runtime" => "sw.cat_runtime",
+        "dev" => "sw.cat_dev",
+        "editor" => "sw.cat_editor",
+        "terminal" => "sw.cat_terminal",
+        "network" => "sw.cat_network",
+        "text" => "sw.cat_text",
+        "system" => "sw.cat_system",
+        _ => "sw.cat_other",
+    }
 }
 
 /// Case-insensitive substring match of `q` (already lowercased) against a

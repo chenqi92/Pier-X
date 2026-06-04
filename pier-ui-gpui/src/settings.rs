@@ -18,6 +18,7 @@ use gpui_component::{h_flex, v_flex};
 use pier_core::ssh::AuthMethod;
 
 use crate::data;
+use crate::i18n::{self, Lang};
 use crate::theme::Theme;
 use crate::ui;
 
@@ -40,31 +41,33 @@ enum Page {
     About,
 }
 
-/// Left-nav entries: (page, icon stem, label).
+/// Left-nav entries: (page, icon stem, label-key). The label is an `i18n`
+/// key resolved at render time (and reused as a stable element id).
 const PAGES: &[(Page, &str, &str)] = &[
-    (Page::Appearance, "sun", "Appearance"),
-    (Page::Typography, "a-large-small", "Typography"),
-    (Page::Terminal, "square-terminal", "Terminal"),
-    (Page::Editor, "file-text", "Editor"),
-    (Page::Connections, "server", "Connections"),
-    (Page::Profiles, "user", "Profiles"),
-    (Page::Git, "git-branch", "Git"),
-    (Page::SshKeys, "asterisk", "SSH Keys"),
-    (Page::Keymap, "command", "Keymap"),
-    (Page::Diagnostics, "activity", "Diagnostics"),
-    (Page::Privacy, "eye-off", "Privacy"),
-    (Page::Security, "shield", "Security"),
-    (Page::General, "settings-2", "General"),
-    (Page::About, "info", "About"),
+    (Page::Appearance, "sun", "set.appearance"),
+    (Page::Typography, "a-large-small", "set.typography"),
+    (Page::Terminal, "square-terminal", "set.terminal"),
+    (Page::Editor, "file-text", "set.editor"),
+    (Page::Connections, "server", "set.connections"),
+    (Page::Profiles, "user", "set.profiles"),
+    (Page::Git, "git-branch", "set.git"),
+    (Page::SshKeys, "asterisk", "set.ssh_keys"),
+    (Page::Keymap, "command", "set.keymap"),
+    (Page::Diagnostics, "activity", "set.diagnostics"),
+    (Page::Privacy, "eye-off", "set.privacy"),
+    (Page::Security, "shield", "set.security"),
+    (Page::General, "settings-2", "set.general"),
+    (Page::About, "info", "set.about"),
 ];
 
-/// The keyboard shortcuts bound in main.rs: (chord, action).
+/// The keyboard shortcuts bound in main.rs: (chord, action-key). The action is
+/// an `i18n` key resolved at render time.
 const KEYMAP: &[(&str, &str)] = &[
-    ("Ctrl+Shift+P", "Command Palette"),
-    ("Ctrl+Shift+T", "New Terminal"),
-    ("Ctrl+Shift+W", "Close Tab"),
-    ("Ctrl+Shift+L", "Toggle Theme"),
-    ("Ctrl+,", "Settings"),
+    ("Ctrl+Shift+P", "menu.command_palette"),
+    ("Ctrl+Shift+T", "tab.new_terminal"),
+    ("Ctrl+Shift+W", "menu.close_tab"),
+    ("Ctrl+Shift+L", "menu.toggle_theme"),
+    ("Ctrl+,", "set.title"),
 ];
 
 pub struct SettingsView {
@@ -132,7 +135,7 @@ impl SettingsView {
                 div()
                     .text_size(t.fs_ui)
                     .text_color(if active { t.ink } else { t.ink_2 })
-                    .child(label),
+                    .child(i18n::t(label)),
             )
     }
 
@@ -163,7 +166,39 @@ impl SettingsView {
                     }
                 }),
             )
-            .child(label)
+            .child(i18n::t(label))
+    }
+
+    /// One language option in the General page's switcher. Flips the global
+    /// interface language and persists it, mirroring [`Self::theme_btn`].
+    fn lang_btn(&self, cx: &mut Context<Self>, lang: Lang) -> impl IntoElement {
+        let t = &self.theme;
+        let active = i18n::current() == lang;
+        div()
+            .id(SharedString::from(format!("set-lang-{}", lang.code())))
+            .px(t.sp3)
+            .py(px(5.0))
+            .rounded(t.radius_sm)
+            .text_size(t.fs_ui)
+            .cursor_pointer()
+            .when(active, |d| d.bg(t.accent).text_color(t.accent_ink))
+            .when(!active, |d| d.bg(t.panel_2).text_color(t.ink_2))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_this, _: &MouseDownEvent, window, cx| {
+                    if i18n::current() != lang {
+                        i18n::set(lang);
+                        // Persist alongside the other UiState fields, the same
+                        // load-modify-save the theme switch uses.
+                        let mut s = data::load_ui_state();
+                        s.lang = lang.code().to_string();
+                        data::save_ui_state(&s);
+                        window.refresh();
+                        cx.notify();
+                    }
+                }),
+            )
+            .child(lang.label())
     }
 
     /// A `name — addr` connection row for the Connections page.
@@ -190,70 +225,56 @@ impl SettingsView {
         let dash = |s: &str| if s.is_empty() { "—".to_string() } else { s.to_string() };
         // A full-width dim prose line, the same chrome the existing read-only
         // pages use for their "not configurable in this build" notes.
-        let note = |s: &str| {
+        let note = |s: SharedString| {
             div()
                 .px(t.sp3)
                 .py(t.sp2)
                 .text_size(t.fs_sm)
                 .text_color(t.dim)
-                .child(s.to_string())
+                .child(s)
         };
         match self.page {
             Page::Appearance => v_flex()
-                .child(ui::section_label(t, "THEME"))
+                .child(ui::section_label(t, i18n::t("set.theme")))
                 .child(
                     h_flex()
                         .gap(t.sp2)
                         .px(t.sp3)
                         .py(t.sp1)
-                        .child(self.theme_btn(cx, "Dark", true))
-                        .child(self.theme_btn(cx, "Light", false)),
+                        .child(self.theme_btn(cx, "set.dark", true))
+                        .child(self.theme_btn(cx, "set.light", false)),
                 )
-                .child(ui::section_label(t, "ACCENT"))
-                .child(ui::info_row(t, "Color", "Pier Blue"))
+                .child(ui::section_label(t, i18n::t("set.accent")))
+                .child(ui::info_row(t, i18n::t("set.color"), i18n::t("set.pier_blue")))
                 .into_any_element(),
             Page::Typography => v_flex()
-                .child(ui::section_label(t, "FONTS"))
-                .child(ui::info_row(t, "Sans", self.theme.sans.clone()))
-                .child(ui::info_row(t, "Mono", self.theme.mono.clone()))
-                .child(ui::section_label(t, "SIZE"))
-                .child(ui::info_row(t, "Heading", format!("{:.0}px", f32::from(t.fs_h3))))
-                .child(ui::info_row(t, "Body", format!("{:.0}px", f32::from(t.fs_body))))
-                .child(ui::info_row(t, "UI", format!("{:.0}px", f32::from(t.fs_ui))))
-                .child(ui::info_row(t, "Small", format!("{:.0}px", f32::from(t.fs_sm))))
+                .child(ui::section_label(t, i18n::t("set.fonts")))
+                .child(ui::info_row(t, i18n::t("set.sans"), self.theme.sans.clone()))
+                .child(ui::info_row(t, i18n::t("set.mono"), self.theme.mono.clone()))
+                .child(ui::section_label(t, i18n::t("set.size")))
+                .child(ui::info_row(t, i18n::t("set.heading"), format!("{:.0}px", f32::from(t.fs_h3))))
+                .child(ui::info_row(t, i18n::t("set.body"), format!("{:.0}px", f32::from(t.fs_body))))
+                .child(ui::info_row(t, i18n::t("set.ui"), format!("{:.0}px", f32::from(t.fs_ui))))
+                .child(ui::info_row(t, i18n::t("set.small"), format!("{:.0}px", f32::from(t.fs_sm))))
                 .into_any_element(),
             Page::Terminal => v_flex()
-                .child(ui::section_label(t, "LOCAL SHELL"))
-                .child(ui::info_row(t, "Program", "powershell.exe"))
-                .child(ui::info_row(t, "Cursor", "Block"))
-                .child(ui::info_row(t, "Scrollback", "pier-core emulator"))
-                .child(
-                    div()
-                        .px(t.sp3)
-                        .py(t.sp2)
-                        .text_size(t.fs_sm)
-                        .text_color(t.dim)
-                        .child("Cursor / scrollback / bell are not configurable in this build."),
-                )
+                .child(ui::section_label(t, i18n::t("set.local_shell")))
+                .child(ui::info_row(t, i18n::t("set.program"), "powershell.exe"))
+                .child(ui::info_row(t, i18n::t("set.cursor"), i18n::t("set.cursor_block")))
+                .child(ui::info_row(t, i18n::t("set.scrollback"), i18n::t("set.scrollback_value")))
+                .child(note(i18n::t("set.cursor_note")))
                 .into_any_element(),
             Page::Editor => v_flex()
-                .child(ui::section_label(t, "SFTP FILE EDITOR"))
-                .child(note(
-                    "Wrap, line numbers, tab width and on-save trimming live here in the full app. This build has no in-app file editor to configure.",
-                ))
+                .child(ui::section_label(t, i18n::t("set.editor_section")))
+                .child(note(i18n::t("set.editor_note")))
                 .into_any_element(),
             Page::Connections => {
-                let mut col =
-                    v_flex().child(ui::section_label(t, format!("SAVED · {}", self.conns.len())));
+                let mut col = v_flex().child(ui::section_label(
+                    t,
+                    i18n::tf("set.saved", &[&self.conns.len().to_string()]),
+                ));
                 if self.conns.is_empty() {
-                    col = col.child(
-                        div()
-                            .px(t.sp3)
-                            .py(t.sp2)
-                            .text_size(t.fs_sm)
-                            .text_color(t.dim)
-                            .child("No saved connections"),
-                    );
+                    col = col.child(note(i18n::t("set.no_connections")));
                 } else {
                     for c in &self.conns {
                         col = col.child(self.conn_line(&c.name, &c.addr));
@@ -262,18 +283,16 @@ impl SettingsView {
                 col.into_any_element()
             }
             Page::Profiles => v_flex()
-                .child(ui::section_label(t, "TERMINAL PROFILES"))
-                .child(ui::info_row(t, "Default shell", "powershell.exe"))
-                .child(note(
-                    "New terminals launch the default shell. Saved launch profiles (working directory and startup command) aren't configurable in this build.",
-                ))
+                .child(ui::section_label(t, i18n::t("set.terminal_profiles")))
+                .child(ui::info_row(t, i18n::t("set.default_shell"), "powershell.exe"))
+                .child(note(i18n::t("set.profiles_note")))
                 .into_any_element(),
             Page::Git => v_flex()
-                .child(ui::section_label(t, "IDENTITY"))
-                .child(ui::info_row(t, "User name", dash(&self.git_name)))
-                .child(ui::info_row(t, "Email", dash(&self.git_email)))
-                .child(ui::section_label(t, "REPOSITORY"))
-                .child(ui::info_row(t, "Path", self.repo.clone()))
+                .child(ui::section_label(t, i18n::t("set.identity")))
+                .child(ui::info_row(t, i18n::t("set.user_name"), dash(&self.git_name)))
+                .child(ui::info_row(t, i18n::t("set.email"), dash(&self.git_email)))
+                .child(ui::section_label(t, i18n::t("set.repository")))
+                .child(ui::info_row(t, i18n::t("set.path"), self.repo.clone()))
                 .into_any_element(),
             Page::SshKeys => {
                 // Key paths drawn from saved connections that authenticate with a
@@ -295,10 +314,12 @@ impl SettingsView {
                         keys.push((c.name.clone(), path));
                     }
                 }
-                let mut col = v_flex()
-                    .child(ui::section_label(t, format!("IDENTITIES · {}", keys.len())));
+                let mut col = v_flex().child(ui::section_label(
+                    t,
+                    i18n::tf("set.identities", &[&keys.len().to_string()]),
+                ));
                 if keys.is_empty() {
-                    col = col.child(note("No key-based connections saved"));
+                    col = col.child(note(i18n::t("set.no_key_conns")));
                 } else {
                     for (name, path) in keys {
                         col = col.child(ui::info_row(t, name, path));
@@ -307,53 +328,47 @@ impl SettingsView {
                 col.into_any_element()
             }
             Page::Keymap => {
-                let mut col = v_flex().child(ui::section_label(t, "SHORTCUTS"));
+                let mut col = v_flex().child(ui::section_label(t, i18n::t("set.shortcuts")));
                 for (chord, action) in KEYMAP {
-                    col = col.child(ui::info_row(t, *action, *chord));
+                    col = col.child(ui::info_row(t, i18n::t(action), *chord));
                 }
                 col.into_any_element()
             }
             Page::Diagnostics => v_flex()
-                .child(ui::section_label(t, "LOGGING"))
-                .child(ui::info_row(t, "Destination", "stderr"))
-                .child(note(
-                    "Runtime logs and panel errors go to standard error. This build keeps no on-disk log file and has no verbosity switch.",
-                ))
+                .child(ui::section_label(t, i18n::t("set.logging")))
+                .child(ui::info_row(t, i18n::t("set.destination"), "stderr"))
+                .child(note(i18n::t("set.diag_note")))
                 .into_any_element(),
             Page::Privacy => v_flex()
-                .child(ui::section_label(t, "LOCAL DATA"))
-                .child(note(
-                    "Pier-X is offline-first — connection profiles and preferences stay on this device and nothing here is sent anywhere.",
-                ))
-                .child(ui::section_label(t, "SECRET SCANNING"))
-                .child(note(
-                    "User-defined secret-scan patterns are a planned feature; this build has nothing to configure.",
-                ))
+                .child(ui::section_label(t, i18n::t("set.local_data")))
+                .child(note(i18n::t("set.privacy_note1")))
+                .child(ui::section_label(t, i18n::t("set.secret_scanning")))
+                .child(note(i18n::t("set.privacy_note2")))
                 .into_any_element(),
             Page::Security => v_flex()
-                .child(ui::section_label(t, "CREDENTIALS"))
-                .child(note(
-                    "Connection passwords and key passphrases live in the OS keychain. The Settings view only shows connection metadata and never reveals stored secrets.",
-                ))
-                .child(ui::section_label(t, "PRIVILEGE ELEVATION"))
-                .child(note(
-                    "Per-host sudo passwords and the elevation inventory are managed in the full app; this build has no editable security controls.",
-                ))
+                .child(ui::section_label(t, i18n::t("set.credentials")))
+                .child(note(i18n::t("set.security_note1")))
+                .child(ui::section_label(t, i18n::t("set.privilege")))
+                .child(note(i18n::t("set.security_note2")))
                 .into_any_element(),
-            Page::General => v_flex()
-                .child(ui::section_label(t, "LANGUAGE"))
-                .child(ui::info_row(t, "Interface", "English"))
-                .child(ui::section_label(t, "STARTUP"))
-                .child(ui::info_row(t, "Update check", "Off"))
-                .child(note(
-                    "Pier-X is offline by default. Language, update checks and developer toggles are fixed in this build.",
-                ))
-                .into_any_element(),
+            Page::General => {
+                let mut langs = h_flex().gap(t.sp2).px(t.sp3).py(t.sp1);
+                for l in Lang::all() {
+                    langs = langs.child(self.lang_btn(cx, l));
+                }
+                v_flex()
+                    .child(ui::section_label(t, i18n::t("set.language")))
+                    .child(langs)
+                    .child(ui::section_label(t, i18n::t("set.startup")))
+                    .child(ui::info_row(t, i18n::t("set.update_check"), i18n::t("set.off")))
+                    .child(note(i18n::t("set.general_note")))
+                    .into_any_element()
+            }
             Page::About => v_flex()
-                .child(ui::section_label(t, "ABOUT"))
-                .child(ui::info_row(t, "Version", "0.7.2"))
-                .child(ui::info_row(t, "UI engine", "GPUI (native)"))
-                .child(ui::info_row(t, "Backend", "pier-core"))
+                .child(ui::section_label(t, i18n::t("set.about_section")))
+                .child(ui::info_row(t, i18n::t("set.version"), "0.7.2"))
+                .child(ui::info_row(t, i18n::t("set.ui_engine"), "GPUI (native)"))
+                .child(ui::info_row(t, i18n::t("set.backend"), "pier-core"))
                 .into_any_element(),
         }
     }
@@ -399,7 +414,7 @@ impl Render for SettingsView {
                         div()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(t.ink)
-                            .child("Settings"),
+                            .child(i18n::t("set.title")),
                     ),
             )
             .child(

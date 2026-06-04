@@ -23,6 +23,7 @@ use pier_core::ssh::{SshConfig, SshSession};
 
 use crate::data;
 use crate::theme::Theme;
+use crate::i18n;
 use crate::ui;
 
 /// Hard cap on hits pulled back to the UI per search.
@@ -371,7 +372,10 @@ impl SearchPanel {
             }
         }
 
-        let mut col = v_flex().child(ui::section_label(t, format!("CONNECTIONS · {}", self.conns.len())));
+        let mut col = v_flex().child(ui::section_label(
+            t,
+            i18n::tf("search.connections", &[&self.conns.len().to_string()]),
+        ));
         if self.conns.is_empty() {
             col = col.child(
                 div()
@@ -379,7 +383,7 @@ impl SearchPanel {
                     .py(t.sp2)
                     .text_size(t.fs_sm)
                     .text_color(t.dim)
-                    .child("No saved connections"),
+                    .child(i18n::t("side.no_saved_connections")),
             );
         } else {
             for (i, c) in self.conns.iter().enumerate() {
@@ -393,7 +397,7 @@ impl SearchPanel {
                     .py(t.sp2)
                     .text_size(t.fs_sm)
                     .text_color(t.muted)
-                    .child("Connecting…"),
+                    .child(i18n::t("panel.connecting")),
             );
         }
         if let Some(err) = &self.conn_error {
@@ -417,7 +421,7 @@ impl SearchPanel {
             if focused {
                 h_flex().items_center().child(caret()).into_any_element()
             } else {
-                div().text_color(t.dim).child("Search code…").into_any_element()
+                div().text_color(t.dim).child(i18n::t("search.placeholder")).into_any_element()
             }
         } else {
             let mut row = h_flex()
@@ -514,7 +518,7 @@ impl SearchPanel {
                 div()
                     .text_size(t.fs_sm)
                     .text_color(t.dim)
-                    .child("Include glob, e.g. *.rs")
+                    .child(i18n::t("search.glob_placeholder"))
                     .into_any_element()
             }
         } else {
@@ -673,34 +677,30 @@ impl SearchPanel {
         };
 
         if self.searching {
-            return note(t.muted, "Searching…".to_string());
+            return note(t.muted, i18n::t("search.searching").to_string());
         }
         if let Some(err) = &self.search_error {
             return note(t.neg, err.clone());
         }
         let Some(out) = &self.result else {
-            return ui::empty_state(t, "Type a query and press Enter").into_any_element();
+            return ui::empty_state(t, i18n::t("panel.type_query")).into_any_element();
         };
 
         match out.engine {
             SearchEngine::None => {
-                return note(t.muted, "No search tool on remote (install ripgrep)".to_string());
+                return note(t.muted, i18n::t("panel.no_search_tool").to_string());
             }
             SearchEngine::CwdMissing => {
-                return note(t.neg, "Working directory not found".to_string());
+                return note(t.neg, i18n::t("panel.cwd_not_found").to_string());
             }
             _ => {}
         }
         if out.hits.is_empty() {
-            return ui::empty_state(t, "No matches").into_any_element();
+            return ui::empty_state(t, i18n::t("panel.no_matches")).into_any_element();
         }
 
         let total = out.hits.len();
-        let summary = if total == 1 {
-            "RESULTS · 1".to_string()
-        } else {
-            format!("RESULTS · {total}")
-        };
+        let summary = i18n::tf("search.results", &[&total.to_string()]);
         let mut col = v_flex().pb(t.sp3).child(ui::section_label(t, summary));
         if !out.cwd.is_empty() {
             col = col.child(
@@ -722,7 +722,7 @@ impl SearchPanel {
         if out.truncated {
             col = col.child(ui::section_label(
                 t,
-                format!("SHOWING FIRST {MAX_HITS} — REFINE QUERY"),
+                i18n::tf("search.truncated", &[&MAX_HITS.to_string()]),
             ));
         }
         col.into_any_element()
@@ -740,18 +740,18 @@ impl Render for SearchPanel {
 
         let t = self.theme.clone();
         // Engine that produced the current result → right-aligned header badge.
-        let engine_label: &'static str = match &self.result {
+        let engine_label: SharedString = match &self.result {
             Some(r) if self.session.is_some() => match r.engine {
-                SearchEngine::Rg => "ripgrep",
-                SearchEngine::GitGrep => "git grep",
-                _ => "",
+                SearchEngine::Rg => i18n::t("search.engine_ripgrep"),
+                SearchEngine::GitGrep => i18n::t("search.engine_gitgrep"),
+                _ => SharedString::default(),
             },
-            _ => "",
+            _ => SharedString::default(),
         };
 
         let mut root = v_flex()
             .size_full()
-            .child(ui::panel_header(&t, "search", "SEARCH", engine_label));
+            .child(ui::panel_header(&t, "search", i18n::t("tool.search"), engine_label));
 
         if self.session.is_some() {
             let focused = self.focus.is_focused(window);

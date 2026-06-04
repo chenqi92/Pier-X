@@ -27,6 +27,7 @@ use gpui_component::{h_flex, v_flex};
 use pier_core::services::git::FileStatus;
 
 use crate::data::{self, GitData};
+use crate::i18n;
 use crate::theme::Theme;
 use crate::ui;
 
@@ -65,13 +66,13 @@ enum GitRemoteOp {
 }
 
 impl GitRemoteOp {
-    /// Transient "in progress" line shown while the op runs.
+    /// i18n key for the transient "in progress" line shown while the op runs.
     fn pending(self) -> &'static str {
         match self {
-            GitRemoteOp::Push => "Pushing…",
-            GitRemoteOp::Pull => "Pulling…",
-            GitRemoteOp::Fetch => "Fetching…",
-            GitRemoteOp::Rebase => "Rebasing…",
+            GitRemoteOp::Push => "git.pushing",
+            GitRemoteOp::Pull => "git.pulling",
+            GitRemoteOp::Fetch => "git.fetching",
+            GitRemoteOp::Rebase => "git.rebasing",
         }
     }
 }
@@ -171,9 +172,12 @@ impl GitPanelView {
         }
         self.cwd = path;
         // The old repo's diff/blame and half-typed create form no longer apply.
-        self.viewer = None;
+        self.close_viewer();
         self.close_composer();
         self.reload_git_async(cx);
+        // Refresh the active non-Changes tab against the new cwd too; otherwise
+        // it keeps painting the old repo's list until the tab is re-clicked.
+        self.load_current_tab();
     }
 
     /// Branch + ahead/behind for the shell's status bar; `None` when the cwd
@@ -248,11 +252,11 @@ impl GitPanelView {
     fn do_commit(&mut self, cx: &mut Context<Self>) {
         let msg = self.commit_msg.trim().to_string();
         if msg.is_empty() {
-            self.git_msg = Some("Enter a commit message".to_string());
+            self.git_msg = Some(i18n::t("git.enter_commit_msg").to_string());
             cx.notify();
             return;
         }
-        self.git_msg = Some("Committing…".to_string());
+        self.git_msg = Some(i18n::t("git.committing").to_string());
         cx.notify();
         let cwd = self.cwd.clone();
         cx.spawn(async move |this, cx| {
@@ -265,7 +269,7 @@ impl GitPanelView {
                     Ok(hash) => {
                         this.commit_msg.clear();
                         let short: String = hash.chars().take(7).collect();
-                        this.git_msg = Some(format!("Committed {short}"));
+                        this.git_msg = Some(i18n::tf("git.committed", &[&short]));
                     }
                     Err(e) => this.git_msg = Some(e),
                 }
@@ -308,7 +312,7 @@ impl GitPanelView {
     /// Run a remote git op (push/pull/fetch/rebase) off the render path and
     /// surface the result line.
     fn git_remote_op(&mut self, op: GitRemoteOp, cx: &mut Context<Self>) {
-        self.git_msg = Some(op.pending().to_string());
+        self.git_msg = Some(i18n::t(op.pending()).to_string());
         cx.notify();
         let cwd = self.cwd.clone();
         cx.spawn(async move |this, cx| {
@@ -337,7 +341,7 @@ impl GitPanelView {
     /// is cwd-guarded so a folder change mid-checkout can't write a stale
     /// branch list into the new repo.
     fn checkout_branch(&mut self, branch: String, cx: &mut Context<Self>) {
-        self.git_msg = Some(format!("Switching to {branch}…"));
+        self.git_msg = Some(i18n::tf("git.switching", &[&branch]));
         cx.notify();
         let cwd = self.cwd.clone();
         cx.spawn(async move |this, cx| {
@@ -354,7 +358,7 @@ impl GitPanelView {
                     return;
                 }
                 this.git_msg = Some(match res {
-                    Ok(branch) => format!("Switched to {branch}"),
+                    Ok(branch) => i18n::tf("git.switched", &[&branch]),
                     Err(e) => e,
                 });
                 this.git_branch_list = branches;
@@ -366,7 +370,9 @@ impl GitPanelView {
     }
 
     /// Run a network/slow git op (submodule init/update/sync) off the render
-    /// path, surface its result, then refresh status + the active tab list.
+    /// path, surface its result, then refresh status + the active tab list. The
+    /// write-back is cwd-guarded so a folder change mid-op can't surface the old
+    /// repo's result line or trigger a redundant reload of the new one.
     fn run_async(
         &mut self,
         pending: &str,
@@ -377,11 +383,15 @@ impl GitPanelView {
         cx.notify();
         let cwd = self.cwd.clone();
         cx.spawn(async move |this, cx| {
+            let probe = cwd.clone();
             let res = cx
                 .background_executor()
-                .spawn(async move { op(&cwd) })
+                .spawn(async move { op(&probe) })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.cwd != cwd {
+                    return;
+                }
                 this.git_msg = Some(summarize(res));
                 this.reload_git_async(cx);
                 this.load_current_tab();
@@ -425,7 +435,7 @@ impl GitPanelView {
         let res = match self.composer {
             Composer::Tag => {
                 if a.is_empty() {
-                    self.git_msg = Some("Tag name required".to_string());
+                    self.git_msg = Some(i18n::t("git.tag_name_required").to_string());
                     cx.notify();
                     return;
                 }
@@ -433,7 +443,7 @@ impl GitPanelView {
             }
             Composer::Remote => {
                 if a.is_empty() || b.is_empty() {
-                    self.git_msg = Some("Remote name and URL required".to_string());
+                    self.git_msg = Some(i18n::t("git.remote_required").to_string());
                     cx.notify();
                     return;
                 }
@@ -441,7 +451,7 @@ impl GitPanelView {
             }
             Composer::Config => {
                 if a.is_empty() {
-                    self.git_msg = Some("Config key required".to_string());
+                    self.git_msg = Some(i18n::t("git.config_key_required").to_string());
                     cx.notify();
                     return;
                 }
@@ -794,7 +804,7 @@ impl GitPanelView {
                     .bg(t.panel_2)
                     .border_1()
                     .border_color(t.line_2)
-                    .when(empty, |d| d.text_color(t.dim).child("Commit message…"))
+                    .when(empty, |d| d.text_color(t.dim).child(i18n::t("git.commit_message_ph")))
                     .when(!empty, |d| {
                         d.text_color(t.ink).child(self.commit_msg.clone())
                     }),
@@ -813,7 +823,7 @@ impl GitPanelView {
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, _w, cx| this.do_commit(cx)),
                     )
-                    .child("Commit"),
+                    .child(i18n::t("git.commit")),
             )
     }
 
@@ -840,7 +850,7 @@ impl GitPanelView {
                 MouseButton::Left,
                 cx.listener(move |this, _: &MouseDownEvent, _w, cx| this.set_git_tab(tab, cx)),
             )
-            .child(label)
+            .child(i18n::t(label))
             .when_some(count, |d, n| {
                 d.child(
                     div()
@@ -877,7 +887,7 @@ impl GitPanelView {
             .text_size(t.fs_ui)
             .when(primary, |d| d.bg(t.accent).text_color(t.accent_ink))
             .when(!primary, |d| d.bg(t.panel_2).text_color(t.ink_2))
-            .child(label);
+            .child(i18n::t(label));
         match op {
             Some(op) => {
                 d = d.cursor_pointer().on_mouse_down(
@@ -1021,7 +1031,7 @@ impl GitPanelView {
             .items_center()
             .justify_between()
             .w_full()
-            .child(ui::section_label(t, format!("{label} · {count}")))
+            .child(ui::section_label(t, format!("{} · {}", i18n::t(label), count)))
             .child(
                 div()
                     .id(SharedString::from(format!("git-add-{label}")))
@@ -1050,12 +1060,13 @@ impl GitPanelView {
         &self,
         cx: &mut Context<Self>,
         idx: usize,
-        placeholder: &str,
+        placeholder: impl Into<SharedString>,
         value: &str,
         active: bool,
     ) -> impl IntoElement {
         let t = &self.theme;
         let empty = value.is_empty();
+        let placeholder = placeholder.into();
         div()
             .id(SharedString::from(format!("git-comp-f{idx}")))
             .flex_1()
@@ -1078,17 +1089,17 @@ impl GitPanelView {
                     cx.notify();
                 }),
             )
-            .when(empty, |d| d.text_color(t.dim).child(placeholder.to_string()))
+            .when(empty, |d| d.text_color(t.dim).child(placeholder))
             .when(!empty, |d| d.text_color(t.ink).child(value.to_string()))
     }
 
     fn composer_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
-        let (ph_a, ph_b) = match self.composer {
-            Composer::Tag => ("Tag name", "Message (optional)"),
-            Composer::Remote => ("Remote name", "URL"),
-            Composer::Config => ("key (e.g. user.name)", "value"),
-            Composer::None => ("", ""),
+        let (ph_a, ph_b): (SharedString, SharedString) = match self.composer {
+            Composer::Tag => (i18n::t("git.tag_name"), i18n::t("git.message_optional")),
+            Composer::Remote => (i18n::t("git.remote_name"), "URL".into()),
+            Composer::Config => (i18n::t("git.config_key_ph"), i18n::t("git.config_value_ph")),
+            Composer::None => ("".into(), "".into()),
         };
         let is_config = self.composer == Composer::Config;
         let global = self.in_global;
@@ -1114,16 +1125,16 @@ impl GitPanelView {
                             cx.notify();
                         }),
                     )
-                    .child(if global { "global" } else { "local" }),
+                    .child(i18n::t(if global { "git.scope_global" } else { "git.scope_local" })),
             );
         }
         actions = actions
             .child(div().flex_1())
-            .child(self.pill("git-comp-ok", "Add", true).on_mouse_down(
+            .child(self.pill("git-comp-ok", i18n::t("common.add"), true).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _w, cx| this.submit_composer(cx)),
             ))
-            .child(self.pill("git-comp-cancel", "Cancel", false).on_mouse_down(
+            .child(self.pill("git-comp-cancel", i18n::t("common.cancel"), false).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _w, cx| {
                     this.close_composer();
@@ -1330,29 +1341,29 @@ impl GitPanelView {
         v_flex()
             .child(ui::section_label(
                 t,
-                format!("SUBMODULES · {}", self.git_submodules.len()),
+                i18n::tf("git.submodules_count", &[&self.git_submodules.len().to_string()]),
             ))
             .child(
                 h_flex()
                     .gap(t.sp2)
                     .px(t.sp3)
                     .pb(t.sp2)
-                    .child(self.pill("git-sub-init", "Init", false).on_mouse_down(
+                    .child(self.pill("git-sub-init", i18n::t("git.init"), false).on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, _w, cx| {
-                            this.run_async("Initializing submodules…", data::git_submodule_init, cx)
+                            this.run_async(&i18n::t("git.init_submodules"), data::git_submodule_init, cx)
                         }),
                     ))
-                    .child(self.pill("git-sub-update", "Update", true).on_mouse_down(
+                    .child(self.pill("git-sub-update", i18n::t("common.update"), true).on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, _w, cx| {
-                            this.run_async("Updating submodules…", data::git_submodule_update, cx)
+                            this.run_async(&i18n::t("git.update_submodules"), data::git_submodule_update, cx)
                         }),
                     ))
-                    .child(self.pill("git-sub-sync", "Sync", false).on_mouse_down(
+                    .child(self.pill("git-sub-sync", i18n::t("common.sync"), false).on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, _w, cx| {
-                            this.run_async("Syncing submodules…", data::git_submodule_sync, cx)
+                            this.run_async(&i18n::t("git.sync_submodules"), data::git_submodule_sync, cx)
                         }),
                     )),
             )
@@ -1369,7 +1380,7 @@ impl GitPanelView {
             .font_family(t.mono.clone())
             .text_size(t.fs_sm);
         if total == 0 {
-            col = col.child(div().text_color(t.muted).child("No changes"));
+            col = col.child(div().text_color(t.muted).child(i18n::t("git.no_changes")));
         }
         for line in text.lines().take(MAX_VIEWER_LINES) {
             let color = if line.starts_with("+++") || line.starts_with("---") {
@@ -1410,7 +1421,7 @@ impl GitPanelView {
             .font_family(t.mono.clone())
             .text_size(t.fs_sm);
         if v.blame.is_empty() {
-            col = col.child(div().text_color(t.muted).child("No blame data"));
+            col = col.child(div().text_color(t.muted).child(i18n::t("git.no_blame")));
         }
         for bl in v.blame.iter().take(MAX_VIEWER_LINES) {
             col = col.child(
@@ -1446,7 +1457,7 @@ impl GitPanelView {
                 div()
                     .pt(t.sp2)
                     .text_color(t.dim)
-                    .child(format!("… {} more lines", v.blame.len() - MAX_VIEWER_LINES)),
+                    .child(i18n::tf("git.more_lines", &[&(v.blame.len() - MAX_VIEWER_LINES).to_string()])),
             );
         }
         col
@@ -1457,7 +1468,7 @@ impl GitPanelView {
         let Some(v) = &self.viewer else {
             return div().into_any_element();
         };
-        let toggle_label = if v.is_blame { "Diff" } else { "Blame" };
+        let toggle_label = if v.is_blame { i18n::t("git.diff") } else { i18n::t("git.blame") };
         let header = h_flex()
             .items_center()
             .gap(t.sp2)
@@ -1520,7 +1531,7 @@ impl GitPanelView {
             div()
                 .p(t.sp4)
                 .text_color(t.muted)
-                .child("Loading…")
+                .child(i18n::t("common.loading"))
                 .into_any_element()
         } else if let Some(err) = &v.error {
             div()
@@ -1558,27 +1569,27 @@ impl GitPanelView {
         let Some(git) = &self.git else {
             return v_flex()
                 .flex_1()
-                .child(ui::panel_header(t, "git-branch", "GIT", ""))
+                .child(ui::panel_header(t, "git-branch", i18n::t("tool.git"), ""))
                 .child(
                     div()
                         .p(t.sp4)
                         .text_color(t.muted)
-                        .child("Not a git repository"),
+                        .child(i18n::t("git.not_repo")),
                 )
                 .into_any_element();
         };
         let total = git.staged.len() + git.unstaged.len();
         let ahead_behind = format!("↑{} ↓{}", git.ahead, git.behind);
         let tracking = if git.tracking.is_empty() {
-            "no upstream".to_string()
+            i18n::t("git.no_upstream").to_string()
         } else {
-            format!("tracking {}", git.tracking)
+            i18n::tf("git.tracking", &[&git.tracking])
         };
 
         let mut col = v_flex()
             .flex_1()
             .min_h(px(0.0))
-            .child(ui::panel_header(t, "git-branch", "GIT", git.branch.clone()))
+            .child(ui::panel_header(t, "git-branch", i18n::t("tool.git"), git.branch.clone()))
             .child(
                 h_flex()
                     .flex_wrap()
@@ -1587,14 +1598,14 @@ impl GitPanelView {
                     .py(t.sp2)
                     .border_b_1()
                     .border_color(t.line)
-                    .child(self.git_chip(cx, "Changes", Some(total), GitTab::Changes))
-                    .child(self.git_chip(cx, "History", None, GitTab::History))
-                    .child(self.git_chip(cx, "Branches", None, GitTab::Branches))
-                    .child(self.git_chip(cx, "Stash", None, GitTab::Stash))
-                    .child(self.git_chip(cx, "Tags", None, GitTab::Tags))
-                    .child(self.git_chip(cx, "Remotes", None, GitTab::Remotes))
-                    .child(self.git_chip(cx, "Config", None, GitTab::Config))
-                    .child(self.git_chip(cx, "Submodules", None, GitTab::Submodules)),
+                    .child(self.git_chip(cx, "git.tab_changes", Some(total), GitTab::Changes))
+                    .child(self.git_chip(cx, "git.tab_history", None, GitTab::History))
+                    .child(self.git_chip(cx, "git.tab_branches", None, GitTab::Branches))
+                    .child(self.git_chip(cx, "git.tab_stash", None, GitTab::Stash))
+                    .child(self.git_chip(cx, "git.tab_tags", None, GitTab::Tags))
+                    .child(self.git_chip(cx, "git.tab_remotes", None, GitTab::Remotes))
+                    .child(self.git_chip(cx, "git.tab_config", None, GitTab::Config))
+                    .child(self.git_chip(cx, "git.tab_submodules", None, GitTab::Submodules)),
             )
             .child(
                 v_flex()
@@ -1628,10 +1639,10 @@ impl GitPanelView {
                         h_flex()
                             .gap(t.sp2)
                             .pt(t.sp1)
-                            .child(self.git_btn(cx, "Push", true, Some(GitRemoteOp::Push)))
-                            .child(self.git_btn(cx, "Pull", false, Some(GitRemoteOp::Pull)))
-                            .child(self.git_btn(cx, "Fetch", false, Some(GitRemoteOp::Fetch)))
-                            .child(self.git_btn(cx, "Rebase", false, Some(GitRemoteOp::Rebase))),
+                            .child(self.git_btn(cx, "git.push", true, Some(GitRemoteOp::Push)))
+                            .child(self.git_btn(cx, "git.pull", false, Some(GitRemoteOp::Pull)))
+                            .child(self.git_btn(cx, "git.fetch", false, Some(GitRemoteOp::Fetch)))
+                            .child(self.git_btn(cx, "git.rebase", false, Some(GitRemoteOp::Rebase))),
                     )
                     .when_some(self.git_msg.clone(), |d, msg| {
                         d.child(
@@ -1648,7 +1659,7 @@ impl GitPanelView {
             GitTab::Changes => {
                 if !git.staged.is_empty() {
                     col = col
-                        .child(ui::section_label(t, format!("STAGED · {}", git.staged.len())))
+                        .child(ui::section_label(t, i18n::tf("git.staged", &[&git.staged.len().to_string()])))
                         .child(self.commit_box(cx));
                     for c in &git.staged {
                         col = col.child(self.git_change_row(cx, c, true));
@@ -1656,24 +1667,24 @@ impl GitPanelView {
                 }
                 if !git.unstaged.is_empty() {
                     col = col
-                        .child(ui::section_label(t, format!("CHANGES · {}", git.unstaged.len())));
+                        .child(ui::section_label(t, i18n::tf("git.changes_count", &[&git.unstaged.len().to_string()])));
                     for c in &git.unstaged {
                         col = col.child(self.git_change_row(cx, c, false));
                     }
                 }
                 if total == 0 {
                     col = col.child(
-                        div().p(t.sp4).text_color(t.muted).child("Working tree clean"),
+                        div().p(t.sp4).text_color(t.muted).child(i18n::t("git.working_tree_clean")),
                     );
                 }
             }
             GitTab::History => {
                 col = col.child(ui::section_label(
                     t,
-                    format!("HISTORY · {}", self.git_history.len()),
+                    i18n::tf("git.history_count", &[&self.git_history.len().to_string()]),
                 ));
                 if self.git_history.is_empty() {
-                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No commits"));
+                    col = col.child(div().p(t.sp4).text_color(t.muted).child(i18n::t("git.no_commits")));
                 } else {
                     for c in &self.git_history {
                         col = col.child(self.git_commit_row(c));
@@ -1683,10 +1694,10 @@ impl GitPanelView {
             GitTab::Branches => {
                 col = col.child(ui::section_label(
                     t,
-                    format!("BRANCHES · {}", self.git_branch_list.len()),
+                    i18n::tf("git.branches_count", &[&self.git_branch_list.len().to_string()]),
                 ));
                 if self.git_branch_list.is_empty() {
-                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No branches"));
+                    col = col.child(div().p(t.sp4).text_color(t.muted).child(i18n::t("git.no_branches")));
                 } else {
                     for b in &self.git_branch_list {
                         col = col.child(self.git_branch_row(cx, b, b == &git.branch));
@@ -1696,10 +1707,10 @@ impl GitPanelView {
             GitTab::Stash => {
                 col = col.child(ui::section_label(
                     t,
-                    format!("STASH · {}", self.git_stashes.len()),
+                    i18n::tf("git.stash_count", &[&self.git_stashes.len().to_string()]),
                 ));
                 if self.git_stashes.is_empty() {
-                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No stashes"));
+                    col = col.child(div().p(t.sp4).text_color(t.muted).child(i18n::t("git.no_stashes")));
                 } else {
                     for s in &self.git_stashes {
                         col = col.child(self.git_stash_row(s));
@@ -1707,12 +1718,12 @@ impl GitPanelView {
                 }
             }
             GitTab::Tags => {
-                col = col.child(self.add_header(cx, "TAGS", self.git_tags.len(), Composer::Tag));
+                col = col.child(self.add_header(cx, "git.tags_label", self.git_tags.len(), Composer::Tag));
                 if self.composer == Composer::Tag {
                     col = col.child(self.composer_box(cx));
                 }
                 if self.git_tags.is_empty() {
-                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No tags"));
+                    col = col.child(div().p(t.sp4).text_color(t.muted).child(i18n::t("git.no_tags")));
                 } else {
                     for tg in &self.git_tags {
                         col = col.child(self.tag_row(cx, tg));
@@ -1722,7 +1733,7 @@ impl GitPanelView {
             GitTab::Remotes => {
                 col = col.child(self.add_header(
                     cx,
-                    "REMOTES",
+                    "git.remotes_label",
                     self.git_remotes.len(),
                     Composer::Remote,
                 ));
@@ -1730,7 +1741,7 @@ impl GitPanelView {
                     col = col.child(self.composer_box(cx));
                 }
                 if self.git_remotes.is_empty() {
-                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No remotes"));
+                    col = col.child(div().p(t.sp4).text_color(t.muted).child(i18n::t("git.no_remotes")));
                 } else {
                     for r in &self.git_remotes {
                         col = col.child(self.remote_row(cx, r));
@@ -1740,7 +1751,7 @@ impl GitPanelView {
             GitTab::Config => {
                 col = col.child(self.add_header(
                     cx,
-                    "CONFIG",
+                    "git.config_label",
                     self.git_config.len(),
                     Composer::Config,
                 ));
@@ -1748,7 +1759,7 @@ impl GitPanelView {
                     col = col.child(self.composer_box(cx));
                 }
                 if self.git_config.is_empty() {
-                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No config entries"));
+                    col = col.child(div().p(t.sp4).text_color(t.muted).child(i18n::t("git.no_config")));
                 } else {
                     for e in &self.git_config {
                         col = col.child(self.config_row(cx, e));
@@ -1758,7 +1769,7 @@ impl GitPanelView {
             GitTab::Submodules => {
                 col = col.child(self.submodule_header(cx));
                 if self.git_submodules.is_empty() {
-                    col = col.child(div().p(t.sp4).text_color(t.muted).child("No submodules"));
+                    col = col.child(div().p(t.sp4).text_color(t.muted).child(i18n::t("git.no_submodules")));
                 } else {
                     for s in &self.git_submodules {
                         col = col.child(self.submodule_row(s));
@@ -1794,7 +1805,7 @@ fn summarize(res: Result<String, String>) -> String {
         Ok(s) => {
             let s = s.trim().to_string();
             if s.is_empty() {
-                "Done".to_string()
+                i18n::t("git.done").to_string()
             } else {
                 s
             }

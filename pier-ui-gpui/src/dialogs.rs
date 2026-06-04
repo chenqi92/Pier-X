@@ -29,9 +29,12 @@ use pier_core::egress::{self, EgressKind, EgressProfile};
 use pier_core::services::host_health::{
     self, HealthStatus, HostDeepProbeReport, HostHealthReport, HostHealthTarget,
 };
-use pier_core::ssh::{SshConfig, SshSession, Tunnel};
+use pier_core::ssh::{
+    HostKeyDecision, HostKeyPromptKind, HostKeyPromptRequest, SshConfig, SshSession, Tunnel,
+};
 
 use crate::data;
+use crate::i18n;
 use crate::terminal::TerminalView;
 use crate::theme::Theme;
 use crate::ui;
@@ -145,7 +148,7 @@ fn input_box<D, F>(
     cx: &mut Context<D>,
     id: &str,
     value: &str,
-    placeholder: &'static str,
+    placeholder: impl Into<SharedString>,
     active: bool,
     on_focus: F,
 ) -> impl IntoElement
@@ -155,6 +158,7 @@ where
 {
     let empty = value.is_empty();
     let shown = value.to_string();
+    let placeholder = placeholder.into();
     div()
         .id(SharedString::from(id.to_string()))
         .h(px(30.0))
@@ -257,7 +261,7 @@ impl BroadcastDialog {
 
     fn send(&mut self, cx: &mut Context<Self>) {
         if self.command.is_empty() {
-            self.status = Some("Type a command first.".to_string());
+            self.status = Some(i18n::t("dlg.type_command_first").to_string());
             cx.notify();
             return;
         }
@@ -275,9 +279,9 @@ impl BroadcastDialog {
             }
         }
         self.status = Some(if sent == 0 {
-            "Pick at least one live SSH tab.".to_string()
+            i18n::t("dlg.pick_one_tab").to_string()
         } else {
-            format!("Broadcast sent to {sent} session(s).")
+            i18n::tf("dlg.broadcast_sent", &[&sent.to_string()])
         });
         cx.notify();
     }
@@ -353,7 +357,7 @@ impl BroadcastDialog {
                     .child(tgt.title.clone()),
             )
             .when(!live, |d| {
-                d.child(div().flex_none().text_size(t.fs_sm).text_color(t.dim).child("(not connected)"))
+                d.child(div().flex_none().text_size(t.fs_sm).text_color(t.dim).child(i18n::t("dlg.not_connected")))
             })
     }
 }
@@ -367,7 +371,7 @@ impl Render for BroadcastDialog {
 
         let mut targets = v_flex().gap(px(2.0));
         if self.targets.is_empty() {
-            targets = targets.child(note(&t, "No SSH tabs open."));
+            targets = targets.child(note(&t, i18n::t("dlg.no_ssh_tabs")));
         } else {
             for tgt in &self.targets {
                 targets = targets.child(self.target_row(cx, tgt));
@@ -409,24 +413,24 @@ impl Render for BroadcastDialog {
                 div()
                     .text_size(t.fs_ui)
                     .text_color(t.ink_2)
-                    .child("Append newline (run immediately on each host)"),
+                    .child(i18n::t("dlg.append_newline")),
             );
 
         card(&t, 480.0)
             .track_focus(&self.focus)
             .key_context("Broadcast")
             .on_key_down(cx.listener(Self::on_key))
-            .child(header(&t, cx, "square-terminal", "Broadcast to terminals"))
+            .child(header(&t, cx, "square-terminal", i18n::t("dlg.broadcast")))
             .child(
                 v_flex()
                     .p(t.sp4)
                     .gap(t.sp3)
-                    .child(ui::section_label(&t, "TARGETS"))
+                    .child(ui::section_label(&t, i18n::t("dlg.targets")))
                     .child(targets)
                     .child(labeled(
                         &t,
-                        "COMMAND",
-                        input_box(&t, cx, "bc-cmd", &self.command, "e.g. uptime ; df -h", false, |this, window, cx| {
+                        i18n::t("dlg.command"),
+                        input_box(&t, cx, "bc-cmd", &self.command, i18n::t("dlg.broadcast_cmd_ph"), false, |this, window, cx| {
                             window.focus(&this.focus, cx);
                             cx.notify();
                         }),
@@ -437,7 +441,7 @@ impl Render for BroadcastDialog {
                             .items_center()
                             .gap(t.sp2)
                             .child(ui::icon("triangle-alert", px(13.0), t.warn))
-                            .child(note(&t, "Fans the same command into every checked tab. Enter to send.")),
+                            .child(note(&t, i18n::t("dlg.broadcast_hint"))),
                     )
                     .when_some(self.status.clone(), |d, s| {
                         d.child(div().px(t.sp1).text_size(t.fs_sm).text_color(t.ink_2).child(s))
@@ -445,7 +449,7 @@ impl Render for BroadcastDialog {
                     .child(
                         h_flex()
                             .justify_end()
-                            .child(btn(&t, cx, "bc-send", "Send", true, |this, _w, cx| this.send(cx))),
+                            .child(btn(&t, cx, "bc-send", i18n::t("common.send"), true, |this, _w, cx| this.send(cx))),
                     ),
             )
     }
@@ -647,14 +651,14 @@ impl EgressDialog {
 
     fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() {
-            return Err("Name must not be empty.".to_string());
+            return Err(i18n::t("dlg.name_empty").to_string());
         }
         match self.kind {
             DraftKind::Socks5 | DraftKind::Http if self.host.trim().is_empty() => {
-                Err("Proxy host must not be empty.".to_string())
+                Err(i18n::t("dlg.proxy_host_empty").to_string())
             }
             DraftKind::SshJump if self.via.trim().is_empty() => {
-                Err("Choose a saved SSH connection to jump through.".to_string())
+                Err(i18n::t("dlg.choose_jump").to_string())
             }
             _ => Ok(()),
         }
@@ -747,8 +751,8 @@ impl EgressDialog {
                 this.probing = false;
                 let ms = outcome.elapsed.as_millis();
                 this.probe = Some(match outcome.result {
-                    Ok(()) => format!("Reached 1.1.1.1:443 in {ms} ms"),
-                    Err(e) => format!("Failed ({ms} ms): {e}"),
+                    Ok(()) => i18n::tf("dlg.reached", &[&ms.to_string()]),
+                    Err(e) => i18n::tf("dlg.failed_ms", &[&ms.to_string(), &e]),
                 });
                 cx.notify();
             });
@@ -780,6 +784,7 @@ impl EgressDialog {
         }
     }
 
+    /// Stable ASCII id fragment for a draft kind (used in element ids).
     fn kind_label(k: DraftKind) -> &'static str {
         match k {
             DraftKind::Direct => "Direct",
@@ -787,6 +792,17 @@ impl EgressDialog {
             DraftKind::Http => "HTTP",
             DraftKind::SshJump => "SSH jump",
             DraftKind::Wireguard => "WireGuard",
+        }
+    }
+
+    /// i18n key for a draft kind's displayed segment label.
+    fn kind_key(k: DraftKind) -> &'static str {
+        match k {
+            DraftKind::Direct => "dlg.egress_direct",
+            DraftKind::Socks5 => "dlg.egress_socks5",
+            DraftKind::Http => "dlg.egress_http",
+            DraftKind::SshJump => "dlg.egress_ssh_jump",
+            DraftKind::Wireguard => "dlg.egress_wireguard",
         }
     }
 
@@ -810,7 +826,7 @@ impl EgressDialog {
                     cx.notify();
                 }),
             )
-            .child(Self::kind_label(k))
+            .child(i18n::t(Self::kind_key(k)))
     }
 
     fn profile_row(&self, cx: &mut Context<Self>, i: usize, p: &EgressProfile) -> impl IntoElement {
@@ -844,7 +860,7 @@ impl EgressDialog {
     fn via_picker(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = &self.theme;
         if self.conn_names.is_empty() {
-            return note(t, "No saved SSH connections to jump through.").into_any_element();
+            return note(t, i18n::t("dlg.no_jump_conns")).into_any_element();
         }
         let mut wrap = h_flex().flex_wrap().gap(px(4.0));
         for name in &self.conn_names {
@@ -876,13 +892,13 @@ impl EgressDialog {
     fn kind_fields(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = &self.theme;
         match self.kind {
-            DraftKind::Direct => note(t, "Direct connection — no tunnel.").into_any_element(),
+            DraftKind::Direct => note(t, i18n::t("dlg.direct_no_tunnel")).into_any_element(),
             DraftKind::Socks5 | DraftKind::Http => h_flex()
                 .gap(t.sp3)
                 .child(
                     div().flex_1().child(labeled(
                         t,
-                        "Proxy host",
+                        i18n::t("dlg.proxy_host"),
                         input_box(t, cx, "eg-host", &self.host, "proxy.example.com", self.field == EgressField::Host, |this, window, cx| {
                             this.field = EgressField::Host;
                             window.focus(&this.focus, cx);
@@ -893,7 +909,7 @@ impl EgressDialog {
                 .child(
                     div().w(px(96.0)).child(labeled(
                         t,
-                        "Port",
+                        i18n::t("common.port"),
                         input_box(t, cx, "eg-port", &self.port, "1080", self.field == EgressField::Port, |this, window, cx| {
                             this.field = EgressField::Port;
                             window.focus(&this.focus, cx);
@@ -902,19 +918,19 @@ impl EgressDialog {
                     )),
                 )
                 .into_any_element(),
-            DraftKind::SshJump => labeled(t, "Jump host", self.via_picker(cx)).into_any_element(),
+            DraftKind::SshJump => labeled(t, i18n::t("dlg.jump_host"), self.via_picker(cx)).into_any_element(),
             DraftKind::Wireguard => v_flex()
                 .gap(px(3.0))
                 .child(labeled(
                     t,
-                    "Conf path",
+                    i18n::t("dlg.conf_path"),
                     input_box(t, cx, "eg-conf", &self.conf_path, "/etc/wireguard/wg0.conf", self.field == EgressField::ConfPath, |this, window, cx| {
                         this.field = EgressField::ConfPath;
                         window.focus(&this.focus, cx);
                         cx.notify();
                     }),
                 ))
-                .child(note(t, "Empty → ~/.config/pier-x/egress/<id>.conf. wg-quick runs as a system VPN (needs admin)."))
+                .child(note(t, i18n::t("dlg.wg_conf_note")))
                 .into_any_element(),
         }
     }
@@ -928,9 +944,9 @@ impl Render for EgressDialog {
         let t = self.theme.clone();
 
         // Left: profile list + "New".
-        let mut list = v_flex().gap(px(2.0)).child(ui::section_label(&t, format!("PROFILES · {}", self.profiles.len())));
+        let mut list = v_flex().gap(px(2.0)).child(ui::section_label(&t, i18n::tf("dlg.egress_profiles_count", &[&self.profiles.len().to_string()])));
         if self.profiles.is_empty() {
-            list = list.child(note(&t, "No egress profiles yet."));
+            list = list.child(note(&t, i18n::t("dlg.no_egress")));
         } else {
             for (i, p) in self.profiles.iter().enumerate() {
                 list = list.child(self.profile_row(cx, i, p));
@@ -946,7 +962,7 @@ impl Render for EgressDialog {
             .border_color(t.line)
             .child(div().flex_1().min_h(px(0.0)).id("egress-list").overflow_y_scroll().child(list))
             .child(
-                div().pt(t.sp2).child(btn(&t, cx, "eg-new", "+ New profile", false, |this, _w, cx| this.new_draft(cx))),
+                div().pt(t.sp2).child(btn(&t, cx, "eg-new", i18n::t("dlg.new_profile"), false, |this, _w, cx| this.new_draft(cx))),
             );
 
         // Right: the draft form.
@@ -958,12 +974,12 @@ impl Render for EgressDialog {
 
         let mut footer = h_flex().items_center().gap(t.sp2);
         if self.selected.is_some() {
-            footer = footer.child(btn(&t, cx, "eg-del", "Delete", false, |this, _w, cx| this.delete(cx)));
+            footer = footer.child(btn(&t, cx, "eg-del", i18n::t("common.delete"), false, |this, _w, cx| this.delete(cx)));
         }
         footer = footer
             .child(div().flex_1())
-            .child(btn(&t, cx, "eg-test", if self.probing { "Testing…" } else { "Test" }, false, |this, _w, cx| this.test(cx)))
-            .child(btn(&t, cx, "eg-save", "Save", true, |this, _w, cx| this.save(cx)));
+            .child(btn(&t, cx, "eg-test", if self.probing { i18n::t("conn.testing") } else { i18n::t("common.test") }, false, |this, _w, cx| this.test(cx)))
+            .child(btn(&t, cx, "eg-save", i18n::t("common.save"), true, |this, _w, cx| this.save(cx)));
 
         let form = v_flex()
             .flex_1()
@@ -973,14 +989,14 @@ impl Render for EgressDialog {
             .gap(t.sp3)
             .child(labeled(
                 &t,
-                "Name",
+                i18n::t("common.name"),
                 input_box(&t, cx, "eg-name", &self.name, "Office SOCKS", self.field == EgressField::Name, |this, window, cx| {
                     this.field = EgressField::Name;
                     window.focus(&this.focus, cx);
                     cx.notify();
                 }),
             ))
-            .child(labeled(&t, "Kind", seg))
+            .child(labeled(&t, i18n::t("dlg.kind"), seg))
             .child(self.kind_fields(cx))
             .when_some(self.error.clone(), |d, e| {
                 d.child(h_flex().items_center().gap(t.sp2).child(ui::icon("triangle-alert", px(13.0), t.neg)).child(div().text_size(t.fs_sm).text_color(t.neg).child(e)))
@@ -996,7 +1012,7 @@ impl Render for EgressDialog {
             .track_focus(&self.focus)
             .key_context("Egress")
             .on_key_down(cx.listener(Self::on_key))
-            .child(header(&t, cx, "shield", "Egress profiles"))
+            .child(header(&t, cx, "shield", i18n::t("dlg.egress")))
             .child(h_flex().flex_1().min_h(px(0.0)).child(left).child(form))
     }
 }
@@ -1083,20 +1099,20 @@ impl TunnelDialog {
 
     fn open(&mut self, cx: &mut Context<Self>) {
         let Some((_, session)) = self.active.clone() else {
-            self.error = Some("No active SSH session — open an SSH tab first.".to_string());
+            self.error = Some(i18n::t("dlg.no_session_open_first").to_string());
             cx.notify();
             return;
         };
         let rhost = self.remote_host.trim().to_string();
         if rhost.is_empty() {
-            self.error = Some("Remote host must not be empty.".to_string());
+            self.error = Some(i18n::t("dlg.remote_host_empty").to_string());
             cx.notify();
             return;
         }
         let rport: u16 = match self.remote_port.trim().parse() {
             Ok(p) if p > 0 => p,
             _ => {
-                self.error = Some("Remote port must be 1–65535.".to_string());
+                self.error = Some(i18n::t("dlg.remote_port_range").to_string());
                 cx.notify();
                 return;
             }
@@ -1210,12 +1226,12 @@ impl Render for TunnelDialog {
         let via_label = self
             .active
             .as_ref()
-            .map(|(l, _)| format!("via {l}"))
-            .unwrap_or_else(|| "No active SSH session".to_string());
+            .map(|(l, _)| i18n::tf("dlg.via", &[l]))
+            .unwrap_or_else(|| i18n::t("dlg.no_active_session").to_string());
 
         let mut active_list = v_flex().gap(px(4.0));
         if self.tunnels.is_empty() {
-            active_list = active_list.child(note(&t, "No active tunnels."));
+            active_list = active_list.child(note(&t, i18n::t("dlg.no_active_tunnels")));
         } else {
             for (i, e) in self.tunnels.iter().enumerate() {
                 active_list = active_list.child(self.tunnel_row(cx, i, e));
@@ -1224,32 +1240,32 @@ impl Render for TunnelDialog {
 
         let form = h_flex()
             .gap(t.sp3)
-            .child(div().flex_1().child(labeled(&t, "Remote host", self.port_field(cx, "tun-rh", &self.remote_host.clone(), "127.0.0.1", TunnelField::RemoteHost))))
-            .child(div().w(px(90.0)).child(labeled(&t, "Remote port", self.port_field(cx, "tun-rp", &self.remote_port.clone(), "5432", TunnelField::RemotePort))))
-            .child(div().w(px(90.0)).child(labeled(&t, "Local port", self.port_field(cx, "tun-lp", &self.local_port.clone(), "0", TunnelField::LocalPort))));
+            .child(div().flex_1().child(labeled(&t, i18n::t("dlg.remote_host"), self.port_field(cx, "tun-rh", &self.remote_host.clone(), "127.0.0.1", TunnelField::RemoteHost))))
+            .child(div().w(px(90.0)).child(labeled(&t, i18n::t("dlg.remote_port"), self.port_field(cx, "tun-rp", &self.remote_port.clone(), "5432", TunnelField::RemotePort))))
+            .child(div().w(px(90.0)).child(labeled(&t, i18n::t("dlg.local_port"), self.port_field(cx, "tun-lp", &self.local_port.clone(), "0", TunnelField::LocalPort))));
 
         card(&t, 480.0)
             .track_focus(&self.focus)
             .key_context("Tunnel")
             .on_key_down(cx.listener(Self::on_key))
-            .child(header(&t, cx, "network", "Port forwarding"))
+            .child(header(&t, cx, "network", i18n::t("dlg.port_forward")))
             .child(
                 v_flex()
                     .p(t.sp4)
                     .gap(t.sp3)
-                    .child(note(&t, "Local forwards only (ssh -L): a local listener proxied into the SSH session."))
+                    .child(note(&t, i18n::t("dlg.tunnel_intro")))
                     .child(
                         h_flex()
                             .items_center()
                             .gap(t.sp2)
-                            .child(ui::section_label(&t, "ACTIVE TUNNELS"))
+                            .child(ui::section_label(&t, i18n::t("dlg.active_tunnels")))
                             .child(div().flex_1())
                             .child(div().text_size(t.fs_sm).text_color(t.muted).child(via_label)),
                     )
                     .child(active_list)
-                    .child(ui::section_label(&t, "OPEN NEW TUNNEL"))
+                    .child(ui::section_label(&t, i18n::t("dlg.open_new_tunnel")))
                     .child(form)
-                    .child(note(&t, "Local port 0 lets the OS pick a free port."))
+                    .child(note(&t, i18n::t("dlg.local_port_hint")))
                     .when_some(self.error.clone(), |d, e| {
                         d.child(div().px(t.sp1).text_size(t.fs_sm).text_color(t.neg).child(e))
                     })
@@ -1258,7 +1274,7 @@ impl Render for TunnelDialog {
                             &t,
                             cx,
                             "tun-open",
-                            if self.busy { "Opening…" } else { "Open Tunnel" },
+                            if self.busy { i18n::t("dlg.opening") } else { i18n::t("dlg.open_tunnel") },
                             true,
                             |this, _w, cx| this.open(cx),
                         )),
@@ -1409,11 +1425,11 @@ impl HostsHealthDialog {
         let t = &self.theme;
         let report = self.reports.get(&idx);
         let (dot, status_txt) = match report.map(|r| r.status) {
-            Some(HealthStatus::Online) => (t.pos, "Online".to_string()),
-            Some(HealthStatus::Offline) => (t.neg, "Offline".to_string()),
-            Some(HealthStatus::Timeout) => (t.neg, "Timeout".to_string()),
-            Some(HealthStatus::Error) => (t.warn, "Error".to_string()),
-            None => (t.muted, if self.busy { "Probing…".to_string() } else { "Unknown".to_string() }),
+            Some(HealthStatus::Online) => (t.pos, i18n::t("dlg.online")),
+            Some(HealthStatus::Offline) => (t.neg, i18n::t("dlg.offline")),
+            Some(HealthStatus::Timeout) => (t.neg, i18n::t("dlg.timeout")),
+            Some(HealthStatus::Error) => (t.warn, i18n::t("dlg.error")),
+            None => (t.muted, if self.busy { i18n::t("dlg.probing") } else { i18n::t("dlg.unknown") }),
         };
         let latency = report
             .and_then(|r| r.latency_ms)
@@ -1484,15 +1500,23 @@ impl Render for HostsHealthDialog {
             .filter(|r| matches!(r.status, HealthStatus::Offline | HealthStatus::Timeout | HealthStatus::Error))
             .count();
         let unknown = self.conns.len().saturating_sub(online + down);
-        let summary = format!("Online {online} · Down {down} · Unknown {unknown} · {} total", self.conns.len());
+        let summary = i18n::tf(
+            "dlg.hh_summary",
+            &[
+                &online.to_string(),
+                &down.to_string(),
+                &unknown.to_string(),
+                &self.conns.len().to_string(),
+            ],
+        );
 
         let mut rows = v_flex().gap(px(2.0));
         let visible: Vec<(usize, &SshConfig)> =
             self.conns.iter().enumerate().filter(|(_, c)| self.matches(c)).collect();
         if self.conns.is_empty() {
-            rows = rows.child(note(&t, "No saved SSH connections yet."));
+            rows = rows.child(note(&t, i18n::t("dlg.no_saved_ssh")));
         } else if visible.is_empty() {
-            rows = rows.child(note(&t, "No saved connections match your filter."));
+            rows = rows.child(note(&t, i18n::t("dlg.no_match_filter")));
         } else {
             for (idx, c) in visible {
                 rows = rows.child(self.host_row(cx, idx, c));
@@ -1514,8 +1538,8 @@ impl Render for HostsHealthDialog {
                     .border_b_1()
                     .border_color(t.line)
                     .child(ui::icon("activity", px(16.0), t.accent))
-                    .child(div().flex_1().min_w(px(0.0)).font_weight(FontWeight::SEMIBOLD).text_color(t.ink).child("Host health"))
-                    .child(btn(&t, cx, "hh-refresh", if self.busy { "Probing…" } else { "Refresh" }, false, |this, _w, cx| this.refresh(cx)))
+                    .child(div().flex_1().min_w(px(0.0)).font_weight(FontWeight::SEMIBOLD).text_color(t.ink).child(i18n::t("dlg.host_health")))
+                    .child(btn(&t, cx, "hh-refresh", if self.busy { i18n::t("dlg.probing") } else { i18n::t("common.refresh") }, false, |this, _w, cx| this.refresh(cx)))
                     .child(close_btn(&t, cx)),
             )
             .child(
@@ -1528,12 +1552,194 @@ impl Render for HostsHealthDialog {
                             .py(t.sp2)
                             .gap(t.sp2)
                             .child(div().text_size(t.fs_sm).text_color(t.muted).child(summary))
-                            .child(input_box(&t, cx, "hh-filter", &self.filter, "Filter by name, host, user, group…", false, |this, window, cx| {
+                            .child(input_box(&t, cx, "hh-filter", &self.filter, i18n::t("dlg.hh_filter_ph"), false, |this, window, cx| {
                                 window.focus(&this.focus, cx);
                                 cx.notify();
                             })),
                     )
                     .child(div().flex_1().min_h(px(0.0)).id("hh-list").overflow_y_scroll().px(t.sp2).pb(t.sp2).child(rows)),
+            )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Host key — interactive trust prompt for unknown / changed keys.
+// ═══════════════════════════════════════════════════════════════════
+//
+// Shown by the shell when a background connect task hits a host key it can't
+// silently trust (see `data::connect_blocking_prompt`). Unlike the other
+// dialogs it does NOT emit `DialogEvent::Close`: every exit is a decision, so
+// it emits [`HostKeyEvent`] and the shell forwards the verdict to the parked
+// connect task. The shell also treats a scrim-click / app-exit dismissal as
+// `Reject` (a dropped decision sender), so there is no "close without answering"
+// path that could hang the connection.
+
+/// What the host-key dialog emits when the user accepts or rejects the key.
+pub enum HostKeyEvent {
+    Decide(HostKeyDecision),
+}
+
+pub struct HostKeyDialog {
+    /// The pending prompt, or `None` before the shell feeds the first request.
+    req: Option<HostKeyPromptRequest>,
+    /// Grab keyboard focus once per request so Esc (= reject) works without a
+    /// click; reset by [`Self::set_request`].
+    did_focus: bool,
+    focus: FocusHandle,
+    theme: Theme,
+}
+
+impl HostKeyDialog {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            req: None,
+            did_focus: false,
+            focus: cx.focus_handle(),
+            theme: Theme::dark(),
+        }
+    }
+
+    /// Point the dialog at a new prompt (called by the shell when the connect
+    /// task asks). Re-arms the auto-focus so the fresh card takes the keyboard.
+    pub fn set_request(&mut self, req: HostKeyPromptRequest, cx: &mut Context<Self>) {
+        self.req = Some(req);
+        self.did_focus = false;
+        cx.notify();
+    }
+
+    fn decide(&mut self, decision: HostKeyDecision, cx: &mut Context<Self>) {
+        cx.emit(HostKeyEvent::Decide(decision));
+    }
+
+    fn on_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        // Esc rejects (the safe default). Enter is deliberately NOT bound to
+        // Accept: trusting an unknown / changed key must be a deliberate click.
+        if ev.keystroke.key.as_str() == "escape" {
+            self.decide(HostKeyDecision::Reject, cx);
+        }
+    }
+
+    /// The ✕ in the header — dismiss = reject, same as Esc / scrim.
+    fn close_x(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        div()
+            .id("hk-close")
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .w(px(24.0))
+            .h(px(24.0))
+            .rounded(t.radius_sm)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _w, cx| {
+                    this.decide(HostKeyDecision::Reject, cx)
+                }),
+            )
+            .child(ui::icon("close", px(14.0), t.muted))
+    }
+}
+
+impl EventEmitter<HostKeyEvent> for HostKeyDialog {}
+
+impl Render for HostKeyDialog {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = cx.global::<Theme>().clone();
+        let t = self.theme.clone();
+
+        // Take the keyboard once per request so Esc works without a click.
+        if self.req.is_some() && !self.did_focus {
+            self.did_focus = true;
+            window.focus(&self.focus, cx);
+        }
+
+        let Some(req) = self.req.clone() else {
+            // No request yet (shouldn't render in this state) — minimal card.
+            return card(&t, 460.0)
+                .track_focus(&self.focus)
+                .child(note(&t, "No host key to verify."));
+        };
+
+        let changed = req.kind == HostKeyPromptKind::Changed;
+        let (glyph, glyph_color, title) = if changed {
+            ("triangle-alert", t.neg, "Host key changed")
+        } else {
+            ("shield", t.accent, "Unknown host key")
+        };
+        let lead = if changed {
+            "The host key has CHANGED since this host was last trusted. If you \
+             did not expect this, it may signal a man-in-the-middle attack — \
+             reject unless you know the server's key was legitimately replaced."
+        } else {
+            "This host isn't in your known_hosts file. Verify the fingerprint \
+             below over a trusted channel before trusting it."
+        };
+        let accept_label = if changed { "Replace & connect" } else { "Trust & connect" };
+
+        let header = h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .w_full()
+            .h(px(40.0))
+            .px(t.sp4)
+            .border_b_1()
+            .border_color(t.line)
+            .child(ui::icon(glyph, px(16.0), glyph_color))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(t.ink)
+                    .child(title),
+            )
+            .child(self.close_x(cx));
+
+        // host:port, key type, and fingerprint as mono rows.
+        let field = |label: &'static str, value: String| {
+            labeled(
+                &t,
+                label,
+                div()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_ui)
+                    .text_color(t.ink_2)
+                    .child(value),
+            )
+        };
+
+        card(&t, 460.0)
+            .track_focus(&self.focus)
+            .key_context("HostKey")
+            .on_key_down(cx.listener(Self::on_key))
+            .child(header)
+            .child(
+                v_flex()
+                    .p(t.sp4)
+                    .gap(t.sp3)
+                    .child(
+                        div()
+                            .text_size(t.fs_ui)
+                            .text_color(if changed { t.neg } else { t.ink_2 })
+                            .child(lead),
+                    )
+                    .child(field("HOST", format!("{}:{}", req.host, req.port)))
+                    .child(field("KEY TYPE", req.key_type.clone()))
+                    .child(field("FINGERPRINT", req.fingerprint.clone()))
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap(t.sp2)
+                            .child(btn(&t, cx, "hk-reject", "Reject", false, |this, _w, cx| {
+                                this.decide(HostKeyDecision::Reject, cx)
+                            }))
+                            .child(btn(&t, cx, "hk-accept", accept_label, true, |this, _w, cx| {
+                                this.decide(HostKeyDecision::Accept, cx)
+                            })),
+                    ),
             )
     }
 }

@@ -16,6 +16,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use futures::channel::{mpsc, oneshot};
+use futures::StreamExt;
 use gpui::prelude::*;
 use gpui::{
     deferred, div, px, svg, AnyElement, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla,
@@ -24,13 +26,15 @@ use gpui::{
 };
 use gpui_component::{h_flex, v_flex, TitleBar};
 
-use pier_core::ssh::{AuthMethod, SshConfig};
+use pier_core::ssh::{AuthMethod, HostKeyDecision, SshConfig};
 
 use crate::data::{self, ConnRow, DetectedService, FileEntry, MonStat, ServiceStatus};
 use crate::dialogs::{
-    BroadcastDialog, BroadcastTarget, DialogEvent, EgressDialog, HostsHealthDialog, TunnelDialog,
+    BroadcastDialog, BroadcastTarget, DialogEvent, EgressDialog, HostKeyDialog, HostKeyEvent,
+    HostsHealthDialog, TunnelDialog,
 };
 use crate::git_panel::GitPanelView;
+use crate::i18n::{self, Lang};
 use crate::panels::PanelViews;
 use crate::settings::SettingsView;
 use crate::terminal::TerminalView;
@@ -47,6 +51,13 @@ fn icon(name: &str, sz: Pixels, color: Hsla) -> Svg {
         .h(sz)
         .path(SharedString::from(format!("icons/{name}.svg")))
         .text_color(color)
+}
+
+/// Localized label for a tool-rail entry, keyed off its stable English name
+/// (`"DOCKER"` → `tool.docker`). Brand/protocol names have no `zh` override
+/// and stay in English; see [`crate::i18n`].
+fn tool_label(name: &str) -> SharedString {
+    i18n::t(&format!("tool.{}", name.to_ascii_lowercase()))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -216,6 +227,16 @@ pub struct Shell {
     detected_services: HashMap<String, Vec<DetectedService>>,
     /// `user@host` keys whose service detection is currently in flight.
     detecting_services: HashSet<String>,
+    /// The host-key trust dialog (hosted in `overlay_layer`), fed a request
+    /// when a connect task hits an unknown / changed key.
+    hostkey_view: Entity<HostKeyDialog>,
+    /// Cloned into each new SSH tab so its connect task can ship a
+    /// [`data::HostKeyPrompt`] to the receiver task spawned in `new`.
+    hostkey_tx: mpsc::UnboundedSender<data::HostKeyPrompt>,
+    /// Decision channel for the host-key prompt currently on screen, if any.
+    /// Resolved by an Accept / Reject click; dropped (→ Reject) when the
+    /// overlay is dismissed so the parked connect task never hangs.
+    pending_hostkey: Option<oneshot::Sender<HostKeyDecision>>,
 }
 
 /// A draggable layout divider.
@@ -236,6 +257,7 @@ enum Overlay {
     Egress,
     PortForward,
     HostsHealth,
+    HostKey,
 }
 
 /// Number of text fields in the connection form (name, host, port,
@@ -294,42 +316,45 @@ gpui::actions!(
     [CmdPalette, CmdNewTerminal, CmdCloseTab, CmdToggleTheme, CmdSettings]
 );
 
-/// Top-bar menus: (label, items). Each item is (text, command).
+/// Top-bar menus: (label-key, items). Each item is (text-key, command). The
+/// stored strings are `i18n` keys resolved to display text at render time (and
+/// reused verbatim as stable element ids).
 const MENUS: &[(&str, &[(&str, Cmd)])] = &[
     (
-        "File",
+        "menu.file",
         &[
-            ("New Terminal", Cmd::NewTerminal),
-            ("Command Palette", Cmd::OpenPalette),
-            ("Settings", Cmd::OpenSettings),
+            ("tab.new_terminal", Cmd::NewTerminal),
+            ("menu.command_palette", Cmd::OpenPalette),
+            ("set.title", Cmd::OpenSettings),
         ],
     ),
-    ("Edit", &[("Settings", Cmd::OpenSettings)]),
+    ("menu.edit", &[("set.title", Cmd::OpenSettings)]),
     (
-        "View",
+        "menu.view",
         &[
-            ("Toggle Theme", Cmd::ToggleTheme),
-            ("Toggle Right Panel", Cmd::ToggleRightPanel),
-            ("Command Palette", Cmd::OpenPalette),
-            ("Host Health", Cmd::OpenHostsHealth),
-            ("Egress Profiles", Cmd::OpenEgress),
+            ("menu.toggle_theme", Cmd::ToggleTheme),
+            ("menu.toggle_right_panel", Cmd::ToggleRightPanel),
+            ("menu.command_palette", Cmd::OpenPalette),
+            ("dlg.host_health", Cmd::OpenHostsHealth),
+            ("dlg.egress", Cmd::OpenEgress),
         ],
     ),
     (
-        "Session",
+        "menu.session",
         &[
-            ("New Terminal", Cmd::NewTerminal),
-            ("Broadcast to Terminals", Cmd::OpenBroadcast),
-            ("Port Forwarding", Cmd::OpenPortForward),
+            ("tab.new_terminal", Cmd::NewTerminal),
+            ("dlg.broadcast", Cmd::OpenBroadcast),
+            ("dlg.port_forward", Cmd::OpenPortForward),
         ],
     ),
-    ("Help", &[("About Pier-X", Cmd::OpenSettings)]),
+    ("menu.help", &[("menu.about", Cmd::OpenSettings)]),
 ];
 
 impl Shell {
     pub fn new(cx: &mut Context<Self>) -> Self {
         // Restore persisted layout/state from the last session.
         let st = data::load_ui_state();
+        i18n::set(Lang::from_code(&st.lang));
         if !st.dark {
             cx.set_global(Theme::light());
         }
@@ -353,6 +378,12 @@ impl Shell {
         let egress_view = cx.new(EgressDialog::new);
         let tunnel_view = cx.new(TunnelDialog::new);
         let hosts_health_view = cx.new(HostsHealthDialog::new);
+        let hostkey_view = cx.new(HostKeyDialog::new);
+        // Background connect tasks send unknown / changed host keys over this
+        // channel; the receiver task (started below) pops `hostkey_view` and
+        // routes the user's verdict back. The shell keeps the sender to clone
+        // into each new SSH tab.
+        let (hostkey_tx, hostkey_rx) = mpsc::unbounded::<data::HostKeyPrompt>();
         // Esc / ✕ / scrim-click inside any dialog emits DialogEvent::Close;
         // dismiss the overlay from here (the scrim itself routes through
         // Cmd::CloseOverlay, so both paths converge on Overlay::None).
@@ -376,8 +407,21 @@ impl Shell {
         ] {
             sub.detach();
         }
+        // The host-key dialog reports Accept / Reject (not a plain Close): feed
+        // the verdict to the parked connect task via the pending sender, then
+        // dismiss the overlay.
+        cx.subscribe(&hostkey_view, |this, _, ev: &HostKeyEvent, cx| {
+            let HostKeyEvent::Decide(decision) = ev;
+            if let Some(tx) = this.pending_hostkey.take() {
+                let _ = tx.send(*decision);
+            }
+            this.overlay = Overlay::None;
+            cx.notify();
+        })
+        .detach();
         Self::start_monitor(cx);
         Self::start_sidebar_tasks(cx);
+        Self::start_hostkey_prompt(hostkey_rx, cx);
         Self {
             theme: if st.dark { Theme::dark() } else { Theme::light() },
             tabs: vec![Tab {
@@ -428,6 +472,9 @@ impl Shell {
             health_probing: false,
             detected_services: HashMap::new(),
             detecting_services: HashSet::new(),
+            hostkey_view,
+            hostkey_tx,
+            pending_hostkey: None,
         }
     }
 
@@ -488,14 +535,14 @@ impl Shell {
         let port_s = self.conn_form[2].trim();
         let user = self.conn_form[3].trim();
         if host.is_empty() || user.is_empty() {
-            return Err("Host and User are required".to_string());
+            return Err(i18n::t("conn.host_user_required").to_string());
         }
         let port: u16 = if port_s.is_empty() {
             22
         } else {
             port_s
                 .parse()
-                .map_err(|_| "Port must be a number".to_string())?
+                .map_err(|_| i18n::t("conn.port_must_be_number").to_string())?
         };
         let secret = self.conn_form[CONN_SECRET].clone();
         // In edit mode an unchanged secret field reuses the saved `AuthMethod`
@@ -569,7 +616,7 @@ impl Shell {
                     cfg.group = fresh.group;
                     data::update_connection(idx, cfg)
                 }
-                None => Err("connection no longer exists".to_string()),
+                None => Err(i18n::t("conn.connection_gone").to_string()),
             },
             None => data::add_connection(fresh),
         };
@@ -600,7 +647,7 @@ impl Shell {
                 return;
             }
         };
-        self.conn_test = Some("Testing…".to_string());
+        self.conn_test = Some(i18n::t("conn.testing").to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let res = cx
@@ -612,7 +659,7 @@ impl Shell {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.conn_test = Some(match res {
-                    Ok(d) => format!("Connected in {} ms", d.as_millis()),
+                    Ok(d) => i18n::tf("conn.connected_in", &[&d.as_millis().to_string()]),
                     Err(e) => e,
                 });
                 cx.notify();
@@ -725,25 +772,27 @@ impl Shell {
         }
     }
 
-    /// The palette's entries (icon, label, command), in display order.
-    fn palette_entries() -> Vec<(&'static str, &'static str, Cmd)> {
+    /// The palette's entries (icon, label, command), in display order. Labels
+    /// are localized so the list and its substring filter both run on the text
+    /// the user actually sees.
+    fn palette_entries() -> Vec<(&'static str, SharedString, Cmd)> {
         let mut v = vec![
-            ("plus", "New Terminal", Cmd::NewTerminal),
-            ("server", "New Connection", Cmd::OpenNewConn),
-            ("square-terminal", "Broadcast to Terminals", Cmd::OpenBroadcast),
-            ("network", "Port Forwarding", Cmd::OpenPortForward),
-            ("activity", "Host Health", Cmd::OpenHostsHealth),
-            ("shield", "Egress Profiles", Cmd::OpenEgress),
-            ("settings", "Settings", Cmd::OpenSettings),
+            ("plus", i18n::t("tab.new_terminal"), Cmd::NewTerminal),
+            ("server", i18n::t("conn.new"), Cmd::OpenNewConn),
+            ("square-terminal", i18n::t("dlg.broadcast"), Cmd::OpenBroadcast),
+            ("network", i18n::t("dlg.port_forward"), Cmd::OpenPortForward),
+            ("activity", i18n::t("dlg.host_health"), Cmd::OpenHostsHealth),
+            ("shield", i18n::t("dlg.egress"), Cmd::OpenEgress),
+            ("settings", i18n::t("set.title"), Cmd::OpenSettings),
         ];
         for (i, (_, glyph, name, _)) in TOOLS.iter().enumerate() {
-            v.push((glyph, name, Cmd::SelectTool(i)));
+            v.push((glyph, tool_label(name), Cmd::SelectTool(i)));
         }
         v
     }
 
     /// Entries matching the current palette query (case-insensitive substring).
-    fn palette_matches(&self) -> Vec<(&'static str, &'static str, Cmd)> {
+    fn palette_matches(&self) -> Vec<(&'static str, SharedString, Cmd)> {
         let q = self.palette_query.trim().to_lowercase();
         Self::palette_entries()
             .into_iter()
@@ -764,7 +813,7 @@ impl Shell {
                 return;
             }
             "enter" => {
-                if let Some((_, _, cmd)) = self.palette_matches().first().copied() {
+                if let Some((_, _, cmd)) = self.palette_matches().first().cloned() {
                     self.run(cmd, window, cx);
                 }
                 return;
@@ -822,6 +871,7 @@ impl Shell {
             sidebar_w: self.sidebar_w.map(f32::from),
             right_w: self.right_w.map(f32::from),
             cwd: self.cwd.display().to_string(),
+            lang: i18n::current().code().to_string(),
         });
     }
 
@@ -929,7 +979,13 @@ impl Shell {
                 let fh = self.hosts_health_view.read(cx).focus_handle();
                 window.focus(&fh, cx);
             }
-            Cmd::CloseOverlay => self.overlay = Overlay::None,
+            Cmd::CloseOverlay => {
+                // Dismissing the host-key dialog (scrim / Esc / ✕) is a Reject:
+                // drop the pending sender so the parked connect task resolves to
+                // Reject instead of hanging. No-op for the other overlays.
+                self.pending_hostkey = None;
+                self.overlay = Overlay::None;
+            }
             Cmd::CloseTab => {
                 if !self.tabs.is_empty() {
                     self.tabs.remove(self.active_tab);
@@ -1158,6 +1214,51 @@ impl Shell {
         .detach();
     }
 
+    /// Receive host-key prompts from background connect tasks and drive the
+    /// [`HostKeyDialog`] overlay. Handles one prompt at a time: it parks on the
+    /// per-prompt UI channel before pulling the next request, so concurrent SSH
+    /// connects queue rather than clobbering each other's decision sender. A
+    /// dismissed dialog (dropped `pending_hostkey`) and a dropped shell both
+    /// resolve to Reject, so a connect task is never left hung.
+    fn start_hostkey_prompt(
+        mut rx: mpsc::UnboundedReceiver<data::HostKeyPrompt>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            while let Some((req, decision_tx)) = rx.next().await {
+                // Per-prompt UI channel: the Accept/Reject subscription (or a
+                // CloseOverlay drop) resolves `ui_rx`, which we forward to the
+                // connect task's `decision_tx`.
+                let (ui_tx, ui_rx) = oneshot::channel::<HostKeyDecision>();
+                let shown = this
+                    .update(cx, |this, cx| {
+                        this.pending_hostkey = Some(ui_tx);
+                        this.hostkey_view.update(cx, |v, cx| v.set_request(req, cx));
+                        this.overlay = Overlay::HostKey;
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !shown {
+                    // Shell gone — reject so the connect task unblocks.
+                    let _ = decision_tx.send(HostKeyDecision::Reject);
+                    break;
+                }
+                // Park here (UI thread free to paint + collect the click) until
+                // the user decides; a dropped ui_tx (dismissed dialog) → Reject.
+                let decision = ui_rx.await.unwrap_or(HostKeyDecision::Reject);
+                let _ = decision_tx.send(decision);
+                let _ = this.update(cx, |this, cx| {
+                    this.pending_hostkey = None;
+                    if this.overlay == Overlay::HostKey {
+                        this.overlay = Overlay::None;
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
     /// Open a fresh local terminal tab and make it active.
     fn open_terminal_tab(&mut self, cx: &mut Context<Self>) {
         let terminal = cx.new(|cx| TerminalView::new(cx));
@@ -1249,7 +1350,7 @@ impl Shell {
                             cx.notify();
                         }),
                     )
-                    .child(label),
+                    .child(i18n::t(label)),
             )
             .when(open, |d| {
                 d.child(deferred(self.menu_dropdown(cx, idx, items)))
@@ -1296,7 +1397,7 @@ impl Shell {
                             this.run(cmd, window, cx)
                         }),
                     )
-                    .child(text),
+                    .child(i18n::t(text)),
             );
         }
         col
@@ -1375,7 +1476,7 @@ impl Shell {
                     cx.notify();
                 }),
             )
-            .child(label)
+            .child(i18n::t(label))
     }
 
     fn section_label(&self, text: impl Into<SharedString>) -> impl IntoElement {
@@ -1484,9 +1585,9 @@ impl Shell {
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(t.muted)
             .child(div().w(px(14.0)))
-            .child(div().flex_1().child("NAME"))
-            .child(div().w(px(40.0)).flex_none().child("MOD"))
-            .child(div().w(px(56.0)).flex_none().child("SIZE"))
+            .child(div().flex_1().child(i18n::t("side.col_name")))
+            .child(div().w(px(40.0)).flex_none().child(i18n::t("side.col_mod")))
+            .child(div().w(px(56.0)).flex_none().child(i18n::t("side.col_size")))
     }
 
     /// Breadcrumb + home/up/refresh toolbar for the Files tree.
@@ -1589,7 +1690,7 @@ impl Shell {
             .border_1()
             .border_color(t.line_2)
             .child(icon("search", px(13.0), t.muted))
-            .when(empty, |d| d.child(div().text_size(t.fs_sm).text_color(t.dim).child("Filter files…")))
+            .when(empty, |d| d.child(div().text_size(t.fs_sm).text_color(t.dim).child(i18n::t("side.filter_files"))))
             .when(!empty, |d| {
                 d.child(div().flex_1().text_size(t.fs_sm).text_color(t.ink).child(self.file_filter.clone()))
             })
@@ -1625,7 +1726,8 @@ impl Shell {
             return;
         };
         let title = format!("{}@{}", cfg.user, cfg.host);
-        let terminal = cx.new(|cx| TerminalView::new_ssh(cx, cfg));
+        let prompt_tx = self.hostkey_tx.clone();
+        let terminal = cx.new(|cx| TerminalView::new_ssh(cx, cfg, prompt_tx));
         self.tabs.push(Tab {
             title,
             kind: TabKind::Ssh,
@@ -1745,7 +1847,7 @@ impl Shell {
             );
         if confirming {
             row = row
-                .child(div().flex_none().text_size(t.fs_sm).text_color(t.neg).child("Delete?"))
+                .child(div().flex_none().text_size(t.fs_sm).text_color(t.neg).child(i18n::t("common.confirm_delete")))
                 .child(self.conn_btn_icon(
                     cx,
                     format!("delyes-{idx}"),
@@ -1814,7 +1916,7 @@ impl Shell {
             .border_color(t.line_2)
             .child(icon("search", px(13.0), t.muted))
             .when(empty, |d| {
-                d.child(div().text_size(t.fs_sm).text_color(t.dim).child("Search connections…"))
+                d.child(div().text_size(t.fs_sm).text_color(t.dim).child(i18n::t("side.search_connections")))
             })
             .when(!empty, |d| {
                 d.child(
@@ -1900,7 +2002,7 @@ impl Shell {
         let t = &self.theme;
         let body = if self.show_servers {
             let mut col = v_flex()
-                .child(self.section_label(format!("SERVERS · {}", self.conns.len())))
+                .child(self.section_label(i18n::tf("side.servers_count", &[&self.conns.len().to_string()])))
                 .child(
                     h_flex()
                         .id("add-conn")
@@ -1918,7 +2020,7 @@ impl Shell {
                             }),
                         )
                         .child(icon("plus", px(14.0), t.muted))
-                        .child(div().flex_1().child("Add connection")),
+                        .child(div().flex_1().child(i18n::t("side.add_connection"))),
                 )
                 .child(self.conn_search_box(cx));
             let q = self.conn_search.to_lowercase();
@@ -1935,7 +2037,7 @@ impl Shell {
                         .py(t.sp2)
                         .text_size(t.fs_sm)
                         .text_color(t.dim)
-                        .child("No saved connections"),
+                        .child(i18n::t("side.no_saved_connections")),
                 );
             } else {
                 // Favorites float to the top; the store index travels with
@@ -1972,7 +2074,7 @@ impl Shell {
                             .py(t.sp2)
                             .text_size(t.fs_sm)
                             .text_color(t.dim)
-                            .child("No matching connections"),
+                            .child(i18n::t("side.no_matching_connections")),
                     );
                 }
             }
@@ -2007,8 +2109,8 @@ impl Shell {
                     .w_full()
                     .border_b_1()
                     .border_color(t.line)
-                    .child(self.sidebar_tab(cx, "Files", false))
-                    .child(self.sidebar_tab(cx, "Servers", true)),
+                    .child(self.sidebar_tab(cx, "side.files", false))
+                    .child(self.sidebar_tab(cx, "side.servers", true)),
             )
             .child(
                 div()
@@ -2264,9 +2366,9 @@ impl Shell {
             .text_size(t.fs_sm)
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(t.muted)
-            .child(div().flex_1().child("PROCESS"))
-            .child(div().w(px(48.0)).flex_none().child("CPU%"))
-            .child(div().w(px(48.0)).flex_none().child("MEM%"))
+            .child(div().flex_1().child(i18n::t("mon.process")))
+            .child(div().w(px(48.0)).flex_none().child(i18n::t("mon.cpu_pct")))
+            .child(div().w(px(48.0)).flex_none().child(i18n::t("mon.mem_pct")))
     }
 
     /// One process row in a Monitor top-process table.
@@ -2312,8 +2414,8 @@ impl Shell {
         let Some(m) = &self.mon else {
             return v_flex()
                 .flex_1()
-                .child(self.panel_header("activity", "MONITOR", ""))
-                .child(div().p(t.sp4).text_color(t.muted).child("Sampling…"))
+                .child(self.panel_header("activity", i18n::t("tool.monitor"), ""))
+                .child(div().p(t.sp4).text_color(t.muted).child(i18n::t("mon.sampling")))
                 .into_any_element();
         };
         let gb = |mb: f64| format!("{:.1} GB", mb / 1024.0);
@@ -2331,38 +2433,38 @@ impl Shell {
         let mut col = v_flex()
             .flex_1()
             .min_h(px(0.0))
-            .child(self.panel_header("activity", "MONITOR", "localhost"))
+            .child(self.panel_header("activity", i18n::t("tool.monitor"), "localhost"))
             .child(ui::meter(
                 t,
-                "CPU",
-                format!("{:.0}% · {} cores", m.cpu_pct, m.cpu_count),
+                i18n::t("mon.cpu"),
+                i18n::tf("mon.cpu_cores", &[&format!("{:.0}", m.cpu_pct), &m.cpu_count.to_string()]),
                 m.cpu_pct,
             ))
             .child(ui::meter(
                 t,
-                "Memory",
+                i18n::t("mon.memory"),
                 format!("{} / {}", gb(m.mem_used_mb), gb(m.mem_total_mb)),
                 mem_pct,
             ));
         if m.swap_total_mb > 0.0 {
             col = col.child(ui::meter(
                 t,
-                "Swap",
+                i18n::t("mon.swap"),
                 format!("{} / {}", gb(m.swap_used_mb), gb(m.swap_total_mb)),
                 swap_pct,
             ));
         }
         col = col
-            .child(self.section_label("SYSTEM"))
-            .child(ui::info_row(t, "Uptime", m.uptime.clone()))
-            .child(ui::info_row(t, "Processes", m.proc_count.to_string()));
+            .child(self.section_label(i18n::t("mon.system")))
+            .child(ui::info_row(t, i18n::t("mon.uptime"), m.uptime.clone()))
+            .child(ui::info_row(t, i18n::t("mon.processes"), m.proc_count.to_string()));
         if let Some((l1, l5, l15)) = m.load {
-            col = col.child(ui::info_row(t, "Load", format!("{l1:.2} {l5:.2} {l15:.2}")));
+            col = col.child(ui::info_row(t, i18n::t("mon.load"), format!("{l1:.2} {l5:.2} {l15:.2}")));
         }
-        col = col.child(ui::info_row(t, "OS", m.os_label.clone()));
+        col = col.child(ui::info_row(t, i18n::t("mon.os"), m.os_label.clone()));
 
         if !m.disks.is_empty() {
-            col = col.child(self.section_label("DISKS"));
+            col = col.child(self.section_label(i18n::t("mon.disks")));
             for d in &m.disks {
                 col = col.child(ui::meter(
                     t,
@@ -2374,13 +2476,13 @@ impl Shell {
         }
 
         col = col
-            .child(self.section_label("NETWORK"))
-            .child(ui::info_row(t, "Download", fmt_rate(m.net_rx_bps)))
-            .child(ui::info_row(t, "Upload", fmt_rate(m.net_tx_bps)));
+            .child(self.section_label(i18n::t("mon.network")))
+            .child(ui::info_row(t, i18n::t("common.download"), fmt_rate(m.net_rx_bps)))
+            .child(ui::info_row(t, i18n::t("common.upload"), fmt_rate(m.net_tx_bps)));
 
         if !m.top_cpu.is_empty() {
             col = col
-                .child(self.section_label("TOP BY CPU"))
+                .child(self.section_label(i18n::t("mon.top_by_cpu")))
                 .child(self.mon_proc_header());
             for p in &m.top_cpu {
                 col = col.child(self.mon_proc_row(p));
@@ -2388,7 +2490,7 @@ impl Shell {
         }
         if !m.top_mem.is_empty() {
             col = col
-                .child(self.section_label("TOP BY MEMORY"))
+                .child(self.section_label(i18n::t("mon.top_by_mem")))
                 .child(self.mon_proc_header());
             for p in &m.top_mem {
                 col = col.child(self.mon_proc_row(p));
@@ -2416,8 +2518,8 @@ impl Shell {
         } else {
             v_flex()
                 .flex_1()
-                .child(self.panel_header(glyph, name, "panel"))
-                .child(ui::empty_state(&self.theme, "not implemented"))
+                .child(self.panel_header(glyph, tool_label(name), "panel"))
+                .child(ui::empty_state(&self.theme, i18n::t("conn.not_implemented")))
                 .into_any_element()
         }
     }
@@ -2458,16 +2560,16 @@ impl Shell {
                             .child(self.status_item(branch, t.ink_2)),
                     )
                     .child(self.status_item(ahead_behind, t.muted))
-                    .child(self.status_item("local · pwsh", t.ink_2))
+                    .child(self.status_item(i18n::t("status.local_pwsh"), t.ink_2))
                     .child(self.status_item(format!("{cols}×{rows}"), t.muted)),
             )
             .child(
                 h_flex()
                     .items_center()
                     .gap(t.sp3)
-                    .child(self.status_item(format!("PANEL · {tool_name}"), t.accent))
+                    .child(self.status_item(i18n::tf("status.panel", &[tool_label(tool_name).as_ref()]), t.accent))
                     .child(self.status_item("UTF-8", t.muted))
-                    .child(self.status_item("● Ready", t.pos))
+                    .child(self.status_item(i18n::t("status.ready"), t.pos))
                     .child(self.status_item("Pier-X v0.7.2", t.muted)),
             )
     }
@@ -2478,7 +2580,7 @@ impl Shell {
         &self,
         cx: &mut Context<Self>,
         glyph: &'static str,
-        label: &'static str,
+        label: SharedString,
         cmd: Cmd,
         first: bool,
     ) -> impl IntoElement {
@@ -2511,7 +2613,7 @@ impl Shell {
                     .px(t.sp3)
                     .py(t.sp3)
                     .text_color(t.dim)
-                    .child("No matching command"),
+                    .child(i18n::t("palette.no_match")),
             );
         } else {
             for (i, (glyph, label, cmd)) in matches.into_iter().enumerate() {
@@ -2537,7 +2639,7 @@ impl Shell {
                 div()
                     .flex_1()
                     .when(self.palette_query.is_empty(), |d| {
-                        d.text_color(t.dim).child("Go to tool / action…")
+                        d.text_color(t.dim).child(i18n::t("palette.placeholder"))
                     })
                     .when(!self.palette_query.is_empty(), |d| {
                         d.text_color(t.ink).child(self.palette_query.clone())
@@ -2559,7 +2661,7 @@ impl Shell {
         cx: &mut Context<Self>,
         idx: usize,
         label: impl Into<SharedString>,
-        placeholder: &'static str,
+        placeholder: impl Into<SharedString>,
         masked: bool,
     ) -> impl IntoElement {
         let t = &self.theme;
@@ -2594,7 +2696,7 @@ impl Shell {
                             cx.notify();
                         }),
                     )
-                    .when(empty, |d| d.text_color(t.dim).child(placeholder))
+                    .when(empty, |d| d.text_color(t.dim).child(placeholder.into()))
                     .when(!empty, |d| d.text_color(t.ink).child(shown)),
             )
     }
@@ -2627,7 +2729,7 @@ impl Shell {
                     cx.notify();
                 }),
             )
-            .child(label)
+            .child(i18n::t(label))
     }
 
     /// The secondary "Test" button that probes the form's connection.
@@ -2646,7 +2748,7 @@ impl Shell {
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _w, cx| this.test_conn(cx)),
             )
-            .child("Test")
+            .child(i18n::t("common.test"))
     }
 
     fn conn_btn(&self, cx: &mut Context<Self>, label: &'static str, primary: bool, cmd: Option<Cmd>) -> impl IntoElement {
@@ -2667,7 +2769,7 @@ impl Shell {
                     None => this.submit_conn(window, cx),
                 }),
             )
-            .child(label)
+            .child(i18n::t(label))
     }
 
     fn conn_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2692,31 +2794,31 @@ impl Shell {
                         div()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(t.ink)
-                            .child(if self.conn_edit.is_some() {
-                                "Edit Connection"
+                            .child(i18n::t(if self.conn_edit.is_some() {
+                                "conn.edit"
                             } else {
-                                "New Connection"
-                            }),
+                                "conn.new"
+                            })),
                     ),
             )
-            .child(self.conn_field_row(cx, 0, "Name", "optional label", false))
+            .child(self.conn_field_row(cx, 0, i18n::t("common.name"), i18n::t("conn.optional_label"), false))
             .child(
                 h_flex()
                     .gap(t.sp2)
-                    .child(div().flex_1().child(self.conn_field_row(cx, 1, "Host", "host or IP", false)))
-                    .child(div().w(px(96.0)).child(self.conn_field_row(cx, 2, "Port", "22", false))),
+                    .child(div().flex_1().child(self.conn_field_row(cx, 1, i18n::t("common.host"), i18n::t("conn.host_or_ip"), false)))
+                    .child(div().w(px(96.0)).child(self.conn_field_row(cx, 2, i18n::t("common.port"), "22", false))),
             )
-            .child(self.conn_field_row(cx, 3, "User", "user", false))
+            .child(self.conn_field_row(cx, 3, i18n::t("common.user"), i18n::t("conn.ph_user"), false))
             .child(
                 v_flex()
                     .gap(px(3.0))
-                    .child(div().text_size(t.fs_sm).text_color(t.muted).child("Authentication"))
+                    .child(div().text_size(t.fs_sm).text_color(t.muted).child(i18n::t("conn.authentication")))
                     .child(
                         h_flex()
                             .gap(t.sp2)
-                            .child(self.conn_auth_btn(cx, "Password", ConnAuthKind::Password))
-                            .child(self.conn_auth_btn(cx, "Key file", ConnAuthKind::Key))
-                            .child(self.conn_auth_btn(cx, "Agent", ConnAuthKind::Agent)),
+                            .child(self.conn_auth_btn(cx, "common.password", ConnAuthKind::Password))
+                            .child(self.conn_auth_btn(cx, "conn.key_file", ConnAuthKind::Key))
+                            .child(self.conn_auth_btn(cx, "conn.agent", ConnAuthKind::Agent)),
                     ),
             )
             .when(self.conn_auth == ConnAuthKind::Password, |d| {
@@ -2727,21 +2829,21 @@ impl Shell {
                     self.conn_orig_auth,
                     Some(AuthMethod::KeychainPassword { .. } | AuthMethod::DirectPassword { .. })
                 );
-                let ph = if saved { "leave blank to keep saved" } else { "password" };
-                d.child(self.conn_field_row(cx, CONN_SECRET, "Password", ph, true))
+                let ph = if saved { i18n::t("conn.leave_blank_keep") } else { i18n::t("conn.ph_password") };
+                d.child(self.conn_field_row(cx, CONN_SECRET, i18n::t("common.password"), ph, true))
             })
             .when(self.conn_auth == ConnAuthKind::Key, |d| {
-                d.child(self.conn_field_row(cx, CONN_SECRET, "Key file", "~/.ssh/id_ed25519", false))
+                d.child(self.conn_field_row(cx, CONN_SECRET, i18n::t("conn.key_file"), "~/.ssh/id_ed25519", false))
             })
             .when(self.conn_auth == ConnAuthKind::Agent, |d| {
                 d.child(
                     div()
                         .text_size(t.fs_sm)
                         .text_color(t.dim)
-                        .child("Uses the system SSH agent"),
+                        .child(i18n::t("conn.uses_ssh_agent")),
                 )
             })
-            .child(self.conn_field_row(cx, 5, "Group", "optional group", false))
+            .child(self.conn_field_row(cx, 5, i18n::t("conn.group"), i18n::t("conn.optional_group"), false))
             .when_some(self.conn_error.clone(), |d, e| {
                 d.child(div().text_size(t.fs_sm).text_color(t.neg).child(e))
             })
@@ -2758,11 +2860,11 @@ impl Shell {
                 h_flex()
                     .gap(t.sp2)
                     .justify_end()
-                    .child(self.conn_btn(cx, "Cancel", false, Some(Cmd::CloseOverlay)))
+                    .child(self.conn_btn(cx, "common.cancel", false, Some(Cmd::CloseOverlay)))
                     .child(self.conn_test_btn(cx))
                     .child(self.conn_btn(
                         cx,
-                        if self.conn_edit.is_some() { "Save" } else { "Add" },
+                        if self.conn_edit.is_some() { "common.save" } else { "common.add" },
                         true,
                         None,
                     )),
@@ -2790,7 +2892,7 @@ impl Shell {
                         this.run(cmd, window, cx)
                     }),
                 )
-                .child(label)
+                .child(i18n::t(label))
         };
         // Color swatches: a clear button followed by the eight palette colors.
         let mut swatches = h_flex().gap(px(4.0)).px(t.sp3).py(px(4.0)).child(
@@ -2846,10 +2948,10 @@ impl Shell {
                     this.tab_menu = None;
                     cx.notify();
                 }))
-                .child(item("close", "Close", Cmd::CloseTabAt(idx), cx))
-                .child(item("others", "Close Others", Cmd::CloseOthers(idx), cx))
-                .child(item("left", "Close to Left", Cmd::CloseToLeft(idx), cx))
-                .child(item("right", "Close to Right", Cmd::CloseToRight(idx), cx))
+                .child(item("close", "tab.close", Cmd::CloseTabAt(idx), cx))
+                .child(item("others", "tab.close_others", Cmd::CloseOthers(idx), cx))
+                .child(item("left", "tab.close_left", Cmd::CloseToLeft(idx), cx))
+                .child(item("right", "tab.close_right", Cmd::CloseToRight(idx), cx))
                 .child(div().my(px(4.0)).mx(t.sp2).h(px(1.0)).bg(t.line_2))
                 .child(
                     div()
@@ -2858,7 +2960,7 @@ impl Shell {
                         .text_size(t.fs_sm)
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(t.muted)
-                        .child("COLOR"),
+                        .child(i18n::t("tab.color")),
                 )
                 .child(swatches),
         )
@@ -2876,6 +2978,7 @@ impl Shell {
             Overlay::Egress => self.egress_view.clone().into_any_element(),
             Overlay::PortForward => self.tunnel_view.clone().into_any_element(),
             Overlay::HostsHealth => self.hosts_health_view.clone().into_any_element(),
+            Overlay::HostKey => self.hostkey_view.clone().into_any_element(),
             Overlay::None => div().into_any_element(),
         };
         div()
@@ -2931,8 +3034,8 @@ impl Shell {
                 cx.listener(move |this, _: &MouseDownEvent, window, cx| this.run(cmd, window, cx)),
             )
             .child(icon(glyph, px(18.0), t.accent))
-            .child(div().text_color(t.ink).child(label))
-            .child(div().text_size(t.fs_sm).text_color(t.muted).child(sub))
+            .child(div().text_color(t.ink).child(i18n::t(label)))
+            .child(div().text_size(t.fs_sm).text_color(t.muted).child(i18n::t(sub)))
     }
 
     /// A saved-connection shortcut row on the Welcome view (opens SSH).
@@ -2980,7 +3083,7 @@ impl Shell {
         let mut conns = v_flex()
             .w(px(440.0))
             .gap(px(2.0))
-            .child(self.section_label(format!("SAVED CONNECTIONS · {}", self.conns.len())));
+            .child(self.section_label(i18n::tf("side.saved_connections", &[&self.conns.len().to_string()])));
         if self.conns.is_empty() {
             conns = conns.child(
                 div()
@@ -2988,7 +3091,7 @@ impl Shell {
                     .py(t.sp2)
                     .text_size(t.fs_sm)
                     .text_color(t.dim)
-                    .child("No saved connections yet — add one from the Servers sidebar"),
+                    .child(i18n::t("welcome.no_connections")),
             );
         } else {
             for (i, c) in self.conns.iter().enumerate().take(6) {
@@ -3018,13 +3121,13 @@ impl Shell {
                             .text_size(t.fs_h3)
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(t.ink)
-                            .child("Welcome to Pier-X"),
+                            .child(i18n::t("welcome.title")),
                     )
                     .child(
                         div()
                             .text_size(t.fs_ui)
                             .text_color(t.muted)
-                            .child("Open a terminal or connect to a server to get started"),
+                            .child(i18n::t("welcome.subtitle")),
                     ),
             )
             .child(
@@ -3037,15 +3140,15 @@ impl Shell {
                             .child(self.welcome_action(
                                 cx,
                                 "square-terminal",
-                                "New Terminal",
-                                "Local shell",
+                                "tab.new_terminal",
+                                "status.local_shell",
                                 Cmd::NewTerminal,
                             ))
                             .child(self.welcome_action(
                                 cx,
                                 "server",
-                                "New SSH",
-                                "Connect to a host",
+                                "tab.new_ssh",
+                                "welcome.connect_host",
                                 Cmd::OpenNewConn,
                             )),
                     )
@@ -3056,15 +3159,15 @@ impl Shell {
                             .child(self.welcome_action(
                                 cx,
                                 "command",
-                                "Command Palette",
-                                "Go to anything",
+                                "menu.command_palette",
+                                "palette.go_to_anything",
                                 Cmd::OpenPalette,
                             ))
                             .child(self.welcome_action(
                                 cx,
                                 "settings",
-                                "Settings",
-                                "Appearance & more",
+                                "set.title",
+                                "menu.appearance_more",
                                 Cmd::OpenSettings,
                             )),
                     ),

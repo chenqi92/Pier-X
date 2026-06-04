@@ -28,6 +28,7 @@ use pier_core::ssh::{SshConfig, SshSession};
 
 use crate::data;
 use crate::theme::Theme;
+use crate::i18n;
 use crate::ui;
 
 /// Cap the inlined config preview so a pathological file can't blow up the
@@ -220,10 +221,10 @@ impl WebserverPanel {
 
     fn header_meta(&self) -> SharedString {
         match &self.state {
-            ScanState::Scanning => "scanning…".into(),
+            ScanState::Scanning => i18n::t("web.scanning"),
             ScanState::Loaded(ov) => {
                 if ov.products.is_empty() {
-                    "no web server".into()
+                    i18n::t("web.no_web_server")
                 } else {
                     ov.products
                         .iter()
@@ -361,7 +362,7 @@ impl WebserverPanel {
                     )
                     .child(div().text_size(t.fs_sm).text_color(color).child(label)),
             )
-            .child(ui::info_row(t, "config", p.svc.config_root.clone()))
+            .child(ui::info_row(t, i18n::t("web.config"), p.svc.config_root.clone()))
             .child(self.reload_chip(cx, cmd))
     }
 
@@ -370,9 +371,9 @@ impl WebserverPanel {
     fn reload_chip(&self, cx: &mut Context<Self>, cmd: String) -> impl IntoElement {
         let t = &self.theme;
         let (glyph, label, color) = if self.reload_copied {
-            ("check", "reload cmd copied", t.pos)
+            ("check", i18n::t("web.reload_copied"), t.pos)
         } else {
-            ("copy", "Copy reload cmd", t.ink_2)
+            ("copy", i18n::t("web.copy_reload"), t.ink_2)
         };
         let cmd_for_click = cmd.clone();
         div().px(t.sp3).py(t.sp1).child(
@@ -502,7 +503,7 @@ impl WebserverPanel {
             FileState::Loading => div()
                 .text_size(t.fs_sm)
                 .text_color(t.muted)
-                .child("Reading…")
+                .child(i18n::t("web.reading"))
                 .into_any_element(),
             FileState::Failed(err) => div()
                 .text_size(t.fs_sm)
@@ -551,12 +552,12 @@ impl WebserverPanel {
         let t = &self.theme;
         match &self.state {
             ScanState::Idle => {
-                ui::empty_state(t, "Select a connection to scan").into_any_element()
+                ui::empty_state(t, i18n::t("panel.select_connection_scan")).into_any_element()
             }
             ScanState::Scanning => v_flex()
                 .px(t.sp3)
                 .py(t.sp3)
-                .child(div().text_color(t.muted).child("Scanning host…"))
+                .child(div().text_color(t.muted).child(i18n::t("web.scanning_host")))
                 .into_any_element(),
             ScanState::Failed(err) => v_flex()
                 .px(t.sp3)
@@ -568,7 +569,7 @@ impl WebserverPanel {
                     return v_flex()
                         .px(t.sp3)
                         .py(t.sp3)
-                        .child(div().text_color(t.muted).child("No web server detected"))
+                        .child(div().text_color(t.muted).child(i18n::t("web.no_web_server_detected")))
                         .into_any_element();
                 }
                 let active = ov
@@ -583,14 +584,16 @@ impl WebserverPanel {
                 }
                 col = col.child(self.product_summary(cx, active));
                 if !active.sites.is_empty() {
-                    col = col
-                        .child(ui::section_label(t, format!("SITES · {}", active.sites.len())));
+                    col = col.child(ui::section_label(
+                        t,
+                        format!("{} · {}", i18n::t("web.sites"), active.sites.len()),
+                    ));
                     col = col.children(active.sites.iter().map(|s| self.site_row(s)));
                 }
                 if !active.config_files.is_empty() {
                     col = col.child(ui::section_label(
                         t,
-                        format!("CONFIG FILES · {}", active.config_files.len()),
+                        format!("{} · {}", i18n::t("web.config_files"), active.config_files.len()),
                     ));
                     for (i, p) in active.config_files.iter().enumerate() {
                         col = col.child(self.file_row(cx, i, p));
@@ -608,8 +611,10 @@ impl Render for WebserverPanel {
         let t = &self.theme;
         let meta = self.header_meta();
 
-        let mut selector =
-            v_flex().child(ui::section_label(t, format!("CONNECTIONS · {}", self.conns.len())));
+        let mut selector = v_flex().child(ui::section_label(
+            t,
+            format!("{} · {}", i18n::t("web.connections"), self.conns.len()),
+        ));
         if self.conns.is_empty() {
             selector = selector.child(
                 div()
@@ -617,7 +622,7 @@ impl Render for WebserverPanel {
                     .py(t.sp2)
                     .text_size(t.fs_sm)
                     .text_color(t.dim)
-                    .child("No saved connections"),
+                    .child(i18n::t("side.no_saved_connections")),
             );
         } else {
             let rows: Vec<_> = (0..self.conns.len()).map(|i| self.conn_row(cx, i)).collect();
@@ -628,7 +633,7 @@ impl Render for WebserverPanel {
 
         v_flex()
             .size_full()
-            .child(ui::panel_header(t, "server", "WEBSERVER", meta))
+            .child(ui::panel_header(t, "server", i18n::t("tool.webserver"), meta))
             .child(
                 div()
                     .id("ws-scroll")
@@ -641,11 +646,11 @@ impl Render for WebserverPanel {
 }
 
 /// Single colour + label for a run state.
-fn run_style(t: &Theme, st: WebServerRunState) -> (gpui::Hsla, &'static str) {
+fn run_style(t: &Theme, st: WebServerRunState) -> (gpui::Hsla, SharedString) {
     match st {
-        WebServerRunState::Active => (t.pos, "active"),
-        WebServerRunState::Inactive => (t.neg, "inactive"),
-        WebServerRunState::Unknown => (t.muted, "unknown"),
+        WebServerRunState::Active => (t.pos, i18n::t("web.active")),
+        WebServerRunState::Inactive => (t.neg, i18n::t("web.inactive")),
+        WebServerRunState::Unknown => (t.muted, i18n::t("web.unknown")),
     }
 }
 
@@ -693,7 +698,7 @@ fn read_config(session: &SshSession, kind: WebServerKind, path: &str) -> Result<
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
     if lines.len() > MAX_CONFIG_LINES {
         lines.truncate(MAX_CONFIG_LINES);
-        lines.push(format!("… (truncated at {MAX_CONFIG_LINES} lines)"));
+        lines.push(i18n::tf("web.truncated", &[&MAX_CONFIG_LINES.to_string()]));
     }
     Ok(lines)
 }

@@ -35,6 +35,7 @@ use pier_core::services::sqlite::{SqliteClient, SqliteQueryResult};
 use pier_core::ssh::{SshConfig, SshSession};
 
 use crate::data;
+use crate::i18n;
 use crate::theme::Theme;
 use crate::ui;
 
@@ -459,20 +460,17 @@ impl DbPanel {
         // panel re-locks after each successful write (see run_*_query).
         if !is_readonly_sql(&sql) {
             if !self.write_unlocked {
-                self.error = Some(
-                    "Read-only. Unlock writes to run INSERT / UPDATE / DELETE / DDL.".to_string(),
-                );
+                self.error = Some(i18n::t("db.read_only_locked").to_string());
                 cx.notify();
                 return;
             }
             if !is_single_statement(&sql) {
-                self.error =
-                    Some("One statement at a time — remove the embedded ';'.".to_string());
+                self.error = Some(i18n::t("db.one_statement").to_string());
                 cx.notify();
                 return;
             }
             if !self.write_confirm.trim().eq_ignore_ascii_case("WRITE") {
-                self.error = Some("Type WRITE in the confirm box to run this write.".to_string());
+                self.error = Some(i18n::t("db.type_write_confirm").to_string());
                 cx.notify();
                 return;
             }
@@ -581,7 +579,7 @@ impl DbPanel {
                         session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
                     let elapsed = start.elapsed().as_millis() as u64;
                     if code != 0 {
-                        return Err(err_text(out, "query failed"));
+                        return Err(err_text(out, &i18n::t("db.err_query_failed")));
                     }
                     // A write has no portable result grid (`psql` prints a
                     // "INSERT 0 1" status tag, `mysql` nothing); skip parsing
@@ -659,6 +657,12 @@ impl DbPanel {
         self.result = None;
         self.expanded_row = None;
         self.error = None;
+        // Switching files re-locks writes, same as reset_remote on engine
+        // switch / reconnect: the read-only default (PRODUCT-SPEC §5.5) is never
+        // relaxed, so an unlock armed against the previous file must not carry
+        // over to this one.
+        self.write_unlocked = false;
+        self.write_confirm.clear();
         self.busy = true;
         self.epoch += 1;
         let gen = self.epoch;
@@ -768,7 +772,7 @@ impl DbPanel {
                         .exec_command_blocking(engine.list_command())
                         .map_err(|e| e.to_string())?;
                     if code != 0 {
-                        return Err(err_text(out, "failed to list databases"));
+                        return Err(err_text(out, &i18n::t("db.err_list_databases")));
                     }
                     let dbs = engine.parse_list(&out);
                     Ok::<(SshSession, Vec<String>), String>((session, dbs))
@@ -834,7 +838,7 @@ impl DbPanel {
                             let (code, out) =
                                 session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
                             if code != 0 {
-                                return Err(err_text(out, "SCAN failed"));
+                                return Err(err_text(out, &i18n::t("db.err_scan")));
                             }
                             // First line is the next cursor; the rest are keys.
                             let mut lines = out.lines();
@@ -861,7 +865,7 @@ impl DbPanel {
                         let (code, out) =
                             session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
                         if code != 0 {
-                            return Err(err_text(out, "failed to list tables"));
+                            return Err(err_text(out, &i18n::t("db.err_list_tables")));
                         }
                         let tables = out
                             .lines()
@@ -928,7 +932,7 @@ impl DbPanel {
                         .exec_command_blocking(&cols_cmd)
                         .map_err(|e| e.to_string())?;
                     if cc != 0 {
-                        return Err(err_text(cout, "failed to list columns"));
+                        return Err(err_text(cout, &i18n::t("db.err_list_columns")));
                     }
                     let columns = engine.parse_columns(&cout);
 
@@ -940,7 +944,7 @@ impl DbPanel {
                         .map_err(|e| e.to_string())?;
                     let elapsed = start.elapsed().as_millis() as u64;
                     if pc != 0 {
-                        return Err(err_text(pout, "preview failed"));
+                        return Err(err_text(pout, &i18n::t("db.err_preview")));
                     }
                     let grid = parse_grid(&pout, engine.sep(), elapsed);
                     Ok::<(Vec<Col>, Grid), String>((columns, grid))
@@ -1097,7 +1101,7 @@ impl DbPanel {
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, _w, cx| this.reload(cx)),
                     )
-                    .child("Reload"),
+                    .child(i18n::t("db.reload")),
             )
     }
 
@@ -1107,9 +1111,12 @@ impl DbPanel {
         let t = &self.theme;
         let mut col = v_flex().pb(t.sp3);
 
-        col = col.child(ui::section_label(t, format!("DATABASES · {}", self.db_files.len())));
+        col = col.child(ui::section_label(
+            t,
+            i18n::tf("db.databases_count", &[&self.db_files.len().to_string()]),
+        ));
         if self.db_files.is_empty() {
-            col = col.child(hint(t, "No .db / .sqlite files in the working dir"));
+            col = col.child(hint(t, i18n::t("db.no_db_files")));
         } else {
             for (i, path) in self.db_files.iter().enumerate() {
                 let selected = self.open_db.as_deref() == Some(path.as_str());
@@ -1142,9 +1149,12 @@ impl DbPanel {
         }
 
         if self.open_db.is_some() {
-            col = col.child(ui::section_label(t, format!("TABLES · {}", self.tables.len())));
+            col = col.child(ui::section_label(
+                t,
+                i18n::tf("db.tables_count", &[&self.tables.len().to_string()]),
+            ));
             if self.tables.is_empty() && !self.busy {
-                col = col.child(hint(t, "No tables"));
+                col = col.child(hint(t, i18n::t("db.no_tables")));
             }
             for (i, table) in self.tables.iter().enumerate() {
                 let selected = self.selected_table == Some(i);
@@ -1178,7 +1188,10 @@ impl DbPanel {
         }
 
         if self.selected_table.is_some() {
-            col = col.child(ui::section_label(t, format!("COLUMNS · {}", self.columns.len())));
+            col = col.child(ui::section_label(
+                t,
+                i18n::tf("db.columns_count", &[&self.columns.len().to_string()]),
+            ));
             for c in &self.columns {
                 col = col.child(column_row(t, c));
             }
@@ -1186,7 +1199,7 @@ impl DbPanel {
 
         if self.open_db.is_some() {
             col = col
-                .child(ui::section_label(t, "QUERY"))
+                .child(ui::section_label(t, i18n::t("db.query_label")))
                 .child(self.query_console(cx))
                 .child(self.write_bar(cx))
                 .child(self.result_table(cx))
@@ -1200,9 +1213,12 @@ impl DbPanel {
         let t = &self.theme;
         let mut col = v_flex().pb(t.sp3);
 
-        col = col.child(ui::section_label(t, format!("CONNECTIONS · {}", self.conns.len())));
+        col = col.child(ui::section_label(
+            t,
+            i18n::tf("db.connections_count", &[&self.conns.len().to_string()]),
+        ));
         if self.conns.is_empty() {
-            col = col.child(hint(t, "No saved connections"));
+            col = col.child(hint(t, i18n::t("side.no_saved_connections")));
         } else {
             for (i, c) in self.conns.iter().enumerate() {
                 let selected = self.selected_conn == Some(i);
@@ -1249,9 +1265,12 @@ impl DbPanel {
         }
 
         if self.session.is_some() {
-            col = col.child(ui::section_label(t, format!("DATABASES · {}", self.databases.len())));
+            col = col.child(ui::section_label(
+                t,
+                i18n::tf("db.databases_count", &[&self.databases.len().to_string()]),
+            ));
             if self.databases.is_empty() && !self.busy && self.error.is_none() {
-                col = col.child(hint(t, "No databases reported (read-only listing)"));
+                col = col.child(hint(t, i18n::t("db.no_databases_readonly")));
             }
             for (i, db) in self.databases.iter().enumerate() {
                 let selected = self.selected_db == Some(i);
@@ -1263,14 +1282,16 @@ impl DbPanel {
             if matches!(self.engine, Engine::Redis) {
                 col = col.child(ui::section_label(
                     t,
-                    format!(
-                        "KEYS · {}{}",
-                        self.redis_keys.len(),
-                        if self.redis_keys_truncated { "+" } else { "" }
+                    i18n::tf(
+                        "db.keys_count",
+                        &[
+                            &self.redis_keys.len().to_string(),
+                            if self.redis_keys_truncated { "+" } else { "" },
+                        ],
                     ),
                 ));
                 if self.redis_keys.is_empty() && !self.busy {
-                    col = col.child(hint(t, "No keys"));
+                    col = col.child(hint(t, i18n::t("db.no_keys")));
                 }
                 for (i, k) in self.redis_keys.iter().enumerate() {
                     let selected = self.selected_key == Some(i);
@@ -1279,16 +1300,19 @@ impl DbPanel {
                 if self.redis_keys_truncated {
                     col = col.child(hint(
                         t,
-                        format!("Showing first {} keys · more exist", self.redis_keys.len()),
+                        i18n::tf("db.keys_more", &[&self.redis_keys.len().to_string()]),
                     ));
                 }
                 if let Some(detail) = &self.redis_detail {
                     col = col.child(self.redis_detail_view(detail));
                 }
             } else {
-                col = col.child(ui::section_label(t, format!("TABLES · {}", self.r_tables.len())));
+                col = col.child(ui::section_label(
+                    t,
+                    i18n::tf("db.tables_count", &[&self.r_tables.len().to_string()]),
+                ));
                 if self.r_tables.is_empty() && !self.busy {
-                    col = col.child(hint(t, "No tables"));
+                    col = col.child(hint(t, i18n::t("db.no_tables")));
                 }
                 for (i, table) in self.r_tables.iter().enumerate() {
                     let selected = self.r_selected_table == Some(i);
@@ -1296,14 +1320,17 @@ impl DbPanel {
                 }
 
                 if self.r_selected_table.is_some() {
-                    col = col.child(ui::section_label(t, format!("COLUMNS · {}", self.r_columns.len())));
+                    col = col.child(ui::section_label(
+                        t,
+                        i18n::tf("db.columns_count", &[&self.r_columns.len().to_string()]),
+                    ));
                     for c in &self.r_columns {
                         col = col.child(column_row(t, c));
                     }
                 }
 
                 col = col
-                    .child(ui::section_label(t, "QUERY"))
+                    .child(ui::section_label(t, i18n::t("db.query_label")))
                     .child(self.query_console(cx))
                     .child(self.write_bar(cx))
                     .child(self.result_table(cx))
@@ -1397,7 +1424,12 @@ impl DbPanel {
                             .text_color(t.ink)
                             .child(d.key.clone()),
                     )
-                    .child(div().text_size(t.fs_sm).text_color(t.muted).child(format!("TTL {}", d.ttl))),
+                    .child(
+                        div()
+                            .text_size(t.fs_sm)
+                            .text_color(t.muted)
+                            .child(i18n::tf("db.ttl", &[&d.ttl])),
+                    ),
             )
             .child(
                 div()
@@ -1406,7 +1438,7 @@ impl DbPanel {
                     .text_size(t.fs_sm)
                     .text_color(t.ink_2)
                     .child(if d.value.is_empty() {
-                        "(empty)".to_string()
+                        i18n::t("db.value_empty").to_string()
                     } else {
                         d.value.clone()
                     }),
@@ -1438,7 +1470,7 @@ impl DbPanel {
                     .border_color(t.line_2)
                     .font_family(t.mono.clone())
                     .text_size(t.fs_sm)
-                    .when(empty, |d| d.text_color(t.dim).child("SELECT … (read-only)"))
+                    .when(empty, |d| d.text_color(t.dim).child(i18n::t("db.select_readonly_ph")))
                     .when(!empty, |d| d.text_color(t.ink).child(self.query.clone())),
             )
             .child(
@@ -1455,7 +1487,7 @@ impl DbPanel {
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, _w, cx| this.run_query(cx)),
                     )
-                    .child("Run"),
+                    .child(i18n::t("db.run")),
             )
     }
 
@@ -1501,7 +1533,11 @@ impl DbPanel {
                         }),
                     )
                     .child(ui::icon("triangle-alert", px(12.0), glyph_color))
-                    .child(if unlocked { "Writes unlocked" } else { "Read-only" }),
+                    .child(if unlocked {
+                        i18n::t("db.writes_unlocked")
+                    } else {
+                        i18n::t("db.read_only")
+                    }),
             )
             .child(
                 div()
@@ -1509,9 +1545,9 @@ impl DbPanel {
                     .text_size(t.fs_sm)
                     .text_color(t.dim)
                     .child(if unlocked {
-                        "DML / DDL will execute."
+                        i18n::t("db.dml_will_run")
                     } else {
-                        "Unlock to run INSERT / UPDATE / DELETE / DDL."
+                        i18n::t("db.unlock_hint")
                     }),
             );
 
@@ -1534,7 +1570,7 @@ impl DbPanel {
                     .font_family(t.mono.clone())
                     .text_size(t.fs_sm)
                     .when(empty, |d| {
-                        d.text_color(t.dim).child("Type WRITE to confirm")
+                        d.text_color(t.dim).child(i18n::t("db.type_write_ph"))
                     })
                     .when(!empty, |d| {
                         d.text_color(t.ink).child(self.write_confirm.clone())
@@ -1551,15 +1587,20 @@ impl DbPanel {
         if self.history.is_empty() {
             return div().into_any_element();
         }
-        let mut col =
-            v_flex().child(ui::section_label(t, format!("HISTORY · {}", self.history.len())));
+        let mut col = v_flex().child(ui::section_label(
+            t,
+            i18n::tf("db.history_count", &[&self.history.len().to_string()]),
+        ));
         for (i, e) in self.history.iter().enumerate() {
             let sql = e.sql.clone();
             // Writes have no portable affected-row count, so don't invent one.
             let meta = if e.write {
-                format!("write · {} ms", e.elapsed_ms)
+                i18n::tf("db.hist_write", &[&e.elapsed_ms.to_string()])
             } else {
-                format!("{} rows · {} ms", e.rows, e.elapsed_ms)
+                i18n::tf(
+                    "db.hist_rows",
+                    &[&e.rows.to_string(), &e.elapsed_ms.to_string()],
+                )
             };
             col = col.child(
                 h_flex()
@@ -1602,7 +1643,8 @@ impl DbPanel {
         col.into_any_element()
     }
 
-    /// A "Copy TSV" / "Copy CSV" button for the result header.
+    /// A "Copy TSV" / "Copy CSV" button for the result header. `label` is an
+    /// i18n key (`db.copy_tsv` / `db.copy_csv`).
     fn copy_btn(&self, cx: &mut Context<Self>, label: &'static str, csv: bool) -> impl IntoElement {
         let t = &self.theme;
         div()
@@ -1619,7 +1661,7 @@ impl DbPanel {
                 MouseButton::Left,
                 cx.listener(move |this, _: &MouseDownEvent, _w, cx| this.copy_result(csv, cx)),
             )
-            .child(label)
+            .child(i18n::t(label))
     }
 
     /// Copy the current result grid to the clipboard as TSV or CSV.
@@ -1651,9 +1693,9 @@ impl DbPanel {
             return hint(
                 t,
                 if r.error.is_some() {
-                    "Query failed".to_string()
+                    i18n::t("db.query_failed").to_string()
                 } else {
-                    format!("OK · {} ms", r.elapsed_ms)
+                    i18n::tf("db.ok_ms", &[&r.elapsed_ms.to_string()])
                 },
             )
             .into_any_element();
@@ -1706,11 +1748,15 @@ impl DbPanel {
         let shown = total.min(MAX_RENDER_ROWS);
         // Honest note about what's painted vs. what the query produced.
         let note: Option<String> = if r.truncated {
-            Some(format!(
-                "Showing {shown} of first {MAX_GRID_ROWS} rows · result capped"
+            Some(i18n::tf(
+                "db.rows_capped",
+                &[&shown.to_string(), &MAX_GRID_ROWS.to_string()],
             ))
         } else if total > shown {
-            Some(format!("Showing first {shown} of {total} rows"))
+            Some(i18n::tf(
+                "db.rows_shown",
+                &[&shown.to_string(), &total.to_string()],
+            ))
         } else {
             None
         };
@@ -1728,16 +1774,18 @@ impl DbPanel {
                     .pr(t.sp3)
                     .child(ui::section_label(
                         t,
-                        format!(
-                            "RESULT · {}{} rows · {} ms",
-                            total,
-                            if r.truncated { "+" } else { "" },
-                            r.elapsed_ms
+                        i18n::tf(
+                            "db.result_count",
+                            &[
+                                &total.to_string(),
+                                if r.truncated { "+" } else { "" },
+                                &r.elapsed_ms.to_string(),
+                            ],
                         ),
                     ))
                     .child(div().flex_1())
-                    .child(self.copy_btn(cx, "Copy TSV", false))
-                    .child(self.copy_btn(cx, "Copy CSV", true)),
+                    .child(self.copy_btn(cx, "db.copy_tsv", false))
+                    .child(self.copy_btn(cx, "db.copy_csv", true)),
             )
             .child(
                 div()
@@ -1771,7 +1819,7 @@ impl Render for DbPanel {
 
         let mut root = v_flex()
             .size_full()
-            .child(ui::panel_header(&t, "database", "DATABASE", meta))
+            .child(ui::panel_header(&t, "database", i18n::t("db.title"), meta))
             .child(self.toolbar(cx));
 
         if let Some(err) = self.error.clone() {
@@ -2083,8 +2131,8 @@ fn redis_type_badge(ty: &str) -> &'static str {
 /// A human TTL: `-1` → no expiry, `-2` → missing, otherwise `<n>s`.
 fn human_ttl(raw: &str) -> String {
     match raw.trim() {
-        "-1" => "no expiry".to_string(),
-        "-2" => "missing".to_string(),
+        "-1" => i18n::t("db.ttl_no_expiry").to_string(),
+        "-2" => i18n::t("db.ttl_missing").to_string(),
         other => match other.parse::<i64>() {
             Ok(n) => format!("{n}s"),
             Err(_) => other.to_string(),

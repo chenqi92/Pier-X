@@ -22,6 +22,7 @@ use gpui_component::{h_flex, v_flex};
 
 use crate::data;
 use crate::theme::Theme;
+use crate::i18n;
 use crate::ui;
 
 pub struct MarkdownPanel {
@@ -71,12 +72,12 @@ impl Render for MarkdownPanel {
                 div()
                     .p(t.sp4)
                     .text_color(t.muted)
-                    .child("Loading…")
+                    .child(i18n::t("common.loading"))
                     .into_any_element(),
             ),
             PanelState::Empty => (
                 String::new(),
-                ui::empty_state(t, "No CHANGELOG.md or README.md in this folder")
+                ui::empty_state(t, i18n::t("panel.no_markdown"))
                     .into_any_element(),
             ),
             PanelState::Error(e) => (
@@ -98,7 +99,7 @@ impl Render for MarkdownPanel {
 
         v_flex()
             .size_full()
-            .child(ui::panel_header(t, "file-text", "MARKDOWN", meta))
+            .child(ui::panel_header(t, "file-text", i18n::t("tool.markdown"), meta))
             .child(
                 div()
                     .id("md-scroll")

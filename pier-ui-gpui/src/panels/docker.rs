@@ -29,6 +29,7 @@ use pier_core::services::docker::{
 use pier_core::ssh::{SshConfig, SshSession};
 
 use crate::data;
+use crate::i18n;
 use crate::theme::Theme;
 use crate::ui;
 
@@ -820,7 +821,7 @@ impl DockerPanel {
             )
         };
         if image.is_empty() {
-            self.error = Some("docker run: image is required".to_string());
+            self.error = Some(i18n::t("docker.image_required").to_string());
             cx.notify();
             return;
         }
@@ -964,20 +965,21 @@ impl DockerPanel {
             .gap(t.sp1)
             .px(t.sp3)
             .pt(t.sp2)
-            .child(self.tab_pill(cx, "Containers", DockerTab::Containers))
-            .child(self.tab_pill(cx, "Images", DockerTab::Images))
-            .child(self.tab_pill(cx, "Volumes", DockerTab::Volumes))
-            .child(self.tab_pill(cx, "Networks", DockerTab::Networks))
-            .child(self.tab_pill(cx, "Projects", DockerTab::Projects))
+            .child(self.tab_pill(cx, "containers", i18n::t("docker.tab_containers"), DockerTab::Containers))
+            .child(self.tab_pill(cx, "images", i18n::t("docker.tab_images"), DockerTab::Images))
+            .child(self.tab_pill(cx, "volumes", i18n::t("docker.tab_volumes"), DockerTab::Volumes))
+            .child(self.tab_pill(cx, "networks", i18n::t("docker.tab_networks"), DockerTab::Networks))
+            .child(self.tab_pill(cx, "projects", i18n::t("docker.tab_projects"), DockerTab::Projects))
             .child(self.run_btn(cx))
     }
 
-    /// One pill in the [`Self::tab_toggle`] segmented control.
-    fn tab_pill(&self, cx: &mut Context<Self>, label: &'static str, tab: DockerTab) -> impl IntoElement {
+    /// One pill in the [`Self::tab_toggle`] segmented control. `key` is the
+    /// stable element id; `label` is the localized display text.
+    fn tab_pill(&self, cx: &mut Context<Self>, key: &'static str, label: SharedString, tab: DockerTab) -> impl IntoElement {
         let t = &self.theme;
         let active = self.tab == tab;
         div()
-            .id(SharedString::from(format!("dtab-{label}")))
+            .id(SharedString::from(format!("dtab-{key}")))
             .px(t.sp2)
             .py(t.sp1)
             .rounded(t.radius_sm)
@@ -1013,7 +1015,7 @@ impl DockerPanel {
                 cx.listener(|this, _: &MouseDownEvent, window, cx| this.toggle_run_form(window, cx)),
             )
             .child(ui::icon("plus", px(12.0), if open { t.accent } else { t.muted }))
-            .child("Run")
+            .child(i18n::t("docker.run"))
     }
 
     /// One container: running dot + name, image/ports meta, and the action
@@ -1063,7 +1065,7 @@ impl DockerPanel {
                     div()
                         .text_size(t.fs_sm)
                         .text_color(t.muted)
-                        .child("Remove?"),
+                        .child(i18n::t("docker.confirm_remove")),
                 )
                 .child(self.icon_btn(cx, format!("dok-{}", c.id), "check", t.neg, {
                     let id = c.id.clone();
@@ -1120,7 +1122,7 @@ impl DockerPanel {
         key: String,
         loading: bool,
         text: &str,
-        loading_msg: &'static str,
+        loading_msg: SharedString,
     ) -> impl IntoElement {
         let t = &self.theme;
         let mut body = v_flex().w_full().py(t.sp1);
@@ -1140,7 +1142,7 @@ impl DockerPanel {
                     .py(px(2.0))
                     .text_size(t.fs_sm)
                     .text_color(t.dim)
-                    .child("(no output)"),
+                    .child(i18n::t("docker.no_output")),
             );
         } else {
             for line in text.lines() {
@@ -1174,7 +1176,7 @@ impl DockerPanel {
             format!("dlogsbox-{c_id}"),
             self.logs_loading,
             &self.logs_text,
-            "Loading logs…",
+            i18n::t("docker.loading_logs"),
         )
     }
 
@@ -1184,7 +1186,7 @@ impl DockerPanel {
             format!("dinspbox-{c_id}"),
             self.inspect_loading,
             &self.inspect_text,
-            "Loading inspect…",
+            i18n::t("docker.loading_inspect"),
         )
     }
 
@@ -1271,7 +1273,7 @@ impl DockerPanel {
                     .child(meta),
             )
             .when(confirming, |d| {
-                d.child(div().text_size(t.fs_sm).text_color(t.muted).child("Remove?"))
+                d.child(div().text_size(t.fs_sm).text_color(t.muted).child(i18n::t("docker.confirm_remove")))
                     .child(self.icon_btn(cx, format!("dvol-ok-{}", v.name), "check", t.neg, {
                         let name = v.name.clone();
                         move |this, cx| this.remove_volume(name.clone(), cx)
@@ -1333,7 +1335,7 @@ impl DockerPanel {
                     .child(meta),
             )
             .when(confirming, |d| {
-                d.child(div().text_size(t.fs_sm).text_color(t.muted).child("Remove?"))
+                d.child(div().text_size(t.fs_sm).text_color(t.muted).child(i18n::t("docker.confirm_remove")))
                     .child(self.icon_btn(cx, format!("dnet-ok-{}", n.id), "check", t.neg, {
                         let name = n.name.clone();
                         move |this, cx| this.remove_network(name.clone(), cx)
@@ -1404,7 +1406,7 @@ impl DockerPanel {
                             .font_family(t.mono.clone())
                             .text_size(t.fs_sm)
                             .text_color(t.muted)
-                            .child(format!("{running}/{total} running")),
+                            .child(i18n::tf("docker.running_count", &[&running.to_string(), &total.to_string()])),
                     ),
             )
             .child(self.icon_btn(cx, format!("dsvc-start-{key}"), "play", t.pos, {
@@ -1425,11 +1427,15 @@ impl DockerPanel {
     fn run_form_view(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let t = &self.theme;
         let form = self.run_form.as_ref()?;
-        let run_label = if form.submitting { "Running…" } else { "Run" };
-        let restart_label = if form.restart.is_empty() {
-            "none".to_string()
+        let run_label: SharedString = if form.submitting {
+            i18n::t("docker.running")
         } else {
-            form.restart.clone()
+            i18n::t("docker.run")
+        };
+        let restart_label: SharedString = if form.restart.is_empty() {
+            i18n::t("docker.restart_none")
+        } else {
+            form.restart.clone().into()
         };
         Some(
             v_flex()
@@ -1452,7 +1458,7 @@ impl DockerPanel {
                                 .text_size(t.fs_ui)
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(t.ink)
-                                .child("Run container"),
+                                .child(i18n::t("docker.run_container")),
                         )
                         .child(self.icon_btn(cx, "drun-close".to_string(), "close", t.muted, {
                             move |this, cx| {
@@ -1461,12 +1467,12 @@ impl DockerPanel {
                             }
                         })),
                 )
-                .child(self.run_field(cx, RunField::Image, "image", form.image.clone(), "nginx:latest"))
-                .child(self.run_field(cx, RunField::Name, "name", form.name.clone(), "(optional)"))
-                .child(self.run_field(cx, RunField::Port, "port", form.port.clone(), "8080:80"))
-                .child(self.run_field(cx, RunField::Env, "env", form.env.clone(), "KEY=value"))
+                .child(self.run_field(cx, RunField::Image, "image", i18n::t("docker.run_image"), form.image.clone(), SharedString::from("nginx:latest")))
+                .child(self.run_field(cx, RunField::Name, "name", i18n::t("docker.run_name"), form.name.clone(), i18n::t("docker.run_optional")))
+                .child(self.run_field(cx, RunField::Port, "port", i18n::t("docker.run_port"), form.port.clone(), SharedString::from("8080:80")))
+                .child(self.run_field(cx, RunField::Env, "env", i18n::t("docker.run_env"), form.env.clone(), SharedString::from("KEY=value")))
                 .child(
-                    self.run_field_row("restart").child(
+                    self.run_field_row(i18n::t("docker.run_restart")).child(
                         div()
                             .id("drun-restart")
                             .h(px(22.0))
@@ -1512,8 +1518,8 @@ impl DockerPanel {
     }
 
     /// A label + control row in the Run form (the control is supplied by the
-    /// caller).
-    fn run_field_row(&self, label: &'static str) -> gpui::Div {
+    /// caller). `label` is the localized display text.
+    fn run_field_row(&self, label: SharedString) -> gpui::Div {
         let t = &self.theme;
         h_flex()
             .items_center()
@@ -1531,14 +1537,17 @@ impl DockerPanel {
     }
 
     /// One text field in the Run form: the focused field is an editable input;
-    /// the others are clickable cells that activate (focus) themselves.
+    /// the others are clickable cells that activate (focus) themselves. `key` is
+    /// the stable element id; `label` and `placeholder` are localized display
+    /// text.
     fn run_field(
         &self,
         cx: &mut Context<Self>,
         field: RunField,
-        label: &'static str,
+        key: &'static str,
+        label: SharedString,
         value: String,
-        placeholder: &'static str,
+        placeholder: SharedString,
     ) -> impl IntoElement {
         let t = &self.theme;
         let active = self.run_form.as_ref().map(|f| f.field) == Some(field);
@@ -1564,7 +1573,7 @@ impl DockerPanel {
                 .into_any_element()
         } else {
             div()
-                .id(SharedString::from(format!("drun-{label}")))
+                .id(SharedString::from(format!("drun-{key}")))
                 .w_full()
                 .h(px(22.0))
                 .px(t.sp2)
@@ -1623,7 +1632,7 @@ impl Render for DockerPanel {
         let mut col = v_flex()
             .flex_1()
             .min_h(px(0.0))
-            .child(ui::panel_header(t, "container", "DOCKER", count));
+            .child(ui::panel_header(t, "container", i18n::t("tool.docker"), count));
 
         if let Some(err) = &self.error {
             col = col.child(
@@ -1637,7 +1646,7 @@ impl Render for DockerPanel {
         }
 
         if self.connecting {
-            col = col.child(ui::empty_state(t, "Connecting…"));
+            col = col.child(ui::empty_state(t, i18n::t("panel.connecting")));
         } else if self.session.is_some() {
             col = col.child(self.tab_toggle(cx));
             if let Some(form) = self.run_form_view(cx) {
@@ -1646,10 +1655,10 @@ impl Render for DockerPanel {
             match self.tab {
                 DockerTab::Containers => {
                     if self.containers.is_empty() {
-                        col = col.child(ui::empty_state(t, "No containers"));
+                        col = col.child(ui::empty_state(t, i18n::t("panel.no_containers")));
                     } else {
                         col = col.child(
-                            ui::section_label(t, format!("CONTAINERS · {}", self.containers.len())),
+                            ui::section_label(t, i18n::tf("docker.containers_count", &[&self.containers.len().to_string()])),
                         );
                         for c in &self.containers {
                             col = col.child(self.container_row(cx, c));
@@ -1664,12 +1673,12 @@ impl Render for DockerPanel {
                 }
                 DockerTab::Images => {
                     if self.images_loading {
-                        col = col.child(ui::empty_state(t, "Loading images…"));
+                        col = col.child(ui::empty_state(t, i18n::t("panel.loading_images")));
                     } else if self.images.is_empty() {
-                        col = col.child(ui::empty_state(t, "No images"));
+                        col = col.child(ui::empty_state(t, i18n::t("panel.no_images")));
                     } else {
                         col = col
-                            .child(ui::section_label(t, format!("IMAGES · {}", self.images.len())));
+                            .child(ui::section_label(t, i18n::tf("docker.images_count", &[&self.images.len().to_string()])));
                         for img in &self.images {
                             col = col.child(self.image_row(img));
                         }
@@ -1677,12 +1686,12 @@ impl Render for DockerPanel {
                 }
                 DockerTab::Volumes => {
                     if self.volumes_loading {
-                        col = col.child(ui::empty_state(t, "Loading volumes…"));
+                        col = col.child(ui::empty_state(t, i18n::t("panel.loading_volumes")));
                     } else if self.volumes.is_empty() {
-                        col = col.child(ui::empty_state(t, "No volumes"));
+                        col = col.child(ui::empty_state(t, i18n::t("panel.no_volumes")));
                     } else {
                         col = col.child(
-                            ui::section_label(t, format!("VOLUMES · {}", self.volumes.len())),
+                            ui::section_label(t, i18n::tf("docker.volumes_count", &[&self.volumes.len().to_string()])),
                         );
                         for v in &self.volumes {
                             col = col.child(self.volume_row(cx, v));
@@ -1691,12 +1700,12 @@ impl Render for DockerPanel {
                 }
                 DockerTab::Networks => {
                     if self.networks_loading {
-                        col = col.child(ui::empty_state(t, "Loading networks…"));
+                        col = col.child(ui::empty_state(t, i18n::t("panel.loading_networks")));
                     } else if self.networks.is_empty() {
-                        col = col.child(ui::empty_state(t, "No networks"));
+                        col = col.child(ui::empty_state(t, i18n::t("panel.no_networks")));
                     } else {
                         col = col.child(
-                            ui::section_label(t, format!("NETWORKS · {}", self.networks.len())),
+                            ui::section_label(t, i18n::tf("docker.networks_count", &[&self.networks.len().to_string()])),
                         );
                         for n in &self.networks {
                             col = col.child(self.network_row(cx, n));
@@ -1705,12 +1714,12 @@ impl Render for DockerPanel {
                 }
                 DockerTab::Projects => {
                     if projects.is_empty() {
-                        col = col.child(ui::empty_state(t, "No Compose projects"));
+                        col = col.child(ui::empty_state(t, i18n::t("panel.no_compose")));
                     } else {
                         for p in &projects {
                             col = col.child(ui::section_label(
                                 t,
-                                format!("{} · {}/{} up", p.name, p.running, p.total),
+                                i18n::tf("docker.project_up", &[&p.name, &p.running.to_string(), &p.total.to_string()]),
                             ));
                             for svc in &p.services {
                                 col = col.child(self.service_row(cx, &p.name, svc));
@@ -1720,9 +1729,9 @@ impl Render for DockerPanel {
                 }
             }
         } else if self.conns.is_empty() {
-            col = col.child(ui::empty_state(t, "No saved connections"));
+            col = col.child(ui::empty_state(t, i18n::t("side.no_saved_connections")));
         } else {
-            col = col.child(ui::section_label(t, format!("SERVERS · {}", self.conns.len())));
+            col = col.child(ui::section_label(t, i18n::tf("side.servers_count", &[&self.conns.len().to_string()])));
             for (i, c) in self.conns.iter().enumerate() {
                 col = col.child(self.conn_row(cx, i, c));
             }

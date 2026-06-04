@@ -37,6 +37,7 @@ use tokio_util::sync::CancellationToken;
 use pier_core::ssh::{RemoteFileEntry, SftpClient, SshConfig, SshSession};
 
 use crate::data;
+use crate::i18n;
 use crate::theme::Theme;
 use crate::ui;
 
@@ -734,7 +735,7 @@ impl SftpPanel {
                     self.mutate(move |s| s.set_permissions_blocking(&path, m).map_err(|e| e.to_string()), cx)
                 }
                 Err(_) => {
-                    self.error = Some(format!("Invalid octal mode: {mode}"));
+                    self.error = Some(i18n::tf("sftp.invalid_octal", &[&mode]));
                     cx.notify();
                 }
             },
@@ -795,7 +796,7 @@ impl SftpPanel {
     ) {
         const MAX_EDIT_BYTES: u64 = 1024 * 1024;
         if size > MAX_EDIT_BYTES {
-            self.error = Some(format!("{name} is larger than 1 MiB — download to edit"));
+            self.error = Some(i18n::tf("sftp.file_too_large", &[&name]));
             cx.notify();
             return;
         }
@@ -835,10 +836,7 @@ impl SftpPanel {
                                     ed.error = None;
                                 }
                                 Err(_) => {
-                                    ed.error = Some(
-                                        "Not a UTF-8 text file — close and download instead"
-                                            .to_string(),
-                                    );
+                                    ed.error = Some(i18n::t("sftp.not_utf8").to_string());
                                 }
                             },
                             Err(e) => ed.error = Some(e),
@@ -1101,7 +1099,7 @@ impl SftpPanel {
         &self,
         cx: &mut Context<Self>,
         value: String,
-        placeholder: &'static str,
+        placeholder: SharedString,
     ) -> impl IntoElement {
         let t = &self.theme;
         let empty = value.is_empty();
@@ -1149,7 +1147,11 @@ impl SftpPanel {
     fn new_entry_row(&self, cx: &mut Context<Self>, is_dir: bool, name: String) -> impl IntoElement {
         let t = &self.theme;
         let glyph = if is_dir { "folder" } else { "file" };
-        let placeholder = if is_dir { "New folder name…" } else { "New file name…" };
+        let placeholder = if is_dir {
+            i18n::t("sftp.new_folder_ph")
+        } else {
+            i18n::t("sftp.new_file_ph")
+        };
         h_flex()
             .items_center()
             .gap(t.sp2)
@@ -1187,7 +1189,7 @@ impl SftpPanel {
             .min_w(px(0.0))
             .child(ui::icon(glyph, px(14.0), glyph_color));
         if let Some(val) = editing_name {
-            nav = nav.child(div().flex_1().min_w(px(0.0)).child(self.inline_input(cx, val, "name…")));
+            nav = nav.child(div().flex_1().min_w(px(0.0)).child(self.inline_input(cx, val, i18n::t("sftp.rename_ph"))));
         } else {
             nav = nav.child(div().flex_1().overflow_hidden().child(e.name.clone()));
             if is_dir {
@@ -1203,7 +1205,7 @@ impl SftpPanel {
 
         // Permission cell — inline octal input, or clickable rwx text (chmod).
         let perm_cell = if let Some(val) = editing_mode {
-            div().w(px(62.0)).child(self.inline_input(cx, val, "octal")).into_any_element()
+            div().w(px(62.0)).child(self.inline_input(cx, val, i18n::t("sftp.octal_ph"))).into_any_element()
         } else {
             let cp = e.path.clone();
             let seed = e.permissions.map(|p| format!("{:o}", p & 0o777)).unwrap_or_default();
@@ -1265,7 +1267,7 @@ impl SftpPanel {
                         .mr(px(2.0))
                         .text_size(t.fs_sm)
                         .text_color(t.neg)
-                        .child("Delete?"),
+                        .child(i18n::t("common.confirm_delete")),
                 )
                 .child(self.row_btn(cx, format!("sftp-yes-{}", e.path), "check", t.neg, |this, _w, cx| {
                     this.confirm_delete(cx);
@@ -1380,7 +1382,7 @@ impl SftpPanel {
                     .text_size(t.fs_sm)
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(t.muted)
-                    .child(format!("TRANSFERS · {}", self.transfers.len())),
+                    .child(i18n::tf("sftp.transfers_count", &[&self.transfers.len().to_string()])),
             )
             .when(any_finished, |d| {
                 d.child(self.head_btn(cx, "sftp-xfer-clear", "close", |this, _w, cx| {
@@ -1412,7 +1414,7 @@ impl SftpPanel {
             XferState::Queued => h_flex()
                 .items_center()
                 .gap(px(4.0))
-                .child(div().text_size(t.fs_sm).text_color(t.dim).child("Queued"))
+                .child(div().text_size(t.fs_sm).text_color(t.dim).child(i18n::t("sftp.xfer_queued")))
                 .child(self.row_btn(cx, format!("sftp-xfer-c-{id}"), "close", t.muted, move |this, _w, cx| {
                     this.cancel_transfer(id, cx);
                 }))
@@ -1462,7 +1464,7 @@ impl SftpPanel {
             XferState::Cancelled => h_flex()
                 .items_center()
                 .gap(px(4.0))
-                .child(div().text_size(t.fs_sm).text_color(t.dim).child("Cancelled"))
+                .child(div().text_size(t.fs_sm).text_color(t.dim).child(i18n::t("sftp.xfer_cancelled")))
                 .child(self.row_btn(cx, format!("sftp-xfer-r-{id}"), "close", t.muted, move |this, _w, cx| {
                     this.remove_transfer(id, cx);
                 }))
@@ -1572,7 +1574,7 @@ impl SftpPanel {
                     .child(ed.name.clone()),
             );
         if ed.saving {
-            header = header.child(div().text_size(t.fs_sm).text_color(t.muted).child("Saving…"));
+            header = header.child(div().text_size(t.fs_sm).text_color(t.muted).child(i18n::t("sftp.saving")));
         } else if ed.dirty {
             header = header.child(ui::status_dot(t.warn));
         }
@@ -1598,7 +1600,7 @@ impl SftpPanel {
                     .py(t.sp2)
                     .text_size(t.fs_sm)
                     .text_color(t.warn)
-                    .child("Unsaved changes — press Esc again or Close to discard."),
+                    .child(i18n::t("sftp.unsaved_changes")),
             );
         }
 
@@ -1607,7 +1609,7 @@ impl SftpPanel {
         // line renders a space so it keeps its height.
         let mut text = v_flex().w_full();
         if ed.loading {
-            text = text.child(div().text_color(t.dim).child("Loading…"));
+            text = text.child(div().text_color(t.dim).child(i18n::t("common.loading")));
         } else {
             for line in ed.buf.split('\n') {
                 let shown = if line.is_empty() { " ".to_string() } else { line.to_string() };
@@ -1661,7 +1663,7 @@ impl Render for SftpPanel {
         if self.editor.is_some() {
             return v_flex()
                 .size_full()
-                .child(ui::panel_header(&t, "folder", "SFTP", meta))
+                .child(ui::panel_header(&t, "folder", i18n::t("tool.sftp"), meta))
                 .child(self.editor_view(cx));
         }
 
@@ -1697,7 +1699,7 @@ impl Render for SftpPanel {
                         .py(t.sp2)
                         .text_size(t.fs_sm)
                         .text_color(t.dim)
-                        .child("Empty directory"),
+                        .child(i18n::t("sftp.empty_dir")),
                 );
             } else {
                 for e in &self.entries {
@@ -1711,16 +1713,16 @@ impl Render for SftpPanel {
                     .py(t.sp2)
                     .text_size(t.fs_sm)
                     .text_color(t.muted)
-                    .child("Connecting…"),
+                    .child(i18n::t("panel.connecting")),
             );
         } else if self.conns.is_empty() {
             return v_flex()
                 .size_full()
-                .child(ui::panel_header(&t, "folder", "SFTP", meta))
-                .child(ui::empty_state(&t, "No saved connections"));
+                .child(ui::panel_header(&t, "folder", i18n::t("tool.sftp"), meta))
+                .child(ui::empty_state(&t, i18n::t("side.no_saved_connections")));
         } else {
             // Disconnected: pick a connection to browse.
-            body = body.child(ui::section_label(&t, format!("CONNECTIONS · {}", self.conns.len())));
+            body = body.child(ui::section_label(&t, i18n::tf("sftp.connections_count", &[&self.conns.len().to_string()])));
             for (i, c) in self.conns.iter().enumerate() {
                 body = body.child(self.conn_row(cx, i, c));
             }
@@ -1728,7 +1730,7 @@ impl Render for SftpPanel {
 
         let mut root = v_flex()
             .size_full()
-            .child(ui::panel_header(&t, "folder", "SFTP", meta))
+            .child(ui::panel_header(&t, "folder", i18n::t("tool.sftp"), meta))
             .child(body);
         // The transfer queue is pinned below the listing whenever it has items.
         if !self.transfers.is_empty() {

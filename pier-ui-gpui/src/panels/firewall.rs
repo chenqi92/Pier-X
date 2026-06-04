@@ -32,6 +32,7 @@ use pier_core::services::firewall::{
 use pier_core::ssh::{SshConfig, SshSession};
 
 use crate::data;
+use crate::i18n;
 use crate::theme::Theme;
 use crate::ui;
 
@@ -50,12 +51,23 @@ enum FwTab {
 }
 
 impl FwTab {
-    fn label(self) -> &'static str {
+    /// Stable English slug, used only for element ids (never translated).
+    fn slug(self) -> &'static str {
         match self {
             FwTab::Listening => "Listening",
             FwTab::Rules => "Rules",
             FwTab::Mappings => "Mappings",
             FwTab::Traffic => "Traffic",
+        }
+    }
+
+    /// i18n catalog key for the visible chip label.
+    fn i18n_key(self) -> &'static str {
+        match self {
+            FwTab::Listening => "fw.listening",
+            FwTab::Rules => "fw.rules",
+            FwTab::Mappings => "fw.mappings",
+            FwTab::Traffic => "fw.traffic",
         }
     }
 }
@@ -298,8 +310,10 @@ impl FirewallPanel {
     /// The server picker — one selectable row per saved connection.
     fn connection_selector(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
-        let mut col =
-            v_flex().child(ui::section_label(t, format!("SELECT SERVER · {}", self.conns.len())));
+        let mut col = v_flex().child(ui::section_label(
+            t,
+            i18n::tf("fw.select_server", &[&self.conns.len().to_string()]),
+        ));
         for (i, c) in self.conns.iter().enumerate() {
             col = col.child(self.conn_row(cx, i, c));
         }
@@ -366,7 +380,7 @@ impl FirewallPanel {
                 div()
                     .text_size(t.fs_ui)
                     .text_color(t.ink_2)
-                    .child(format!("Servers · {host}")),
+                    .child(i18n::tf("fw.servers_host", &[&host])),
             )
     }
 
@@ -399,9 +413,9 @@ impl FirewallPanel {
                     .text_size(t.fs_sm)
                     .text_color(if snap.backend_active { t.pos } else { t.muted })
                     .child(if snap.backend_active {
-                        "active"
+                        i18n::t("fw.active")
                     } else {
-                        "inactive"
+                        i18n::t("fw.inactive")
                     }),
             )
     }
@@ -425,7 +439,7 @@ impl FirewallPanel {
         let t = &self.theme;
         let active = self.tab == tab;
         div()
-            .id(SharedString::from(format!("fwtab-{}", tab.label())))
+            .id(SharedString::from(format!("fwtab-{}", tab.slug())))
             .px(t.sp2)
             .py(px(3.0))
             .rounded(t.radius_sm)
@@ -437,7 +451,7 @@ impl FirewallPanel {
                 MouseButton::Left,
                 cx.listener(move |this, _: &MouseDownEvent, _w, cx| this.set_tab(tab, cx)),
             )
-            .child(tab.label())
+            .child(i18n::t(tab.i18n_key()))
     }
 
     /// Transient "Copied: <cmd>" note shown after a Block button is pressed.
@@ -460,7 +474,7 @@ impl FirewallPanel {
                     .font_family(t.mono.clone())
                     .text_size(t.fs_sm)
                     .text_color(t.ink_2)
-                    .child(format!("Copied: {cmd}")),
+                    .child(i18n::tf("fw.copied", &[cmd])),
             )
     }
 
@@ -508,10 +522,10 @@ impl FirewallPanel {
         let t = &self.theme;
         let mut col = v_flex().child(ui::section_label(
             t,
-            format!("LISTENING PORTS · {}", snap.listening.len()),
+            i18n::tf("fw.listening_ports", &[&snap.listening.len().to_string()]),
         ));
         if snap.listening.is_empty() {
-            col = col.child(self.note("None readable (try a root session)"));
+            col = col.child(self.note(i18n::t("fw.none_readable")));
         } else {
             for (i, p) in snap.listening.iter().enumerate() {
                 col = col.child(self.port_row(cx, i, p));
@@ -526,7 +540,7 @@ impl FirewallPanel {
         let t = &self.theme;
         let (scope_label, scope_color) = bind_scope(&self.theme, &p.local_addr);
         let proc = if p.process.is_empty() {
-            "(unknown — root needed)".to_string()
+            i18n::t("fw.unknown_root_needed").to_string()
         } else {
             p.process.clone()
         };
@@ -612,7 +626,7 @@ impl FirewallPanel {
                 }),
             )
             .child(ui::icon("copy", px(11.0), t.neg))
-            .child("Block")
+            .child(i18n::t("fw.block"))
     }
 
     // ── Rules tab ────────────────────────────────────────────────────
@@ -622,17 +636,17 @@ impl FirewallPanel {
         let mut col = v_flex();
 
         // Host posture: status / user / kernel.
-        col = col.child(ui::section_label(t, "HOST"));
+        col = col.child(ui::section_label(t, i18n::t("fw.host")));
         if !snap.backend_status.is_empty() {
-            col = col.child(ui::info_row(t, "Status", snap.backend_status.clone()));
+            col = col.child(ui::info_row(t, i18n::t("fw.status"), snap.backend_status.clone()));
         }
         col = col
-            .child(ui::info_row(t, "User", user_label(snap)))
-            .child(ui::info_row(t, "Kernel", kernel_label(snap)));
+            .child(ui::info_row(t, i18n::t("common.user"), user_label(snap)))
+            .child(ui::info_row(t, i18n::t("fw.kernel"), kernel_label(snap)));
 
         // Default chain policies as coloured badges.
         if !snap.default_policies.is_empty() {
-            col = col.child(ui::section_label(t, "DEFAULT POLICY"));
+            col = col.child(ui::section_label(t, i18n::t("fw.default_policy")));
             let mut row = h_flex().flex_wrap().gap(t.sp1).px(t.sp3).py(t.sp1);
             for (chain, policy) in &snap.default_policies {
                 // Coloured by security posture, not action: a DROP default policy
@@ -654,12 +668,15 @@ impl FirewallPanel {
         let rules = parse_rules(&snap.rules_v4);
         let groups = group_filter_rules(&rules);
         let filter_count: usize = groups.iter().map(|(_, rs)| rs.len()).sum();
-        col = col.child(ui::section_label(t, format!("FILTER RULES · {filter_count}")));
+        col = col.child(ui::section_label(
+            t,
+            i18n::tf("fw.filter_rules", &[&filter_count.to_string()]),
+        ));
         if groups.is_empty() {
             col = col.child(self.note(if snap.rules_v4.is_empty() {
-                "No rules readable (try a root session)"
+                i18n::t("fw.no_rules_readable")
             } else {
-                "No filter rules — only default policies apply"
+                i18n::t("fw.no_filter_rules")
             }));
         } else {
             for (chain, rs) in &groups {
@@ -673,7 +690,10 @@ impl FirewallPanel {
         // IPv6 rules, if any were readable.
         let v6 = parse_rules(&snap.rules_v6);
         if !v6.is_empty() {
-            col = col.child(ui::section_label(t, format!("IPv6 RULES · {}", v6.len())));
+            col = col.child(ui::section_label(
+                t,
+                i18n::tf("fw.ipv6_rules", &[&v6.len().to_string()]),
+            ));
             for r in &v6 {
                 col = col.child(self.rule_row(r));
             }
@@ -695,7 +715,7 @@ impl FirewallPanel {
                 div()
                     .text_size(t.fs_sm)
                     .text_color(t.muted)
-                    .child(format!("{count} rules")),
+                    .child(i18n::tf("fw.rules_count", &[&count.to_string()])),
             )
     }
 
@@ -752,9 +772,12 @@ impl FirewallPanel {
     fn mappings_tab(&self, snap: &FirewallSnapshot) -> AnyElement {
         let t = &self.theme;
         let maps = parse_mappings(&snap.nat_v4);
-        let mut col = v_flex().child(ui::section_label(t, format!("PORT MAPPINGS · {}", maps.len())));
+        let mut col = v_flex().child(ui::section_label(
+            t,
+            i18n::tf("fw.port_mappings", &[&maps.len().to_string()]),
+        ));
         if maps.is_empty() {
-            col = col.child(self.note("No DNAT / port mappings detected"));
+            col = col.child(self.note(i18n::t("fw.no_mappings")));
         } else {
             for m in &maps {
                 col = col.child(self.mapping_row(m));
@@ -766,10 +789,7 @@ impl FirewallPanel {
                 .py(t.sp2)
                 .text_size(t.fs_sm)
                 .text_color(t.dim)
-                .child(
-                    "DOCKER chain rules are managed by the Docker daemon — edit container port \
-                     maps via the Docker panel.",
-                ),
+                .child(i18n::t("fw.docker_chain_note")),
         );
         col.pb(t.sp3).into_any_element()
     }
@@ -811,10 +831,10 @@ impl FirewallPanel {
         let t = &self.theme;
         let mut col = v_flex().child(ui::section_label(
             t,
-            format!("INTERFACES · {}", snap.interfaces.len()),
+            i18n::tf("fw.interfaces", &[&snap.interfaces.len().to_string()]),
         ));
         if snap.interfaces.is_empty() {
-            col = col.child(self.note("No interfaces detected"));
+            col = col.child(self.note(i18n::t("fw.no_interfaces")));
         } else {
             for iface in &snap.interfaces {
                 col = col.child(self.iface_row(iface));
@@ -826,7 +846,7 @@ impl FirewallPanel {
                 .py(t.sp2)
                 .text_size(t.fs_sm)
                 .text_color(t.dim)
-                .child("Sampling /proc/net/dev every 2 s while this tab is visible. Loopback is hidden."),
+                .child(i18n::t("fw.traffic_note")),
         );
         col.pb(t.sp3).into_any_element()
     }
@@ -960,7 +980,7 @@ impl FirewallPanel {
         match (&self.snapshot, self.selected) {
             (Some(_), Some(i)) => self.conns[i].host.clone(),
             (None, Some(i)) if self.loading => self.conns[i].host.clone(),
-            _ => format!("{} servers", self.conns.len()),
+            _ => i18n::tf("fw.servers_meta", &[&self.conns.len().to_string()]),
         }
     }
 }
@@ -973,7 +993,7 @@ impl Render for FirewallPanel {
 
         let mut root = v_flex()
             .size_full()
-            .child(ui::panel_header(t, "shield", "FIREWALL", meta));
+            .child(ui::panel_header(t, "shield", i18n::t("tool.firewall"), meta));
 
         if let Some(snap) = self.snapshot.clone() {
             root = root.child(self.host_view(cx, &snap));
@@ -983,14 +1003,14 @@ impl Render for FirewallPanel {
                     .selected
                     .map(|i| self.conns[i].host.clone())
                     .unwrap_or_default();
-                ui::empty_state(t, format!("Connecting to {host} …")).into_any_element()
+                ui::empty_state(t, i18n::tf("panel.connecting_to", &[&host])).into_any_element()
             } else if let Some(err) = self.error.clone() {
                 v_flex()
                     .child(self.error_note(&err))
                     .child(self.connection_selector(cx))
                     .into_any_element()
             } else if self.conns.is_empty() {
-                ui::empty_state(t, "No saved connections").into_any_element()
+                ui::empty_state(t, i18n::t("side.no_saved_connections")).into_any_element()
             } else {
                 self.connection_selector(cx).into_any_element()
             };
@@ -1010,14 +1030,15 @@ impl Render for FirewallPanel {
 
 // ── Free helpers (pure) ──────────────────────────────────────────────
 
-/// Display label for a detected firewall backend.
-fn backend_name(b: FirewallBackend) -> &'static str {
+/// Display label for a detected firewall backend. Backend product names are
+/// left untranslated; only the "none detected" fallback is localized.
+fn backend_name(b: FirewallBackend) -> SharedString {
     match b {
-        FirewallBackend::Firewalld => "firewalld",
-        FirewallBackend::Ufw => "ufw",
-        FirewallBackend::Nftables => "nftables",
-        FirewallBackend::Iptables => "iptables",
-        FirewallBackend::None => "none detected",
+        FirewallBackend::Firewalld => SharedString::from("firewalld"),
+        FirewallBackend::Ufw => SharedString::from("ufw"),
+        FirewallBackend::Nftables => SharedString::from("nftables"),
+        FirewallBackend::Iptables => SharedString::from("iptables"),
+        FirewallBackend::None => i18n::t("fw.none_detected"),
     }
 }
 
@@ -1042,13 +1063,13 @@ fn kernel_label(snap: &FirewallSnapshot) -> String {
 /// Classify a bind address into an exposure label + tone. `0.0.0.0`/`::`/`*`
 /// are internet-reachable (warn); loopback is local-only (muted); anything
 /// else is treated as LAN (info).
-fn bind_scope(t: &Theme, addr: &str) -> (&'static str, Hsla) {
+fn bind_scope(t: &Theme, addr: &str) -> (SharedString, Hsla) {
     if addr == "0.0.0.0" || addr == "::" || addr == "*" {
-        ("Public", t.warn)
+        (i18n::t("fw.scope_public"), t.warn)
     } else if addr == "127.0.0.1" || addr == "::1" || addr.starts_with("127.") {
-        ("Local", t.muted)
+        (i18n::t("fw.scope_local"), t.muted)
     } else {
-        ("LAN", t.info)
+        (i18n::t("fw.scope_lan"), t.info)
     }
 }
 
@@ -1230,13 +1251,15 @@ fn group_filter_rules(rules: &[ParsedRule]) -> Vec<(String, Vec<&ParsedRule>)> {
         .collect()
 }
 
-/// Render a parsed rule as one short English sentence (raw body shown below).
+/// Render a parsed rule as one short localized sentence (raw body shown below).
+/// Host-derived values (ports, addresses, interface names, chain names) are
+/// interpolated verbatim; only the connective vocabulary is translated.
 fn rule_summary(r: &ParsedRule) -> String {
     let dir = match r.chain.as_str() {
-        "INPUT" => "inbound",
-        "OUTPUT" => "outbound",
-        "FORWARD" => "forwarded",
-        other => other,
+        "INPUT" => i18n::t("fw.dir_inbound").to_string(),
+        "OUTPUT" => i18n::t("fw.dir_outbound").to_string(),
+        "FORWARD" => i18n::t("fw.dir_forwarded").to_string(),
+        other => other.to_string(),
     };
     let proto_up = r
         .proto
@@ -1246,33 +1269,36 @@ fn rule_summary(r: &ParsedRule) -> String {
         .unwrap_or_default();
     let mut parts: Vec<String> = Vec::new();
     if let Some(dp) = &r.dport {
-        let label = if proto_up.is_empty() { "port" } else { &proto_up };
-        parts.push(format!("{label} {dp}"));
+        if proto_up.is_empty() {
+            parts.push(i18n::tf("fw.rule_port", &[dp]));
+        } else {
+            parts.push(format!("{proto_up} {dp}"));
+        }
     } else if !proto_up.is_empty() {
         parts.push(proto_up.clone());
     }
     if let Some(s) = &r.source {
-        parts.push(format!("from {s}"));
+        parts.push(i18n::tf("fw.rule_from", &[s]));
     }
     if let Some(d) = &r.destination {
-        parts.push(format!("to {d}"));
+        parts.push(i18n::tf("fw.rule_to", &[d]));
     }
     if let Some(i) = &r.iface {
-        parts.push(format!("on {i}"));
+        parts.push(i18n::tf("fw.rule_on", &[i]));
     } else if let Some(o) = &r.out_iface {
-        parts.push(format!("via {o}"));
+        parts.push(i18n::tf("fw.rule_via", &[o]));
     }
-    parts.push(dir.to_string());
+    parts.push(dir);
     let cond = parts.join(" ");
     match r.action.as_str() {
-        "ACCEPT" => format!("Allow {cond}"),
-        "DROP" => format!("Drop {cond}"),
-        "REJECT" => format!("Reject {cond}"),
-        "LOG" => format!("Log {cond}"),
+        "ACCEPT" => i18n::tf("fw.rule_allow", &[&cond]),
+        "DROP" => i18n::tf("fw.rule_drop", &[&cond]),
+        "REJECT" => i18n::tf("fw.rule_reject", &[&cond]),
+        "LOG" => i18n::tf("fw.rule_log", &[&cond]),
         "DNAT" => format!("DNAT {cond}"),
         "SNAT" => format!("SNAT {cond}"),
-        "MASQUERADE" => format!("Masquerade {cond}"),
-        "RETURN" => format!("Return {cond}"),
+        "MASQUERADE" => i18n::tf("fw.rule_masquerade", &[&cond]),
+        "RETURN" => i18n::tf("fw.rule_return", &[&cond]),
         "" => cond,
         a => format!("{a} {cond}"),
     }

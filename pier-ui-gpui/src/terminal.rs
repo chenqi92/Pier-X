@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::channel::mpsc;
 use gpui::prelude::*;
 use gpui::{
     div, px, App, Context, Div, FocusHandle, Focusable, FontWeight, Hsla, KeyDownEvent, Keystroke,
@@ -104,7 +105,16 @@ impl TerminalView {
     /// open run on the background executor; the `PierTerminal` is built on the
     /// main thread once the channel is ready (so it binds to this view's dirty
     /// flag). Until then the view shows a "Connecting…" status.
-    pub fn new_ssh(cx: &mut Context<Self>, cfg: SshConfig) -> Self {
+    ///
+    /// `prompt_tx` carries the interactive host-key prompt: an unknown or
+    /// changed key sends a request to the shell overlay and blocks this connect
+    /// task (on the background thread) until the user decides. Known / trusted
+    /// hosts connect silently. See [`data::connect_blocking_prompt`].
+    pub fn new_ssh(
+        cx: &mut Context<Self>,
+        cfg: SshConfig,
+        prompt_tx: mpsc::UnboundedSender<data::HostKeyPrompt>,
+    ) -> Self {
         let dirty = Arc::new(AtomicBool::new(true));
         let focus = cx.focus_handle();
         let label = format!("{}@{}", cfg.user, cfg.host);
@@ -115,7 +125,7 @@ impl TerminalView {
             let res = cx
                 .background_executor()
                 .spawn(async move {
-                    let session = data::connect_blocking(&cfg)?;
+                    let session = data::connect_blocking_prompt(&cfg, prompt_tx)?;
                     let pty = session
                         .open_shell_channel_blocking(COLS, ROWS)
                         .map_err(|e| e.to_string())?;

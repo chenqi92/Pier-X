@@ -24,6 +24,7 @@ use gpui::{
 };
 use gpui_component::{h_flex, v_flex};
 
+use crate::i18n;
 use crate::theme::Theme;
 use crate::ui;
 
@@ -304,14 +305,15 @@ impl LogsPanel {
     fn level_chip(
         &self,
         cx: &mut Context<Self>,
-        label: &'static str,
+        key: &'static str,
+        label: SharedString,
         filter: LevelFilter,
         tone: Hsla,
     ) -> impl IntoElement {
         let t = &self.theme;
         let active = self.level_filter == filter;
         div()
-            .id(SharedString::from(format!("logchip-{label}")))
+            .id(SharedString::from(format!("logchip-{key}")))
             .px(t.sp2)
             .py(px(2.0))
             .rounded(t.radius_sm)
@@ -380,10 +382,10 @@ impl LogsPanel {
             .py(t.sp2)
             .border_b_1()
             .border_color(t.line)
-            .child(self.level_chip(cx, "All", LevelFilter::All, t.accent))
-            .child(self.level_chip(cx, "Info", LevelFilter::Info, t.info))
-            .child(self.level_chip(cx, "Warn", LevelFilter::Warn, t.warn))
-            .child(self.level_chip(cx, "Error", LevelFilter::Error, t.neg))
+            .child(self.level_chip(cx, "all", i18n::t("log.all"), LevelFilter::All, t.accent))
+            .child(self.level_chip(cx, "info", i18n::t("log.info"), LevelFilter::Info, t.info))
+            .child(self.level_chip(cx, "warn", i18n::t("log.warn"), LevelFilter::Warn, t.warn))
+            .child(self.level_chip(cx, "error", i18n::t("log.error"), LevelFilter::Error, t.neg))
             .child(div().flex_1())
             .child(self.tool_btn(
                 cx,
@@ -405,7 +407,7 @@ impl LogsPanel {
             if focused {
                 h_flex().items_center().child(caret()).into_any_element()
             } else {
-                div().text_color(t.dim).child("Filter lines…").into_any_element()
+                div().text_color(t.dim).child(i18n::t("log.filter_lines")).into_any_element()
             }
         } else {
             let mut row = h_flex()
@@ -512,16 +514,16 @@ impl Render for LogsPanel {
         if self.path.is_none() {
             return v_flex()
                 .size_full()
-                .child(ui::panel_header(&t, "scroll-text", "LOGS", ""))
-                .child(ui::empty_state(&t, "No log file"));
+                .child(ui::panel_header(&t, "scroll-text", i18n::t("tool.logs"), ""))
+                .child(ui::empty_state(&t, i18n::t("log.no_file")));
         }
 
         // First read hasn't resolved yet.
         if !self.loaded {
             return v_flex()
                 .size_full()
-                .child(ui::panel_header(&t, "scroll-text", "LOGS", ""))
-                .child(ui::empty_state(&t, "Reading log…"));
+                .child(ui::panel_header(&t, "scroll-text", i18n::t("tool.logs"), ""))
+                .child(ui::empty_state(&t, i18n::t("log.reading")));
         }
 
         // Apply the level chip + text filter to build the visible rows.
@@ -538,26 +540,26 @@ impl Render for LogsPanel {
         let total = self.lines.len();
         let filtered = self.level_filter != LevelFilter::All || !q.is_empty();
         let mut meta = if filtered {
-            format!("{}/{} lines", visible.len(), total)
+            i18n::tf("log.lines_filtered", &[&visible.len().to_string(), &total.to_string()])
         } else {
-            format!("{total} lines")
+            i18n::tf("log.lines", &[&total.to_string()])
         };
         if self.paused {
-            meta.push_str(" · paused");
+            meta.push_str(&i18n::t("log.paused_suffix"));
         }
 
         let focused = self.focus.is_focused(window);
         let root = v_flex()
             .size_full()
-            .child(ui::panel_header(&t, "scroll-text", "LOGS", meta))
+            .child(ui::panel_header(&t, "scroll-text", i18n::t("tool.logs"), meta))
             .child(self.toolbar(cx))
             .child(self.search_bar(focused, cx));
 
         if visible.is_empty() {
             let note = if total == 0 {
-                "Log is empty"
+                i18n::t("log.empty")
             } else {
-                "No matching lines"
+                i18n::t("log.no_matching_lines")
             };
             return root.child(ui::empty_state(&t, note));
         }

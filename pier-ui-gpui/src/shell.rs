@@ -103,9 +103,39 @@ enum GitTab {
 struct Tab {
     title: String,
     kind: TabKind,
+    /// Optional color label, an index into [`Shell::tab_palette`].
+    color: Option<usize>,
     /// Each tab owns its own terminal session; dropping the tab drops the
     /// entity, which drops PierTerminal and closes the PTY.
     terminal: Entity<TerminalView>,
+}
+
+/// Drag payload identifying the tab being dragged (its index). A
+/// newtype so drop targets only accept tab drags, not other usizes.
+#[derive(Clone, Copy)]
+struct TabDrag(usize);
+
+/// The floating chip rendered under the cursor while a tab is dragged.
+struct TabDragPreview {
+    title: String,
+    theme: Theme,
+}
+
+impl Render for TabDragPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        div()
+            .px(t.sp3)
+            .py(px(4.0))
+            .rounded(t.radius_sm)
+            .bg(t.elev)
+            .border_1()
+            .border_color(t.accent)
+            .font_family(t.sans.clone())
+            .text_size(t.fs_ui)
+            .text_color(t.ink)
+            .child(self.title.clone())
+    }
 }
 
 pub struct Shell {
@@ -263,6 +293,9 @@ enum Cmd {
     CloseTab,
     CloseTabAt(usize),
     CloseOthers(usize),
+    CloseToLeft(usize),
+    CloseToRight(usize),
+    SetTabColor(usize, Option<usize>),
 }
 
 // Global actions bound to keyboard shortcuts in main.rs. Each maps to a Cmd.
@@ -320,7 +353,12 @@ impl Shell {
         Self::start_monitor(cx);
         Self {
             theme: if st.dark { Theme::dark() } else { Theme::light() },
-            tabs: vec![Tab { title: tab_title, kind: TabKind::Local, terminal }],
+            tabs: vec![Tab {
+                title: tab_title,
+                kind: TabKind::Local,
+                color: None,
+                terminal,
+            }],
             active_tab: 0,
             active_tool: st.active_tool.min(TOOLS.len() - 1),
             show_servers: st.show_servers,
@@ -858,9 +896,58 @@ impl Shell {
                     self.active_tab = 0;
                 }
             }
+            Cmd::CloseToLeft(i) => {
+                if i > 0 && i < self.tabs.len() {
+                    self.tabs.drain(0..i);
+                    self.active_tab = self
+                        .active_tab
+                        .saturating_sub(i)
+                        .min(self.tabs.len().saturating_sub(1));
+                }
+            }
+            Cmd::CloseToRight(i) => {
+                if i + 1 < self.tabs.len() {
+                    self.tabs.truncate(i + 1);
+                    if self.active_tab > i {
+                        self.active_tab = i;
+                    }
+                }
+            }
+            Cmd::SetTabColor(i, c) => {
+                if let Some(tab) = self.tabs.get_mut(i) {
+                    tab.color = c;
+                }
+            }
         }
         self.persist(cx);
         cx.notify();
+    }
+
+    /// Reorder a tab by drag: move the tab at `from` to `to`'s slot.
+    fn move_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(from);
+        let dest = if from < to { to - 1 } else { to };
+        let dest = dest.min(self.tabs.len());
+        self.tabs.insert(dest, tab);
+        self.active_tab = dest;
+        cx.notify();
+    }
+
+    /// Eight tab-color swatches, drawn from the design tokens.
+    fn tab_palette(t: &Theme) -> [Hsla; 8] {
+        [
+            t.info,
+            t.pos,
+            t.warn,
+            t.neg,
+            t.svc_log,
+            t.svc_mysql,
+            t.svc_postgres,
+            t.svc_sftp,
+        ]
     }
 
     /// Switch the Git sub-tab, loading its data on demand (local git reads are
@@ -955,6 +1042,7 @@ impl Shell {
         self.tabs.push(Tab {
             title: "pwsh".to_string(),
             kind: TabKind::Local,
+            color: None,
             terminal,
         });
         self.active_tab = self.tabs.len() - 1;
@@ -1407,6 +1495,7 @@ impl Shell {
         self.tabs.push(Tab {
             title,
             kind: TabKind::Ssh,
+            color: None,
             terminal,
         });
         self.active_tab = self.tabs.len() - 1;
@@ -1705,6 +1794,9 @@ impl Shell {
         let t = &self.theme;
         let tab = &self.tabs[idx];
         let active = self.active_tab == idx;
+        let dot = tab.color.and_then(|c| Self::tab_palette(t).get(c).copied());
+        let drag_title = tab.title.clone();
+        let drag_theme = self.theme.clone();
         h_flex()
             .id(SharedString::from(format!("tab-{idx}")))
             .flex_none()
@@ -1732,6 +1824,19 @@ impl Shell {
                     cx.notify();
                 }),
             )
+            // Drag to reorder; drop a dragged tab here to land it at this slot.
+            .on_drag(TabDrag(idx), move |_, _, _, cx| {
+                cx.new(|_| TabDragPreview {
+                    title: drag_title.clone(),
+                    theme: drag_theme.clone(),
+                })
+            })
+            .on_drop(cx.listener(move |this, drag: &TabDrag, _w, cx| {
+                this.move_tab(drag.0, idx, cx);
+            }))
+            .when_some(dot, |d, col| {
+                d.child(div().w(px(6.0)).h(px(6.0)).flex_none().rounded_full().bg(col))
+            })
             .child(icon(
                 Self::tab_icon(tab.kind),
                 px(14.0),
@@ -2992,13 +3097,51 @@ impl Shell {
                 )
                 .child(label)
         };
+        // Color swatches: a clear button followed by the eight palette colors.
+        let mut swatches = h_flex().gap(px(4.0)).px(t.sp3).py(px(4.0)).child(
+            div()
+                .id("tabcol-none")
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(16.0))
+                .h(px(16.0))
+                .rounded(t.radius_sm)
+                .border_1()
+                .border_color(t.line_3)
+                .cursor_pointer()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                        this.run(Cmd::SetTabColor(idx, None), window, cx)
+                    }),
+                )
+                .child(icon("close", px(10.0), t.muted)),
+        );
+        for (k, col) in Self::tab_palette(t).into_iter().enumerate() {
+            swatches = swatches.child(
+                div()
+                    .id(SharedString::from(format!("tabcol-{k}")))
+                    .w(px(16.0))
+                    .h(px(16.0))
+                    .rounded(t.radius_sm)
+                    .bg(col)
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            this.run(Cmd::SetTabColor(idx, Some(k)), window, cx)
+                        }),
+                    ),
+            );
+        }
         deferred(
             v_flex()
                 .id("tab-ctx")
                 .absolute()
                 .left(pos.x)
                 .top(pos.y)
-                .min_w(px(160.0))
+                .min_w(px(200.0))
                 .py(t.sp1)
                 .bg(t.elev)
                 .border_1()
@@ -3009,7 +3152,20 @@ impl Shell {
                     cx.notify();
                 }))
                 .child(item("close", "Close", Cmd::CloseTabAt(idx), cx))
-                .child(item("others", "Close Others", Cmd::CloseOthers(idx), cx)),
+                .child(item("others", "Close Others", Cmd::CloseOthers(idx), cx))
+                .child(item("left", "Close to Left", Cmd::CloseToLeft(idx), cx))
+                .child(item("right", "Close to Right", Cmd::CloseToRight(idx), cx))
+                .child(div().my(px(4.0)).mx(t.sp2).h(px(1.0)).bg(t.line_2))
+                .child(
+                    div()
+                        .px(t.sp3)
+                        .pb(px(2.0))
+                        .text_size(t.fs_sm)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(t.muted)
+                        .child("COLOR"),
+                )
+                .child(swatches),
         )
         .into_any_element()
     }

@@ -635,6 +635,11 @@ impl FirewallPanel {
             col = col.child(ui::section_label(t, "DEFAULT POLICY"));
             let mut row = h_flex().flex_wrap().gap(t.sp1).px(t.sp3).py(t.sp1);
             for (chain, policy) in &snap.default_policies {
+                // Coloured by security posture, not action: a DROP default policy
+                // is deny-by-default (the safe stance) so it reads green here —
+                // the deliberate inverse of `action_tone`, where a DROP *rule*
+                // blocks traffic and reads red. REJECT denies too but advertises
+                // the host, so amber.
                 let color = match policy.as_str() {
                     "DROP" => t.pos,
                     "REJECT" => t.warn,
@@ -1324,10 +1329,7 @@ fn parse_mappings(dump: &str) -> Vec<PortMapping> {
         if proto != "tcp" && proto != "udp" {
             continue;
         }
-        let (addr, iport) = dest
-            .rsplit_once(':')
-            .map(|(a, p)| (a.to_string(), p.to_string()))
-            .unwrap_or((dest.clone(), "0".to_string()));
+        let (addr, iport) = split_dest(&dest);
         out.push(PortMapping {
             proto,
             external_port: dport,
@@ -1337,6 +1339,30 @@ fn parse_mappings(dump: &str) -> Vec<PortMapping> {
         });
     }
     out
+}
+
+/// Split a `--to-destination` value into `(address, port)`.
+///
+/// Handles IPv4 `1.2.3.4[:port]`, bracketed IPv6 `[fd00::2][:port]`, and bare
+/// IPv6 `fd00::2` — a plain colon split mangles the latter two. Port defaults
+/// to `"0"` when absent.
+fn split_dest(dest: &str) -> (String, String) {
+    // Bracketed IPv6: `[addr]` or `[addr]:port`.
+    if let Some(rest) = dest.strip_prefix('[') {
+        if let Some((addr, tail)) = rest.split_once(']') {
+            let port = tail.strip_prefix(':').filter(|p| !p.is_empty());
+            return (addr.to_string(), port.unwrap_or("0").to_string());
+        }
+    }
+    // Bare IPv6 (two or more colons, unbracketed) never carries a port.
+    if dest.matches(':').count() > 1 {
+        return (dest.to_string(), "0".to_string());
+    }
+    // IPv4 with optional `:port`.
+    match dest.split_once(':') {
+        Some((addr, port)) => (addr.to_string(), port.to_string()),
+        None => (dest.to_string(), "0".to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -1382,5 +1408,25 @@ mod tests {
         assert_eq!(maps[0].internal_addr, "172.17.0.2");
         assert_eq!(maps[0].internal_port, "80");
         assert_eq!(maps[0].chain, "DOCKER");
+    }
+
+    #[test]
+    fn splits_dnat_destinations() {
+        assert_eq!(split_dest("172.17.0.2:80"), ("172.17.0.2".to_string(), "80".to_string()));
+        assert_eq!(split_dest("172.17.0.2"), ("172.17.0.2".to_string(), "0".to_string()));
+        assert_eq!(split_dest("[fd00::2]:8443"), ("fd00::2".to_string(), "8443".to_string()));
+        assert_eq!(split_dest("[fd00::2]"), ("fd00::2".to_string(), "0".to_string()));
+        assert_eq!(split_dest("fd00::2"), ("fd00::2".to_string(), "0".to_string()));
+    }
+
+    #[test]
+    fn parses_ipv6_dnat_mapping() {
+        let dump =
+            "[0:0] -A PREROUTING -p tcp -m tcp --dport 443 -j DNAT --to-destination [fd00::2]:8443\n";
+        let maps = parse_mappings(dump);
+        assert_eq!(maps.len(), 1);
+        assert_eq!(maps[0].internal_addr, "fd00::2");
+        assert_eq!(maps[0].internal_port, "8443");
+        assert_eq!(maps[0].chain, "PREROUTING");
     }
 }

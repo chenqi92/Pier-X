@@ -14,6 +14,8 @@
 // Every mutation runs over the cached SftpClient on the background executor and
 // re-lists the current directory on success. Failures surface as one error line.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use gpui::prelude::*;
 use gpui::{
     div, px, Context, FocusHandle, Hsla, KeyDownEvent, MouseButton, MouseDownEvent,
@@ -639,6 +641,24 @@ impl SftpPanel {
             .text_color(t.muted)
             .child(size);
 
+        // Owner (from the server's longname) and last-modified age. Both stay
+        // blank when the SFTP server omitted the field.
+        let owner_cell = div()
+            .w(px(64.0))
+            .overflow_hidden()
+            .font_family(t.mono.clone())
+            .text_size(t.fs_sm)
+            .text_color(t.muted)
+            .child(e.owner.clone().unwrap_or_default());
+        let mod_cell = div()
+            .w(px(44.0))
+            .flex()
+            .justify_end()
+            .font_family(t.mono.clone())
+            .text_size(t.fs_sm)
+            .text_color(t.muted)
+            .child(e.modified.map(rel_age).unwrap_or_default());
+
         // Trailing actions — inline delete confirmation, or the action buttons.
         let trailing = if confirming {
             h_flex()
@@ -694,6 +714,8 @@ impl SftpPanel {
             .text_color(t.ink_2)
             .hover(|s| s.bg(t.hover))
             .child(nav)
+            .child(owner_cell)
+            .child(mod_cell)
             .child(perm_cell)
             .child(size_cell)
             .child(trailing)
@@ -817,6 +839,28 @@ fn perm_rwx(mode: u32) -> String {
 }
 
 /// Compact human-readable byte size, e.g. `4.0 K`, `1.2 M`.
+/// Format a Unix-epoch timestamp (seconds) as a short relative age — "now",
+/// "5m", "3h", "2d", "1w", "4mo". Blank when the time is missing (0) or sits in
+/// the future (clock skew), so the cell simply stays empty.
+fn rel_age(epoch: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if epoch == 0 || epoch > now {
+        return String::new();
+    }
+    let secs = now - epoch;
+    match secs {
+        0..=59 => "now".into(),
+        60..=3599 => format!("{}m", secs / 60),
+        3600..=86_399 => format!("{}h", secs / 3600),
+        86_400..=604_799 => format!("{}d", secs / 86_400),
+        604_800..=2_591_999 => format!("{}w", secs / 604_800),
+        _ => format!("{}mo", secs / 2_592_000),
+    }
+}
+
 fn human_size(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
     let mut v = n as f64;

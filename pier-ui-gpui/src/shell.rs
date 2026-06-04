@@ -25,6 +25,7 @@ use gpui::{
 use gpui_component::{h_flex, v_flex, TitleBar};
 
 use pier_core::services::git::FileStatus;
+use pier_core::ssh::{AuthMethod, SshConfig};
 
 use crate::data::{self, ConnRow, FileEntry, GitData, MonStat};
 use crate::panels::PanelViews;
@@ -152,10 +153,16 @@ pub struct Shell {
     /// Files sidebar filter text + its focus handle.
     file_filter: String,
     file_focus: FocusHandle,
-    /// New Connection form: [name, host, port, user] + focused field + focus.
-    conn_form: [String; 4],
+    /// New Connection form: [name, host, port, user, secret, group] +
+    /// focused field + focus. `secret` is the password or key path,
+    /// depending on `conn_auth`.
+    conn_form: [String; CONN_FIELD_COUNT],
     conn_field: usize,
     conn_focus: FocusHandle,
+    /// Selected auth method for the form's secret field.
+    conn_auth: ConnAuthKind,
+    /// Last Test-connection result line (latency / error), if any.
+    conn_test: Option<String>,
     /// Error from the last add-connection attempt.
     conn_error: Option<String>,
     /// When the New Connection overlay is editing an existing saved
@@ -215,8 +222,21 @@ enum Overlay {
     NewConn,
 }
 
-/// Labels for the New Connection form fields (index = `conn_field`).
-const CONN_FIELDS: [&str; 4] = ["Name", "Host", "Port", "User"];
+/// Number of text fields in the connection form (name, host, port,
+/// user, secret, group). The secret slot's meaning depends on the
+/// selected [`ConnAuthKind`].
+const CONN_FIELD_COUNT: usize = 6;
+
+/// Index of the secret field (password / key path) in `conn_form`.
+const CONN_SECRET: usize = 4;
+
+/// Which authentication method the New Connection form is editing.
+#[derive(Clone, Copy, PartialEq)]
+enum ConnAuthKind {
+    Password,
+    Key,
+    Agent,
+}
 
 /// A per-row action in the Servers sidebar (dispatched by store index).
 #[derive(Clone, Copy)]
@@ -334,6 +354,8 @@ impl Shell {
             conn_form: Default::default(),
             conn_field: 0,
             conn_focus: cx.focus_handle(),
+            conn_auth: ConnAuthKind::Password,
+            conn_test: None,
             conn_error: None,
             conn_edit: None,
             conn_search: String::new(),
@@ -347,12 +369,20 @@ impl Shell {
         let ks = &ev.keystroke;
         match ks.key.as_str() {
             "tab" => {
-                let n = CONN_FIELDS.len();
-                self.conn_field = if ks.modifiers.shift {
-                    (self.conn_field + n - 1) % n
-                } else {
-                    (self.conn_field + 1) % n
-                };
+                let n = CONN_FIELD_COUNT;
+                let mut next = self.conn_field;
+                loop {
+                    next = if ks.modifiers.shift {
+                        (next + n - 1) % n
+                    } else {
+                        (next + 1) % n
+                    };
+                    // The secret field has no input under Agent auth.
+                    if !(self.conn_auth == ConnAuthKind::Agent && next == CONN_SECRET) {
+                        break;
+                    }
+                }
+                self.conn_field = next;
                 cx.notify();
                 return;
             }
@@ -384,48 +414,77 @@ impl Shell {
         }
     }
 
-    /// Validate the New/Edit Connection form, persist it, and reload.
-    /// In edit mode the existing config's auth / group / databases are
-    /// preserved — only the addressing fields are rewritten here.
-    fn submit_conn(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let name = self.conn_form[0].trim().to_string();
-        let host = self.conn_form[1].trim().to_string();
+    /// Build a validated [`SshConfig`] from the form, mapping the
+    /// selected auth kind to an [`AuthMethod`]. Shared by submit + Test.
+    fn build_conn_cfg(&self) -> Result<SshConfig, String> {
+        let name = self.conn_form[0].trim();
+        let host = self.conn_form[1].trim();
         let port_s = self.conn_form[2].trim();
-        let user = self.conn_form[3].trim().to_string();
+        let user = self.conn_form[3].trim();
         if host.is_empty() || user.is_empty() {
-            self.conn_error = Some("Host and User are required".to_string());
-            cx.notify();
-            return;
+            return Err("Host and User are required".to_string());
         }
         let port: u16 = if port_s.is_empty() {
             22
         } else {
-            match port_s.parse() {
-                Ok(p) => p,
-                Err(_) => {
-                    self.conn_error = Some("Port must be a number".to_string());
-                    cx.notify();
-                    return;
-                }
+            port_s
+                .parse()
+                .map_err(|_| "Port must be a number".to_string())?
+        };
+        let secret = self.conn_form[CONN_SECRET].clone();
+        let auth = match self.conn_auth {
+            ConnAuthKind::Password if secret.is_empty() => AuthMethod::KeychainPassword {
+                credential_id: String::new(),
+            },
+            ConnAuthKind::Password => AuthMethod::DirectPassword { password: secret },
+            ConnAuthKind::Key => AuthMethod::PublicKeyFile {
+                private_key_path: secret.trim().to_string(),
+                passphrase_credential_id: None,
+            },
+            ConnAuthKind::Agent => AuthMethod::Agent,
+        };
+        let group = {
+            let g = self.conn_form[5].trim();
+            if g.is_empty() {
+                None
+            } else {
+                Some(g.to_string())
             }
         };
-        let label = if name.is_empty() { host.clone() } else { name };
+        let label = if name.is_empty() { host } else { name };
+        let mut cfg = SshConfig::new(label, host, user);
+        cfg.port = port;
+        cfg.auth = auth;
+        cfg.group = group;
+        Ok(cfg)
+    }
+
+    /// Validate the form, persist (add or update), and reload. In edit
+    /// mode the existing config's databases / tags / egress are kept;
+    /// only addressing + auth + group are rewritten.
+    fn submit_conn(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let fresh = match self.build_conn_cfg() {
+            Ok(c) => c,
+            Err(e) => {
+                self.conn_error = Some(e);
+                cx.notify();
+                return;
+            }
+        };
         let result = match self.conn_edit {
             Some(idx) => match data::connections_raw().into_iter().nth(idx) {
                 Some(mut cfg) => {
-                    cfg.name = label;
-                    cfg.host = host;
-                    cfg.user = user;
-                    cfg.port = port;
+                    cfg.name = fresh.name;
+                    cfg.host = fresh.host;
+                    cfg.user = fresh.user;
+                    cfg.port = fresh.port;
+                    cfg.auth = fresh.auth;
+                    cfg.group = fresh.group;
                     data::update_connection(idx, cfg)
                 }
                 None => Err("connection no longer exists".to_string()),
             },
-            None => {
-                let mut cfg = pier_core::ssh::SshConfig::new(label, host, user);
-                cfg.port = port;
-                data::add_connection(cfg)
-            }
+            None => data::add_connection(fresh),
         };
         match result {
             Ok(()) => {
@@ -441,18 +500,64 @@ impl Shell {
         }
     }
 
+    /// Probe the form's connection in the background and report the
+    /// round-trip latency or the connect error.
+    fn test_conn(&mut self, cx: &mut Context<Self>) {
+        let cfg = match self.build_conn_cfg() {
+            Ok(c) => c,
+            Err(e) => {
+                self.conn_test = Some(e);
+                cx.notify();
+                return;
+            }
+        };
+        self.conn_test = Some("Testing…".to_string());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    let start = std::time::Instant::now();
+                    data::connect_blocking(&cfg).map(|_session| start.elapsed())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.conn_test = Some(match res {
+                    Ok(d) => format!("Connected in {} ms", d.as_millis()),
+                    Err(e) => e,
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Open the connection overlay pre-filled to edit store row `idx`.
     fn open_edit_conn(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(cfg) = data::connections_raw().into_iter().nth(idx) else {
             return;
+        };
+        let (auth, secret) = match &cfg.auth {
+            AuthMethod::PublicKeyFile {
+                private_key_path, ..
+            } => (ConnAuthKind::Key, private_key_path.clone()),
+            AuthMethod::Agent | AuthMethod::Auto | AuthMethod::AutoChain { .. } => {
+                (ConnAuthKind::Agent, String::new())
+            }
+            AuthMethod::DirectPassword { password } => (ConnAuthKind::Password, password.clone()),
+            AuthMethod::KeychainPassword { .. } => (ConnAuthKind::Password, String::new()),
         };
         self.conn_form = [
             cfg.name.clone(),
             cfg.host.clone(),
             cfg.port.to_string(),
             cfg.user.clone(),
+            secret,
+            cfg.group.clone().unwrap_or_default(),
         ];
+        self.conn_auth = auth;
         self.conn_field = 0;
+        self.conn_test = None;
         self.conn_error = None;
         self.conn_edit = Some(idx);
         self.overlay = Overlay::NewConn;
@@ -722,6 +827,8 @@ impl Shell {
                 self.overlay = Overlay::NewConn;
                 self.conn_form = Default::default();
                 self.conn_field = 0;
+                self.conn_auth = ConnAuthKind::Password;
+                self.conn_test = None;
                 self.conn_error = None;
                 self.conn_edit = None;
                 window.focus(&self.conn_focus, cx);
@@ -2568,21 +2675,26 @@ impl Shell {
             .child(div().p(t.sp2).child(list))
     }
 
-    fn conn_field_row(&self, cx: &mut Context<Self>, idx: usize) -> impl IntoElement {
+    fn conn_field_row(
+        &self,
+        cx: &mut Context<Self>,
+        idx: usize,
+        label: impl Into<SharedString>,
+        placeholder: &'static str,
+        masked: bool,
+    ) -> impl IntoElement {
         let t = &self.theme;
-        let label = CONN_FIELDS[idx];
-        let val = self.conn_form[idx].clone();
+        let raw = self.conn_form[idx].clone();
         let active = self.conn_field == idx;
-        let empty = val.is_empty();
-        let ph = match idx {
-            0 => "optional label",
-            1 => "host or IP",
-            2 => "22",
-            _ => "user",
+        let empty = raw.is_empty();
+        let shown = if masked {
+            "•".repeat(raw.chars().count())
+        } else {
+            raw
         };
         v_flex()
             .gap(px(3.0))
-            .child(div().text_size(t.fs_sm).text_color(t.muted).child(label))
+            .child(div().text_size(t.fs_sm).text_color(t.muted).child(label.into()))
             .child(
                 div()
                     .id(SharedString::from(format!("cf-{idx}")))
@@ -2603,9 +2715,59 @@ impl Shell {
                             cx.notify();
                         }),
                     )
-                    .when(empty, |d| d.text_color(t.dim).child(ph))
-                    .when(!empty, |d| d.text_color(t.ink).child(val)),
+                    .when(empty, |d| d.text_color(t.dim).child(placeholder))
+                    .when(!empty, |d| d.text_color(t.ink).child(shown)),
             )
+    }
+
+    /// One segment of the auth-kind selector.
+    fn conn_auth_btn(
+        &self,
+        cx: &mut Context<Self>,
+        label: &'static str,
+        kind: ConnAuthKind,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        let active = self.conn_auth == kind;
+        div()
+            .id(SharedString::from(format!("cauth-{label}")))
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .py(px(5.0))
+            .rounded(t.radius_sm)
+            .text_size(t.fs_ui)
+            .cursor_pointer()
+            .when(active, |d| d.bg(t.accent).text_color(t.accent_ink))
+            .when(!active, |d| d.bg(t.panel_2).text_color(t.ink_2))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                    this.conn_auth = kind;
+                    cx.notify();
+                }),
+            )
+            .child(label)
+    }
+
+    /// The secondary "Test" button that probes the form's connection.
+    fn conn_test_btn(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        div()
+            .id("conn-test")
+            .px(t.sp3)
+            .py(px(5.0))
+            .rounded(t.radius_sm)
+            .text_size(t.fs_ui)
+            .cursor_pointer()
+            .bg(t.panel_2)
+            .text_color(t.ink_2)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _w, cx| this.test_conn(cx)),
+            )
+            .child("Test")
     }
 
     fn conn_btn(&self, cx: &mut Context<Self>, label: &'static str, primary: bool, cmd: Option<Cmd>) -> impl IntoElement {
@@ -2658,18 +2820,59 @@ impl Shell {
                             }),
                     ),
             )
-            .child(self.conn_field_row(cx, 0))
-            .child(self.conn_field_row(cx, 1))
-            .child(self.conn_field_row(cx, 2))
-            .child(self.conn_field_row(cx, 3))
+            .child(self.conn_field_row(cx, 0, "Name", "optional label", false))
+            .child(
+                h_flex()
+                    .gap(t.sp2)
+                    .child(div().flex_1().child(self.conn_field_row(cx, 1, "Host", "host or IP", false)))
+                    .child(div().w(px(96.0)).child(self.conn_field_row(cx, 2, "Port", "22", false))),
+            )
+            .child(self.conn_field_row(cx, 3, "User", "user", false))
+            .child(
+                v_flex()
+                    .gap(px(3.0))
+                    .child(div().text_size(t.fs_sm).text_color(t.muted).child("Authentication"))
+                    .child(
+                        h_flex()
+                            .gap(t.sp2)
+                            .child(self.conn_auth_btn(cx, "Password", ConnAuthKind::Password))
+                            .child(self.conn_auth_btn(cx, "Key file", ConnAuthKind::Key))
+                            .child(self.conn_auth_btn(cx, "Agent", ConnAuthKind::Agent)),
+                    ),
+            )
+            .when(self.conn_auth == ConnAuthKind::Password, |d| {
+                d.child(self.conn_field_row(cx, CONN_SECRET, "Password", "password", true))
+            })
+            .when(self.conn_auth == ConnAuthKind::Key, |d| {
+                d.child(self.conn_field_row(cx, CONN_SECRET, "Key file", "~/.ssh/id_ed25519", false))
+            })
+            .when(self.conn_auth == ConnAuthKind::Agent, |d| {
+                d.child(
+                    div()
+                        .text_size(t.fs_sm)
+                        .text_color(t.dim)
+                        .child("Uses the system SSH agent"),
+                )
+            })
+            .child(self.conn_field_row(cx, 5, "Group", "optional group", false))
             .when_some(self.conn_error.clone(), |d, e| {
                 d.child(div().text_size(t.fs_sm).text_color(t.neg).child(e))
+            })
+            .when_some(self.conn_test.clone(), |d, msg| {
+                d.child(
+                    div()
+                        .text_size(t.fs_sm)
+                        .font_family(t.mono.clone())
+                        .text_color(t.ink_2)
+                        .child(msg),
+                )
             })
             .child(
                 h_flex()
                     .gap(t.sp2)
                     .justify_end()
                     .child(self.conn_btn(cx, "Cancel", false, Some(Cmd::CloseOverlay)))
+                    .child(self.conn_test_btn(cx))
                     .child(self.conn_btn(
                         cx,
                         if self.conn_edit.is_some() { "Save" } else { "Add" },

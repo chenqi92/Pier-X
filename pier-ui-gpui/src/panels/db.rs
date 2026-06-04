@@ -26,8 +26,8 @@ use std::time::Instant;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, Context, FocusHandle, FontWeight, KeyDownEvent, MouseButton,
-    MouseDownEvent, SharedString, Window,
+    div, px, AnyElement, ClipboardItem, Context, FocusHandle, FontWeight, KeyDownEvent,
+    MouseButton, MouseDownEvent, SharedString, Window,
 };
 use gpui_component::{h_flex, v_flex};
 
@@ -52,6 +52,10 @@ const MAX_RENDER_ROWS: usize = 200;
 /// balloon the panel or spin forever.
 const MAX_REDIS_KEYS: usize = 500;
 const MAX_SCAN_ITERS: usize = 32;
+
+/// How many past queries the HISTORY rail keeps (newest first). Bounds both the
+/// in-memory list and the persisted file.
+const MAX_HISTORY: usize = 200;
 
 /// Which backend the panel is currently driving. All four DB tools share this
 /// one View, so the engine is chosen here rather than inferred from the tool.
@@ -250,14 +254,29 @@ struct Grid {
 
 impl From<SqliteQueryResult> for Grid {
     fn from(r: SqliteQueryResult) -> Self {
+        // Cap rows here (not just at render) so an unbounded `SELECT *` can't
+        // pull a whole table into memory, matching the remote `parse_grid` path.
+        let mut rows = r.rows;
+        let truncated = rows.len() > MAX_GRID_ROWS;
+        rows.truncate(MAX_GRID_ROWS);
         Grid {
             columns: r.columns,
-            rows: r.rows,
+            rows,
             elapsed_ms: r.elapsed_ms,
             error: r.error,
-            truncated: false,
+            truncated,
         }
     }
+}
+
+/// One executed query for the HISTORY rail. Pure frontend — `rows` /
+/// `elapsed_ms` are taken from the result that ran; `write` marks DML/DDL
+/// (those show no row count, since no portable affected-row count exists).
+struct HistEntry {
+    sql: String,
+    rows: usize,
+    elapsed_ms: u64,
+    write: bool,
 }
 
 /// The `TYPE` / `TTL` / value preview for one selected Redis key.
@@ -311,6 +330,16 @@ pub struct DbPanel {
     // Query console + shared result grid.
     query: String,
     query_focus: FocusHandle,
+    /// Write mode. Writes / DDL are rejected unless this is toggled on AND the
+    /// user retypes "WRITE" in `write_confirm`. Reset to false after every
+    /// successful write and on engine switch / reconnect — the read-only
+    /// default (PRODUCT-SPEC §5.5) is never relaxed.
+    write_unlocked: bool,
+    write_confirm: String,
+    write_confirm_focus: FocusHandle,
+    /// Recently run queries, newest first (capped at [`MAX_HISTORY`]), persisted
+    /// best-effort across restarts.
+    history: Vec<HistEntry>,
     result: Option<Grid>,
     /// Index of the result row expanded inline as a key/value list.
     expanded_row: Option<usize>,
@@ -348,6 +377,10 @@ impl DbPanel {
             redis_detail: None,
             query: String::new(),
             query_focus: cx.focus_handle(),
+            write_unlocked: false,
+            write_confirm: String::new(),
+            write_confirm_focus: cx.focus_handle(),
+            history: load_history(),
             result: None,
             expanded_row: None,
             busy: false,
@@ -383,19 +416,66 @@ impl DbPanel {
         }
     }
 
+    /// Keystrokes for the inline "type WRITE" confirmation box. Mirrors
+    /// [`Self::on_query_key`]'s accumulation; Enter runs the query.
+    fn on_confirm_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        match ks.key.as_str() {
+            "enter" => {
+                self.run_query(cx);
+                return;
+            }
+            "backspace" => {
+                if self.write_confirm.pop().is_some() {
+                    cx.notify();
+                }
+                return;
+            }
+            _ => {}
+        }
+        let m = &ks.modifiers;
+        if m.control || m.alt || m.platform {
+            return;
+        }
+        if let Some(kc) = &ks.key_char {
+            if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) {
+                self.write_confirm.push_str(kc);
+                cx.notify();
+            }
+        }
+    }
+
     /// Run the query box against the open SQLite file or the selected remote
-    /// database (read-only intent — writes are rejected before dispatch).
+    /// database. Read-only statements run directly; writes / DDL are gated by
+    /// the unlock toggle, a single-statement rule, and a retyped "WRITE".
     fn run_query(&mut self, cx: &mut Context<Self>) {
         let sql = self.query.trim().to_string();
         if sql.is_empty() {
             return;
         }
-        // Honour the read-only default across every engine.
+        // Writes are anything the read classifier rejects. The read-only
+        // default is never relaxed (PRODUCT-SPEC §5.5): a write needs the
+        // toggle on, a single statement, and a "WRITE" confirmation, and the
+        // panel re-locks after each successful write (see run_*_query).
         if !is_readonly_sql(&sql) {
-            self.error =
-                Some("Read-only: only SELECT / WITH / PRAGMA / EXPLAIN / SHOW / DESCRIBE".to_string());
-            cx.notify();
-            return;
+            if !self.write_unlocked {
+                self.error = Some(
+                    "Read-only. Unlock writes to run INSERT / UPDATE / DELETE / DDL.".to_string(),
+                );
+                cx.notify();
+                return;
+            }
+            if !is_single_statement(&sql) {
+                self.error =
+                    Some("One statement at a time — remove the embedded ';'.".to_string());
+                cx.notify();
+                return;
+            }
+            if !self.write_confirm.trim().eq_ignore_ascii_case("WRITE") {
+                self.error = Some("Type WRITE in the confirm box to run this write.".to_string());
+                cx.notify();
+                return;
+            }
         }
         match self.engine {
             Engine::Sqlite => self.run_sqlite_query(sql, cx),
@@ -404,23 +484,40 @@ impl DbPanel {
         }
     }
 
+    /// Record a finished query at the head of the history rail and persist.
+    fn push_history(&mut self, sql: String, rows: usize, elapsed_ms: u64, write: bool) {
+        self.history.insert(
+            0,
+            HistEntry {
+                sql,
+                rows,
+                elapsed_ms,
+                write,
+            },
+        );
+        self.history.truncate(MAX_HISTORY);
+        save_history(&self.history);
+    }
+
     /// Execute `sql` against the open SQLite file on the background executor.
     fn run_sqlite_query(&mut self, sql: String, cx: &mut Context<Self>) {
         let Some(path) = self.open_db.clone() else {
             return;
         };
+        let write = !is_readonly_sql(&sql);
         self.busy = true;
         self.error = None;
         self.expanded_row = None;
         self.epoch += 1;
         let gen = self.epoch;
         cx.notify();
+        let sql_exec = sql.clone();
         cx.spawn(async move |this, cx| {
             let res = cx
                 .background_executor()
                 .spawn(async move {
                     match SqliteClient::open(&path) {
-                        Ok(c) => Ok(c.execute(&sql)),
+                        Ok(c) => Ok(c.execute(&sql_exec)),
                         Err(e) => Err(e.to_string()),
                     }
                 })
@@ -434,8 +531,16 @@ impl DbPanel {
                     Ok(r) => {
                         if let Some(err) = &r.error {
                             this.error = Some(err.clone());
+                            this.result = Some(Grid::from(r));
+                        } else {
+                            let grid = Grid::from(r);
+                            this.push_history(sql, grid.rows.len(), grid.elapsed_ms, write);
+                            if write {
+                                this.write_unlocked = false;
+                                this.write_confirm.clear();
+                            }
+                            this.result = Some(grid);
                         }
-                        this.result = Some(Grid::from(r));
                     }
                     Err(e) => this.error = Some(e),
                 }
@@ -458,17 +563,19 @@ impl DbPanel {
             return;
         };
         let engine = self.engine;
+        let write = !is_readonly_sql(&sql);
         self.busy = true;
         self.error = None;
         self.expanded_row = None;
         self.epoch += 1;
         let gen = self.epoch;
         cx.notify();
+        let sql_exec = sql.clone();
         cx.spawn(async move |this, cx| {
             let res = cx
                 .background_executor()
                 .spawn(async move {
-                    let cmd = engine.sql_command(&db, &sql);
+                    let cmd = engine.sql_command(&db, &sql_exec);
                     let start = Instant::now();
                     let (code, out) =
                         session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
@@ -476,7 +583,20 @@ impl DbPanel {
                     if code != 0 {
                         return Err(err_text(out, "query failed"));
                     }
-                    Ok::<Grid, String>(parse_grid(&out, engine.sep(), elapsed))
+                    // A write has no portable result grid (`psql` prints a
+                    // "INSERT 0 1" status tag, `mysql` nothing); skip parsing
+                    // so the UI shows a clean "OK · {ms} ms".
+                    if write {
+                        Ok::<Grid, String>(Grid {
+                            columns: Vec::new(),
+                            rows: Vec::new(),
+                            elapsed_ms: elapsed,
+                            error: None,
+                            truncated: false,
+                        })
+                    } else {
+                        Ok::<Grid, String>(parse_grid(&out, engine.sep(), elapsed))
+                    }
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -485,7 +605,14 @@ impl DbPanel {
                 }
                 this.busy = false;
                 match res {
-                    Ok(grid) => this.result = Some(grid),
+                    Ok(grid) => {
+                        this.push_history(sql, grid.rows.len(), grid.elapsed_ms, write);
+                        if write {
+                            this.write_unlocked = false;
+                            this.write_confirm.clear();
+                        }
+                        this.result = Some(grid);
+                    }
                     Err(e) => this.error = Some(e),
                 }
                 cx.notify();
@@ -504,7 +631,9 @@ impl DbPanel {
     }
 
     /// Clear every remote drill-down field — used on engine switch and before a
-    /// fresh connect so stale tables / keys never bleed across hosts.
+    /// fresh connect so stale tables / keys never bleed across hosts. Also
+    /// re-locks writes: both `engine_chip` (engine switch) and `connect_remote`
+    /// route through here, so a fresh engine / host always starts read-only.
     fn reset_remote(&mut self) {
         self.session = None;
         self.selected_conn = None;
@@ -517,6 +646,8 @@ impl DbPanel {
         self.redis_keys_truncated = false;
         self.selected_key = None;
         self.redis_detail = None;
+        self.write_unlocked = false;
+        self.write_confirm.clear();
     }
 
     /// Open a SQLite file and list its tables.
@@ -1057,7 +1188,9 @@ impl DbPanel {
             col = col
                 .child(ui::section_label(t, "QUERY"))
                 .child(self.query_console(cx))
-                .child(self.result_table(cx));
+                .child(self.write_bar(cx))
+                .child(self.result_table(cx))
+                .child(self.history_section(cx));
         }
 
         col.into_any_element()
@@ -1172,7 +1305,9 @@ impl DbPanel {
                 col = col
                     .child(ui::section_label(t, "QUERY"))
                     .child(self.query_console(cx))
-                    .child(self.result_table(cx));
+                    .child(self.write_bar(cx))
+                    .child(self.result_table(cx))
+                    .child(self.history_section(cx));
             }
         }
 
@@ -1324,6 +1459,185 @@ impl DbPanel {
             )
     }
 
+    /// The write-mode bar under the query console (mirrors `DbSqlEditor.tsx`'s
+    /// footer): a lock toggle, a hint line, and — when the current statement is
+    /// a write and writes are unlocked — the inline "type WRITE" confirmation.
+    /// Read-only is the default; `run_query` enforces the guard and re-locks.
+    fn write_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let unlocked = self.write_unlocked;
+        let q = self.query.trim();
+        let show_confirm = unlocked && !q.is_empty() && !is_readonly_sql(q);
+        // No lock.svg in the icon set; triangle-alert doubles as the hazard
+        // glyph — tinted `warn` when unlocked, muted when read-only.
+        let glyph_color = if unlocked { t.warn } else { t.muted };
+
+        let mut row = h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .px(t.sp3)
+            .pb(t.sp2)
+            .child(
+                h_flex()
+                    .id("db-write-lock")
+                    .items_center()
+                    .gap(t.sp1)
+                    .px(t.sp2)
+                    .py(px(3.0))
+                    .rounded(t.radius_sm)
+                    .bg(t.panel_2)
+                    .text_size(t.fs_ui)
+                    .text_color(glyph_color)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.elev))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _w, cx| {
+                            this.write_unlocked = !this.write_unlocked;
+                            if !this.write_unlocked {
+                                this.write_confirm.clear();
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(ui::icon("triangle-alert", px(12.0), glyph_color))
+                    .child(if unlocked { "Writes unlocked" } else { "Read-only" }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(t.fs_sm)
+                    .text_color(t.dim)
+                    .child(if unlocked {
+                        "DML / DDL will execute."
+                    } else {
+                        "Unlock to run INSERT / UPDATE / DELETE / DDL."
+                    }),
+            );
+
+        if show_confirm {
+            let empty = self.write_confirm.is_empty();
+            row = row.child(
+                div()
+                    .track_focus(&self.write_confirm_focus)
+                    .key_context("SqlWriteConfirm")
+                    .on_key_down(cx.listener(Self::on_confirm_key))
+                    .w(px(180.0))
+                    .h(px(26.0))
+                    .px(t.sp2)
+                    .flex()
+                    .items_center()
+                    .rounded(t.radius_sm)
+                    .bg(t.panel_2)
+                    .border_1()
+                    .border_color(t.warn)
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .when(empty, |d| {
+                        d.text_color(t.dim).child("Type WRITE to confirm")
+                    })
+                    .when(!empty, |d| {
+                        d.text_color(t.ink).child(self.write_confirm.clone())
+                    }),
+            );
+        }
+        row
+    }
+
+    /// The HISTORY rail: recent queries newest-first. Clicking a row loads its
+    /// SQL back into the query box. Hidden when empty.
+    fn history_section(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = &self.theme;
+        if self.history.is_empty() {
+            return div().into_any_element();
+        }
+        let mut col =
+            v_flex().child(ui::section_label(t, format!("HISTORY · {}", self.history.len())));
+        for (i, e) in self.history.iter().enumerate() {
+            let sql = e.sql.clone();
+            // Writes have no portable affected-row count, so don't invent one.
+            let meta = if e.write {
+                format!("write · {} ms", e.elapsed_ms)
+            } else {
+                format!("{} rows · {} ms", e.rows, e.elapsed_ms)
+            };
+            col = col.child(
+                h_flex()
+                    .id(SharedString::from(format!("hist-{i}")))
+                    .items_start()
+                    .gap(t.sp2)
+                    .px(t.sp3)
+                    .py(px(4.0))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.hover))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                            this.query = sql.clone();
+                            cx.notify();
+                        }),
+                    )
+                    .child(ui::icon(
+                        if e.write { "triangle-alert" } else { "play" },
+                        px(12.0),
+                        if e.write { t.warn } else { t.muted },
+                    ))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .overflow_hidden()
+                                    .font_family(t.mono.clone())
+                                    .text_size(t.fs_sm)
+                                    .text_color(t.ink_2)
+                                    .child(e.sql.clone()),
+                            )
+                            .child(div().text_size(t.fs_sm).text_color(t.muted).child(meta)),
+                    ),
+            );
+        }
+        col.into_any_element()
+    }
+
+    /// A "Copy TSV" / "Copy CSV" button for the result header.
+    fn copy_btn(&self, cx: &mut Context<Self>, label: &'static str, csv: bool) -> impl IntoElement {
+        let t = &self.theme;
+        div()
+            .id(SharedString::from(if csv { "db-copy-csv" } else { "db-copy-tsv" }))
+            .px(t.sp2)
+            .py(px(2.0))
+            .rounded(t.radius_sm)
+            .bg(t.panel_2)
+            .text_size(t.fs_sm)
+            .text_color(t.ink_2)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.elev))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| this.copy_result(csv, cx)),
+            )
+            .child(label)
+    }
+
+    /// Copy the current result grid to the clipboard as TSV or CSV.
+    fn copy_result(&mut self, csv: bool, cx: &mut Context<Self>) {
+        let Some(grid) = &self.result else {
+            return;
+        };
+        if grid.columns.is_empty() {
+            return;
+        }
+        let text = if csv {
+            grid_to_csv(grid)
+        } else {
+            grid_to_tsv(grid)
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
     /// Render the last query / preview result as a scrollable table (capped at
     /// 200 rows). Clicking a row expands its columns inline as key/value pairs.
     fn result_table(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1332,12 +1646,14 @@ impl DbPanel {
             return div().into_any_element();
         };
         if r.columns.is_empty() {
+            // A write (or a zero-row read) returns no grid; there's no portable
+            // affected-row count, so report OK + elapsed rather than a count.
             return hint(
                 t,
                 if r.error.is_some() {
-                    "Query failed"
+                    "Query failed".to_string()
                 } else {
-                    "OK (no rows returned)"
+                    format!("OK · {} ms", r.elapsed_ms)
                 },
             )
             .into_any_element();
@@ -1405,15 +1721,24 @@ impl DbPanel {
             .and_then(|i| r.rows.get(i))
             .map(|row| row_detail(t, &r.columns, row).into_any_element());
         v_flex()
-            .child(ui::section_label(
-                t,
-                format!(
-                    "RESULT · {}{} rows · {} ms",
-                    total,
-                    if r.truncated { "+" } else { "" },
-                    r.elapsed_ms
-                ),
-            ))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(t.sp1)
+                    .pr(t.sp3)
+                    .child(ui::section_label(
+                        t,
+                        format!(
+                            "RESULT · {}{} rows · {} ms",
+                            total,
+                            if r.truncated { "+" } else { "" },
+                            r.elapsed_ms
+                        ),
+                    ))
+                    .child(div().flex_1())
+                    .child(self.copy_btn(cx, "Copy TSV", false))
+                    .child(self.copy_btn(cx, "Copy CSV", true)),
+            )
             .child(
                 div()
                     .id("sql-result")
@@ -1572,20 +1897,27 @@ fn file_name(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// True for read-only statements honoured by the panel's read-only default.
-///
-/// Multi-statement input is rejected outright: the whole string is handed to
-/// `mysql -e` / `psql -c`, which run every `;`-separated statement, so a head
-/// of `SELECT` would otherwise let `SELECT 1; DROP TABLE x` smuggle a write
-/// past the guard. Any `;` other than a single trailing one is treated as a
-/// second statement and fails the check (a literal `;` inside a string is
-/// rejected too — conservative on purpose, since safety is the default).
-fn is_readonly_sql(sql: &str) -> bool {
+/// True when `sql` is a single statement: no `;` except an optional trailing
+/// one. The whole string is handed to `sqlite3` / `mysql -e` / `psql -c`, which
+/// run every `;`-separated statement, so both the read guard and the write path
+/// require this to stop a smuggled second statement (`… ; DROP TABLE x`) from
+/// riding along. A literal `;` inside a string fails too — conservative on
+/// purpose, since safety is the default.
+fn is_single_statement(sql: &str) -> bool {
     let trimmed = sql.trim();
     let body = trimmed.strip_suffix(';').unwrap_or(trimmed);
-    if body.contains(';') {
+    !body.contains(';')
+}
+
+/// True for read-only statements honoured by the panel's read-only default.
+/// Also the classifier the write path uses: anything this rejects is treated as
+/// a write and gated behind the unlock toggle + "WRITE" confirmation.
+fn is_readonly_sql(sql: &str) -> bool {
+    if !is_single_statement(sql) {
         return false;
     }
+    let trimmed = sql.trim();
+    let body = trimmed.strip_suffix(';').unwrap_or(trimmed);
     let head = body
         .split_whitespace()
         .next()
@@ -1595,6 +1927,111 @@ fn is_readonly_sql(sql: &str) -> bool {
         head.as_str(),
         "SELECT" | "WITH" | "PRAGMA" | "EXPLAIN" | "SHOW" | "DESCRIBE" | "DESC"
     )
+}
+
+/// The result grid as TSV — tab-separated columns, newline-separated rows. Any
+/// tab / newline / CR inside a cell is flattened to a space so the data can't
+/// break the row / column structure.
+fn grid_to_tsv(grid: &Grid) -> String {
+    fn clean(s: &str) -> String {
+        s.chars()
+            .map(|c| if matches!(c, '\t' | '\n' | '\r') { ' ' } else { c })
+            .collect()
+    }
+    let mut out = grid
+        .columns
+        .iter()
+        .map(|c| clean(c))
+        .collect::<Vec<_>>()
+        .join("\t");
+    for row in &grid.rows {
+        out.push('\n');
+        out.push_str(&row.iter().map(|c| clean(c)).collect::<Vec<_>>().join("\t"));
+    }
+    out
+}
+
+/// The result grid as RFC-4180 CSV: a field is quoted only when it contains a
+/// comma, double-quote, CR, or LF; embedded quotes are doubled; rows end CRLF.
+fn grid_to_csv(grid: &Grid) -> String {
+    fn field(s: &str) -> String {
+        if s.contains(|c: char| matches!(c, ',' | '"' | '\r' | '\n')) {
+            format!("\"{}\"", s.replace('"', "\"\""))
+        } else {
+            s.to_string()
+        }
+    }
+    let mut out = grid
+        .columns
+        .iter()
+        .map(|c| field(c))
+        .collect::<Vec<_>>()
+        .join(",");
+    for row in &grid.rows {
+        out.push_str("\r\n");
+        out.push_str(&row.iter().map(|c| field(c)).collect::<Vec<_>>().join(","));
+    }
+    out
+}
+
+/// Where the query-history file lives, mirroring the favorites store in
+/// `data.rs`. `None` when no config dir is resolvable.
+fn history_path() -> Option<std::path::PathBuf> {
+    pier_core::paths::config_dir().map(|d| d.join("pier-x-gpui-sql-history.conf"))
+}
+
+/// Load saved query history (newest first). One tab-separated record per line:
+/// `rows<TAB>elapsed_ms<TAB>sql`. `write` is re-derived from the SQL so the file
+/// stays a plain line list; malformed lines are skipped. SQL never contains a
+/// newline (the console accumulates single-line input), so one line per entry
+/// round-trips safely.
+fn load_history() -> Vec<HistEntry> {
+    let Some(p) = history_path() else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(&p) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if out.len() >= MAX_HISTORY {
+            break;
+        }
+        let mut parts = line.splitn(3, '\t');
+        let rows = parts.next().and_then(|s| s.trim().parse::<usize>().ok());
+        let elapsed = parts.next().and_then(|s| s.trim().parse::<u64>().ok());
+        let sql = parts.next();
+        if let (Some(rows), Some(elapsed_ms), Some(sql)) = (rows, elapsed, sql) {
+            if sql.is_empty() {
+                continue;
+            }
+            out.push(HistEntry {
+                sql: sql.to_string(),
+                rows,
+                elapsed_ms,
+                write: !is_readonly_sql(sql),
+            });
+        }
+    }
+    out
+}
+
+/// Persist the query history (best-effort), newest first, capped at
+/// [`MAX_HISTORY`]. Mirrors `data.rs`'s favorites writer.
+fn save_history(history: &[HistEntry]) {
+    let Some(p) = history_path() else {
+        return;
+    };
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let body = history
+        .iter()
+        .take(MAX_HISTORY)
+        .map(|e| format!("{}\t{}\t{}", e.rows, e.elapsed_ms, e.sql))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write(&p, body);
 }
 
 /// Wrap `s` in shell single quotes, escaping embedded single quotes so the

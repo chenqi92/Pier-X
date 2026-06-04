@@ -677,9 +677,10 @@ fn reload_cmd(svc: &SvcRow) -> String {
 // ── Background collection (off the render path) ──────────────────────
 
 /// Read one config file for `kind`, capped to [`MAX_CONFIG_LINES`]. Blocks on
-/// the remote shell, so this runs on the background executor. Goes through the
-/// pier-core readers, which validate the path against the product's config root
-/// and run with sudo when needed.
+/// the remote shell, so this runs on the background executor. `path` is always
+/// one of the config-file paths the scan itself discovered (trusted backend
+/// output), not user input; the pier-core readers run with sudo when needed but
+/// do not all re-validate the path, so only scan-derived paths may be passed.
 fn read_config(session: &SshSession, kind: WebServerKind, path: &str) -> Result<Vec<String>, String> {
     let text = match kind {
         WebServerKind::Nginx => nginx::read_file_blocking(session, path),

@@ -58,6 +58,9 @@ pub struct SearchPanel {
     query: String,
     /// The query that produced `result` (used to highlight hits).
     last_query: String,
+    /// Whether `last_query` came from a regex search. Regex hits have no literal
+    /// needle, so highlighting is skipped for them.
+    last_regex: bool,
     /// Case-sensitive search (maps to `case_insensitive = !case_sensitive`).
     case_sensitive: bool,
     /// Regex vs. fixed-string search.
@@ -92,6 +95,7 @@ impl SearchPanel {
             conn_error: None,
             query: String::new(),
             last_query: String::new(),
+            last_regex: false,
             case_sensitive: false,
             regex: false,
             whole_word: false,
@@ -174,6 +178,7 @@ impl SearchPanel {
         self.result = None;
         self.selected_hit = None;
         self.last_query = query.clone();
+        self.last_regex = regex;
         self.generation += 1;
         let gen = self.generation;
         cx.notify();
@@ -645,7 +650,13 @@ impl SearchPanel {
                     .overflow_hidden()
                     .font_family(t.mono.clone())
                     .text_size(t.fs_sm)
-                    .children(highlight_spans(t, &shown, &self.last_query)),
+                    // Regex hits have no literal needle to locate; pass an empty
+                    // query so the line renders plain instead of mis-highlighting.
+                    .children(highlight_spans(
+                        t,
+                        &shown,
+                        if self.last_regex { "" } else { &self.last_query },
+                    )),
             )
     }
 

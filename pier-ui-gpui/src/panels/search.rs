@@ -2,10 +2,14 @@
 //
 // Flow: pick a saved connection (data::connections_raw) → connect off the
 // render path (data::connect_blocking) → type a query and press Enter to run
-// pier-core's code_search service (search_blocking) on a background task. Hits
-// are grouped by file and listed mono-styled with the matched term highlighted.
-// All blocking work (connect, search) runs via cx.background_executor so the
-// render path never blocks; results land in View state and trigger cx.notify().
+// pier-core's code_search service (search_blocking) on a background task. The
+// option row carries the Regex / Case-sensitive / Whole-word toggles plus an
+// include-glob field; their state is threaded into SearchOpts. Hits are grouped
+// by file with a per-file count, the engine that ran (ripgrep / git grep) is
+// surfaced in the panel header, and a section label notes the total / any
+// truncation. All blocking work (connect, search) runs via cx.background_executor
+// so the render path never blocks; results land in View state and trigger
+// cx.notify().
 
 use gpui::prelude::*;
 use gpui::{
@@ -24,6 +28,21 @@ use crate::ui;
 /// Hard cap on hits pulled back to the UI per search.
 const MAX_HITS: usize = 500;
 
+/// Which editable text field a key event targets.
+#[derive(Clone, Copy)]
+enum Field {
+    Query,
+    Glob,
+}
+
+/// A search-option toggle in the option row.
+#[derive(Clone, Copy)]
+enum Toggle {
+    Case,
+    Word,
+    Regex,
+}
+
 pub struct SearchPanel {
     theme: Theme,
     focus: FocusHandle,
@@ -39,9 +58,22 @@ pub struct SearchPanel {
     query: String,
     /// The query that produced `result` (used to highlight hits).
     last_query: String,
+    /// Case-sensitive search (maps to `case_insensitive = !case_sensitive`).
+    case_sensitive: bool,
+    /// Regex vs. fixed-string search.
+    regex: bool,
+    /// Whole-word match.
+    whole_word: bool,
+    /// Optional include-glob (e.g. `*.rs`); empty = no filter.
+    glob: String,
+    /// Focus handle for the glob field (separate from the query field).
+    glob_focus: FocusHandle,
     searching: bool,
     search_error: Option<String>,
     result: Option<SearchOutput>,
+    /// The hit the user last clicked, highlighted in place (no jump — the SFTP
+    /// editor target lives in another track).
+    selected_hit: Option<(String, u32)>,
     /// Bumped on every connect/search so stale background results are dropped.
     generation: u64,
     /// Set when a connect succeeds so render moves focus into the query box.
@@ -60,9 +92,15 @@ impl SearchPanel {
             conn_error: None,
             query: String::new(),
             last_query: String::new(),
+            case_sensitive: false,
+            regex: false,
+            whole_word: false,
+            glob: String::new(),
+            glob_focus: cx.focus_handle(),
             searching: false,
             search_error: None,
             result: None,
+            selected_hit: None,
             generation: 0,
             focus_input_pending: false,
         }
@@ -78,6 +116,7 @@ impl SearchPanel {
         self.connecting = true;
         self.conn_error = None;
         self.result = None;
+        self.selected_hit = None;
         self.search_error = None;
         self.generation += 1;
         let gen = self.generation;
@@ -110,6 +149,7 @@ impl SearchPanel {
     fn disconnect(&mut self, cx: &mut Context<Self>) {
         self.session = None;
         self.result = None;
+        self.selected_hit = None;
         self.search_error = None;
         self.generation += 1; // cancel any in-flight search
         cx.notify();
@@ -124,9 +164,15 @@ impl SearchPanel {
         let Some(session) = self.session.clone() else {
             return;
         };
+        // Snapshot the option state before moving into the background task.
+        let case_insensitive = !self.case_sensitive;
+        let regex = self.regex;
+        let whole_word = self.whole_word;
+        let glob = self.glob.trim().to_string();
         self.searching = true;
         self.search_error = None;
         self.result = None;
+        self.selected_hit = None;
         self.last_query = query.clone();
         self.generation += 1;
         let gen = self.generation;
@@ -136,10 +182,10 @@ impl SearchPanel {
             let opts = SearchOpts {
                 cwd: String::new(), // empty → $HOME server-side
                 query,
-                case_insensitive: true,
-                regex: false,
-                whole_word: false,
-                glob: String::new(),
+                case_insensitive,
+                regex,
+                whole_word,
+                glob,
                 max_hits: MAX_HITS,
             };
             let res = cx
@@ -161,7 +207,23 @@ impl SearchPanel {
         .detach();
     }
 
-    fn on_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    /// Mutable handle to the buffer behind an editable field.
+    fn buf_mut(&mut self, field: Field) -> &mut String {
+        match field {
+            Field::Query => &mut self.query,
+            Field::Glob => &mut self.glob,
+        }
+    }
+
+    /// Shared key handling for the query and glob fields: Enter runs the search,
+    /// Backspace/Escape edit the targeted buffer, printable chars append to it.
+    fn on_field_key(
+        &mut self,
+        field: Field,
+        ev: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let ks = &ev.keystroke;
         match ks.key.as_str() {
             "enter" => {
@@ -169,14 +231,15 @@ impl SearchPanel {
                 return;
             }
             "backspace" => {
-                if self.query.pop().is_some() {
+                if self.buf_mut(field).pop().is_some() {
                     cx.notify();
                 }
                 return;
             }
             "escape" => {
-                if !self.query.is_empty() {
-                    self.query.clear();
+                let buf = self.buf_mut(field);
+                if !buf.is_empty() {
+                    buf.clear();
                     cx.notify();
                 }
                 return;
@@ -189,10 +252,20 @@ impl SearchPanel {
         }
         if let Some(kc) = &ks.key_char {
             if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) {
-                self.query.push_str(kc);
+                self.buf_mut(field).push_str(kc);
                 cx.notify();
             }
         }
+    }
+
+    /// Flip a search-option toggle. Takes effect on the next run (no auto-search).
+    fn toggle(&mut self, which: Toggle, cx: &mut Context<Self>) {
+        match which {
+            Toggle::Case => self.case_sensitive = !self.case_sensitive,
+            Toggle::Word => self.whole_word = !self.whole_word,
+            Toggle::Regex => self.regex = !self.regex,
+        }
+        cx.notify();
     }
 
     // ── Connection selector ──────────────────────────────────────
@@ -362,7 +435,7 @@ impl SearchPanel {
         h_flex()
             .id("search-input")
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(Self::on_key))
+            .on_key_down(cx.listener(move |this, ev, w, cx| this.on_field_key(Field::Query, ev, w, cx)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -373,7 +446,7 @@ impl SearchPanel {
             .items_center()
             .gap(t.sp2)
             .mx(t.sp3)
-            .my(t.sp2)
+            .mt(t.sp2)
             .px(t.sp3)
             .h(px(32.0))
             .rounded(t.radius_md)
@@ -388,6 +461,118 @@ impl SearchPanel {
                     .overflow_hidden()
                     .child(content),
             )
+    }
+
+    // ── Option row (toggles + glob) ──────────────────────────────
+    /// One bordered option toggle; filled accent when `on`.
+    fn toggle_btn(
+        &self,
+        cx: &mut Context<Self>,
+        key: &'static str,
+        label: &'static str,
+        on: bool,
+        which: Toggle,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        div()
+            .id(key)
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .w(px(28.0))
+            .h(px(28.0))
+            .rounded(t.radius_sm)
+            .border_1()
+            .border_color(if on { t.accent_dim } else { t.line })
+            .bg(if on { t.accent_dim } else { t.panel })
+            .font_family(t.mono.clone())
+            .text_size(t.fs_sm)
+            .text_color(if on { t.accent } else { t.muted })
+            .cursor_pointer()
+            .when(!on, |d| d.hover(|s| s.bg(t.panel_2).text_color(t.ink)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| this.toggle(which, cx)),
+            )
+            .child(label)
+    }
+
+    /// The include-glob text field (mirrors `search_bar`, compact).
+    fn glob_field(&self, focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let caret = || div().flex_none().w(px(2.0)).h(px(13.0)).bg(t.accent);
+        let content: AnyElement = if self.glob.is_empty() {
+            if focused {
+                h_flex().items_center().child(caret()).into_any_element()
+            } else {
+                div()
+                    .text_size(t.fs_sm)
+                    .text_color(t.dim)
+                    .child("Include glob, e.g. *.rs")
+                    .into_any_element()
+            }
+        } else {
+            let mut row = h_flex()
+                .items_center()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex_none()
+                        .font_family(t.mono.clone())
+                        .text_size(t.fs_sm)
+                        .text_color(t.ink)
+                        .child(self.glob.clone()),
+                );
+            if focused {
+                row = row.child(caret());
+            }
+            row.into_any_element()
+        };
+
+        h_flex()
+            .id("search-glob")
+            .track_focus(&self.glob_focus)
+            .on_key_down(cx.listener(move |this, ev, w, cx| this.on_field_key(Field::Glob, ev, w, cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    window.focus(&this.glob_focus, cx);
+                    cx.notify();
+                }),
+            )
+            .flex_1()
+            .min_w(px(0.0))
+            .items_center()
+            .gap(t.sp2)
+            .px(t.sp2)
+            .h(px(28.0))
+            .rounded(t.radius_sm)
+            .bg(t.panel)
+            .border_1()
+            .border_color(if focused { t.accent } else { t.line })
+            .child(ui::icon("asterisk", px(12.0), t.muted))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(content),
+            )
+    }
+
+    fn option_row(&self, glob_focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .mx(t.sp3)
+            .mt(t.sp2)
+            .child(self.toggle_btn(cx, "search-tg-case", "Aa", self.case_sensitive, Toggle::Case))
+            .child(self.toggle_btn(cx, "search-tg-word", "W", self.whole_word, Toggle::Word))
+            .child(self.toggle_btn(cx, "search-tg-regex", ".*", self.regex, Toggle::Regex))
+            .child(self.glob_field(glob_focused, cx))
     }
 
     // ── Results ──────────────────────────────────────────────────
@@ -418,9 +603,15 @@ impl SearchPanel {
             )
     }
 
-    fn hit_row(&self, h: &SearchHit) -> impl IntoElement {
+    fn hit_row(&self, cx: &mut Context<Self>, h: &SearchHit) -> impl IntoElement {
         let t = &self.theme;
         let shown = h.text.trim().to_string();
+        let selected = self
+            .selected_hit
+            .as_ref()
+            .is_some_and(|(f, l)| f == &h.file && *l == h.line);
+        let file = h.file.clone();
+        let line = h.line;
         h_flex()
             .id(SharedString::from(format!("search-hit-{}-{}", h.file, h.line)))
             .items_start()
@@ -428,7 +619,16 @@ impl SearchPanel {
             .px(t.sp3)
             .py(px(1.0))
             .overflow_hidden()
-            .hover(|s| s.bg(t.hover))
+            .cursor_pointer()
+            .when(selected, |d| d.bg(t.accent_dim))
+            .when(!selected, |d| d.hover(|s| s.bg(t.hover)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                    this.selected_hit = Some((file.clone(), line));
+                    cx.notify();
+                }),
+            )
             .child(
                 div()
                     .flex_none()
@@ -449,7 +649,7 @@ impl SearchPanel {
             )
     }
 
-    fn results_body(&self) -> AnyElement {
+    fn results_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = &self.theme;
         let note = |color: Hsla, text: String| {
             div()
@@ -484,12 +684,17 @@ impl SearchPanel {
             return ui::empty_state(t, "No matches").into_any_element();
         }
 
-        let mut col = v_flex().pb(t.sp3);
+        let total = out.hits.len();
+        let summary = if total == 1 {
+            "RESULTS · 1".to_string()
+        } else {
+            format!("RESULTS · {total}")
+        };
+        let mut col = v_flex().pb(t.sp3).child(ui::section_label(t, summary));
         if !out.cwd.is_empty() {
             col = col.child(
                 div()
                     .px(t.sp3)
-                    .pt(t.sp2)
                     .font_family(t.mono.clone())
                     .text_size(t.fs_sm)
                     .text_color(t.dim)
@@ -500,18 +705,14 @@ impl SearchPanel {
         for (file, hits) in group_hits(&out.hits) {
             col = col.child(self.file_header(file, hits.len()));
             for h in hits {
-                col = col.child(self.hit_row(h));
+                col = col.child(self.hit_row(cx, h));
             }
         }
         if out.truncated {
-            col = col.child(
-                div()
-                    .px(t.sp3)
-                    .py(t.sp2)
-                    .text_size(t.fs_sm)
-                    .text_color(t.warn)
-                    .child("Results truncated — refine your query"),
-            );
+            col = col.child(ui::section_label(
+                t,
+                format!("SHOWING FIRST {MAX_HITS} — REFINE QUERY"),
+            ));
         }
         col.into_any_element()
     }
@@ -527,36 +728,34 @@ impl Render for SearchPanel {
         }
 
         let t = self.theme.clone();
-        let meta = match &self.result {
-            Some(r) if self.session.is_some() => {
-                let n = r.hits.len();
-                if r.truncated {
-                    format!("{n}+ hits")
-                } else if n == 1 {
-                    "1 hit".to_string()
-                } else {
-                    format!("{n} hits")
-                }
-            }
-            _ => String::new(),
+        // Engine that produced the current result → right-aligned header badge.
+        let engine_label: &'static str = match &self.result {
+            Some(r) if self.session.is_some() => match r.engine {
+                SearchEngine::Rg => "ripgrep",
+                SearchEngine::GitGrep => "git grep",
+                _ => "",
+            },
+            _ => "",
         };
 
         let mut root = v_flex()
             .size_full()
-            .child(ui::panel_header(&t, "search", "SEARCH", meta));
+            .child(ui::panel_header(&t, "search", "SEARCH", engine_label));
 
         if self.session.is_some() {
             let focused = self.focus.is_focused(window);
+            let glob_focused = self.glob_focus.is_focused(window);
             root = root
                 .child(self.connection_section(cx))
                 .child(self.search_bar(focused, cx))
+                .child(self.option_row(glob_focused, cx))
                 .child(
                     div()
                         .id("search-results")
                         .flex_1()
                         .min_h(px(0.0))
                         .overflow_y_scroll()
-                        .child(self.results_body()),
+                        .child(self.results_body(cx)),
                 );
         } else {
             root = root.child(

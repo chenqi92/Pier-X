@@ -1,9 +1,12 @@
 # Pier-X — Code Rules for Claude
 
 Pier-X is a cross-platform terminal / Git / SSH / database management tool,
-aiming for an IntelliJ-grade IDE experience on macOS and Windows. The stack is
-**Rust backend + Tauri 2 + React + TypeScript**: the previous Qt/QML shell is
-archived, and the Rust/GPUI experiment on `backup/rust-gpui` is abandoned.
+aiming for an IntelliJ-grade IDE experience on macOS and Windows. A
+UI-agnostic **Rust backend (`pier-core`)** drives two frontends: the
+**Tauri 2 + React + TypeScript** app (`src/` + `src-tauri/`) and a **native
+GPUI (Rust) frontend (`pier-ui-gpui/`)**. The GPUI frontend is the active
+migration target — it reuses `pier-core` directly and is intended to replace
+the Tauri shell over time. The previous Qt/QML shell is archived.
 
 ## Authoritative sources
 
@@ -21,19 +24,30 @@ wins for code structure.
 
 - **Cargo workspace**: root [`Cargo.toml`](Cargo.toml) with two members —
   [`pier-core`](pier-core/) (UI-framework-agnostic backend) and
-  [`src-tauri`](src-tauri/) (the Tauri runtime glue).
-- **Frontend**: repo root — Vite + React 19 + TypeScript under
+  [`src-tauri`](src-tauri/) (the Tauri runtime glue). The native GPUI
+  frontend [`pier-ui-gpui`](pier-ui-gpui/) is its own **isolated** workspace
+  (excluded from the root) so the heavy `gpui` git-dependency tree stays out
+  of the main app's lockfile and build.
+- **Tauri frontend**: repo root — Vite + React 19 + TypeScript under
   [`src/`](src/). State via `zustand`; terminals via `@xterm/xterm`; panels
   via `react-resizable-panels`; icons from `lucide-react`.
+- **GPUI frontend**: [`pier-ui-gpui/`](pier-ui-gpui/) — native Rust UI on
+  `gpui` + `gpui-component`. It calls `pier-core` directly (no Tauri layer)
+  through its own `src/data.rs` facade, embeds its own SVG/font assets, uses
+  design tokens from `src/theme.rs`, localizes via `src/i18n.rs`, and mirrors
+  the Tauri frontend's behavior. This is the migration target meant to replace
+  the Tauri shell; for now both ship from the same `pier-core`.
 - `pier-core` **must stay UI-agnostic**. No `tauri`, `gpui`, `qt`, or any UI
-  crate dependency. Public API returns plain Rust types.
+  crate dependency. Public API returns plain Rust types. Each frontend depends
+  on `pier-core`, never the reverse.
 - `src-tauri` **calls `pier-core` directly** as Rust functions and exposes
-  them to the frontend as Tauri commands. React code calls those commands via
-  `@tauri-apps/api`'s `invoke`. The frontend **must not** bypass Tauri to
-  reach pier-core.
-- **Do not reintroduce**: `qt6-*`, `qml`, `cmake`, `qmake`, `corrosion`, any
-  C-ABI bridge, or the `pier-ui-gpui` crate. The Qt and GPUI shells are gone
-  on purpose — propose a new feature, not a third UI runtime.
+  them to the React frontend as Tauri commands. React code calls those
+  commands via `@tauri-apps/api`'s `invoke` and **must not** bypass Tauri to
+  reach pier-core. The GPUI frontend instead calls `pier-core` straight from
+  `pier-ui-gpui/src/data.rs`.
+- **Do not reintroduce**: `qt6-*`, `qml`, `cmake`, `qmake`, `corrosion`, or
+  any C-ABI bridge. The Qt shell is gone on purpose — propose a new feature,
+  not another UI runtime.
 
 ## Frontend code rules (`src/`)
 
@@ -127,9 +141,10 @@ Reject a change if any of these are true:
    instead of a `tokens.css` var.
 2. It inlines a new visual atom in a panel instead of adding a component in
    `src/components/`.
-3. It reintroduces Qt / QML / CMake / Corrosion / `pier-ui-gpui` in any form.
+3. It reintroduces Qt / QML / CMake / Corrosion or a C-ABI bridge in any form.
 4. It adds a `pier-core` dependency on `tauri`, `gpui`, or any UI crate.
-5. It calls pier-core from React without going through a Tauri command.
+5. It calls pier-core from React without going through a Tauri command (the
+   GPUI frontend may call pier-core directly via `pier-ui-gpui/src/data.rs`).
 6. It violates one of the SKILL.md non-negotiables (see SKILL.md §1).
 7. It invokes a backend command synchronously inside a render body (Rule 5).
 8. It adds / removes / re-purposes a right-side tool, changes a panel's
@@ -139,6 +154,8 @@ Reject a change if any of these are true:
 
 ## Build & run
 
+Tauri frontend (repo root):
+
 ```sh
 npm install                 # first-time frontend deps (run at repo root)
 npm run tauri dev           # dev: vite + tauri dev
@@ -147,9 +164,16 @@ cargo build -p pier-core    # backend only
 npm run bump <version>      # sync version across manifests + tag
 ```
 
-Node + npm and the Rust toolchain are required; no Qt, CMake, or GPUI toolchain
-is needed. If a step asks you to install Qt or to run `cargo build -p
-pier-ui-gpui`, it is out of date.
+GPUI frontend (its own isolated workspace — build from its dir):
+
+```sh
+cd pier-ui-gpui
+cargo run                   # dev run
+cargo build --release       # release binary
+```
+
+The Tauri frontend needs Node + npm and the Rust toolchain; the GPUI frontend
+needs only the Rust toolchain. No Qt or CMake toolchain is needed.
 
 Releases are tag-driven:
 

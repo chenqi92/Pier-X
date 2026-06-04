@@ -835,18 +835,18 @@ impl Shell {
             }
             Cmd::CloseOverlay => self.overlay = Overlay::None,
             Cmd::CloseTab => {
-                if self.tabs.len() > 1 {
+                if !self.tabs.is_empty() {
                     self.tabs.remove(self.active_tab);
                     if self.active_tab >= self.tabs.len() {
-                        self.active_tab = self.tabs.len() - 1;
+                        self.active_tab = self.tabs.len().saturating_sub(1);
                     }
                 }
             }
             Cmd::CloseTabAt(i) => {
-                if self.tabs.len() > 1 && i < self.tabs.len() {
+                if i < self.tabs.len() {
                     self.tabs.remove(i);
                     if self.active_tab >= self.tabs.len() {
-                        self.active_tab = self.tabs.len() - 1;
+                        self.active_tab = self.tabs.len().saturating_sub(1);
                     }
                 }
             }
@@ -1757,10 +1757,10 @@ impl Shell {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
-                            if this.tabs.len() > 1 {
+                            if idx < this.tabs.len() {
                                 this.tabs.remove(idx);
                                 if this.active_tab >= this.tabs.len() {
-                                    this.active_tab = this.tabs.len() - 1;
+                                    this.active_tab = this.tabs.len().saturating_sub(1);
                                 }
                                 cx.notify();
                             }
@@ -2961,6 +2961,174 @@ impl Shell {
             )
             .child(card)
     }
+
+    // ── Welcome view (shown when no tab is open) ─────────────────
+    /// A quick-action card on the Welcome view.
+    fn welcome_action(
+        &self,
+        cx: &mut Context<Self>,
+        glyph: &'static str,
+        label: &'static str,
+        sub: &'static str,
+        cmd: Cmd,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        v_flex()
+            .id(SharedString::from(format!("wa-{label}")))
+            .w(px(168.0))
+            .gap(px(6.0))
+            .p(t.sp3)
+            .rounded(t.radius_md)
+            .bg(t.panel)
+            .border_1()
+            .border_color(t.line)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.panel_2).border_color(t.line_2))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, window, cx| this.run(cmd, window, cx)),
+            )
+            .child(icon(glyph, px(18.0), t.accent))
+            .child(div().text_color(t.ink).child(label))
+            .child(div().text_size(t.fs_sm).text_color(t.muted).child(sub))
+    }
+
+    /// A saved-connection shortcut row on the Welcome view (opens SSH).
+    fn welcome_conn_row(&self, cx: &mut Context<Self>, idx: usize, c: &ConnRow) -> impl IntoElement {
+        let t = &self.theme;
+        let dot = if c.online { t.pos } else { t.muted };
+        h_flex()
+            .id(SharedString::from(format!("wc-{idx}")))
+            .items_center()
+            .gap(t.sp2)
+            .h(px(30.0))
+            .px(t.sp3)
+            .rounded(t.radius_sm)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                    this.selected_conn = idx;
+                    this.open_ssh_tab(idx, cx);
+                }),
+            )
+            .child(div().w(px(7.0)).h(px(7.0)).flex_none().rounded_full().bg(dot))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .text_color(t.ink_2)
+                    .child(c.name.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.muted)
+                    .child(c.addr.clone()),
+            )
+    }
+
+    /// The greeting + quick-action view rendered when no tab is open.
+    fn welcome_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let mut conns = v_flex()
+            .w(px(440.0))
+            .gap(px(2.0))
+            .child(self.section_label(format!("SAVED CONNECTIONS · {}", self.conns.len())));
+        if self.conns.is_empty() {
+            conns = conns.child(
+                div()
+                    .px(t.sp3)
+                    .py(t.sp2)
+                    .text_size(t.fs_sm)
+                    .text_color(t.dim)
+                    .child("No saved connections yet — add one from the Servers sidebar"),
+            );
+        } else {
+            for (i, c) in self.conns.iter().enumerate().take(6) {
+                conns = conns.child(self.welcome_conn_row(cx, i, c));
+            }
+        }
+
+        v_flex()
+            .id("welcome")
+            .flex_1()
+            .min_h(px(0.0))
+            .w_full()
+            .overflow_y_scroll()
+            .items_center()
+            .gap(t.sp5)
+            .pt(px(60.0))
+            .pb(t.sp6)
+            .px(t.sp6)
+            .bg(t.bg)
+            .child(
+                v_flex()
+                    .items_center()
+                    .gap(t.sp2)
+                    .child(div().w(px(44.0)).h(px(44.0)).rounded(t.radius_lg).bg(t.accent))
+                    .child(
+                        div()
+                            .text_size(t.fs_h3)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(t.ink)
+                            .child("Welcome to Pier-X"),
+                    )
+                    .child(
+                        div()
+                            .text_size(t.fs_ui)
+                            .text_color(t.muted)
+                            .child("Open a terminal or connect to a server to get started"),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap(t.sp3)
+                    .child(
+                        h_flex()
+                            .gap(t.sp3)
+                            .justify_center()
+                            .child(self.welcome_action(
+                                cx,
+                                "square-terminal",
+                                "New Terminal",
+                                "Local shell",
+                                Cmd::NewTerminal,
+                            ))
+                            .child(self.welcome_action(
+                                cx,
+                                "server",
+                                "New SSH",
+                                "Connect to a host",
+                                Cmd::OpenNewConn,
+                            )),
+                    )
+                    .child(
+                        h_flex()
+                            .gap(t.sp3)
+                            .justify_center()
+                            .child(self.welcome_action(
+                                cx,
+                                "command",
+                                "Command Palette",
+                                "Go to anything",
+                                Cmd::OpenPalette,
+                            ))
+                            .child(self.welcome_action(
+                                cx,
+                                "settings",
+                                "Settings",
+                                "Appearance & more",
+                                Cmd::OpenSettings,
+                            )),
+                    ),
+            )
+            .child(conns)
+    }
 }
 
 impl Render for Shell {
@@ -2968,8 +3136,11 @@ impl Render for Shell {
         // Pick up the current global theme so dark/light toggles propagate.
         self.theme = cx.global::<Theme>().clone();
         let t = self.theme.clone();
-        let active_terminal = self.tabs[self.active_tab].terminal.clone();
-        let (cols, rows) = active_terminal.read(cx).size();
+        let active_terminal = self.tabs.get(self.active_tab).map(|tab| tab.terminal.clone());
+        let (cols, rows) = match &active_terminal {
+            Some(term) => term.read(cx).size(),
+            None => (0, 0),
+        };
 
         // Right zone: optional panel (with a drag handle) + tool strip.
         let mut right_zone = h_flex().h_full();
@@ -3011,7 +3182,10 @@ impl Render for Shell {
                                     .flex_1()
                                     .min_h(px(0.0))
                                     .w_full()
-                                    .child(active_terminal),
+                                    .child(match active_terminal {
+                                        Some(term) => term.into_any_element(),
+                                        None => self.welcome_view(cx).into_any_element(),
+                                    }),
                             ),
                     )
                     .child(right_zone),

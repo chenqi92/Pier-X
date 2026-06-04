@@ -29,6 +29,10 @@ use crate::ui;
 
 /// How many trailing lines to keep in view (the panel contract: ~500).
 const TAIL_LINES: usize = 500;
+/// Seconds between tail polls. An idle poll is a single `metadata` stat, so a
+/// 2s cadence halves the background wakeups for a quiet log without noticeable
+/// lag.
+const TAIL_POLL_SECS: u64 = 2;
 
 /// Severity parsed from a line's `[LEVEL]` tag — used only to pick a colour.
 #[derive(Clone, Copy, PartialEq)]
@@ -161,7 +165,7 @@ impl LogsPanel {
         }
     }
 
-    /// Tail `path` every ~1s on the background executor while the view is
+    /// Tail `path` every ~2s on the background executor while the view is
     /// alive. Each pass first snapshots the control state (pause/offset) on the
     /// main thread, then — unless paused — reads off the render path and writes
     /// the result back. The loop ends when the entity is dropped (`update`
@@ -244,7 +248,7 @@ impl LogsPanel {
                 }
             }
 
-            cx.background_executor().timer(Duration::from_secs(1)).await;
+            cx.background_executor().timer(Duration::from_secs(TAIL_POLL_SECS)).await;
         })
         .detach();
     }

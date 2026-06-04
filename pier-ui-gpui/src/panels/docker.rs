@@ -7,16 +7,24 @@
 // background executor, then cache the session + rows on the View and
 // notify. Per-container start/stop/restart/remove run over the cached
 // session and refresh the list; container logs (`docker logs --tail 200`)
-// expand inline; a Containers/Images toggle lists `docker images`. Every
-// blocking call runs on cx.background_executor().
+// and `docker inspect` expand inline. A Containers/Images/Volumes/Networks/
+// Projects toggle lists images, volumes, and networks, derives Compose
+// projects from container labels (per-service start/stop/restart fans out
+// over member ids), and a Run form creates a container via `docker run -d`.
+// Every blocking call runs on cx.background_executor().
 
 use gpui::prelude::*;
-use gpui::{div, px, Context, FontWeight, Hsla, MouseButton, MouseDownEvent, SharedString, Window};
+use gpui::{
+    div, px, Context, FocusHandle, FontWeight, Hsla, KeyDownEvent, MouseButton, MouseDownEvent,
+    SharedString, Window,
+};
 use gpui_component::{h_flex, v_flex};
 
 use pier_core::services::docker::{
-    exec_blocking, list_containers_blocking, list_images_blocking, remove_blocking,
-    restart_blocking, start_blocking, stop_blocking, Container, DockerImage,
+    exec_blocking, inspect_container_blocking, list_containers_blocking, list_images_blocking,
+    list_networks_blocking, list_volumes_blocking, remove_blocking, remove_network_blocking,
+    remove_volume_blocking, restart_blocking, run_container_blocking, start_blocking, stop_blocking,
+    Container, DockerImage, DockerNetwork, DockerVolume, RunContainerOptions,
 };
 use pier_core::ssh::{SshConfig, SshSession};
 
@@ -37,6 +45,82 @@ enum CtrOp {
 enum DockerTab {
     Containers,
     Images,
+    Volumes,
+    Networks,
+    /// Compose projects, derived from container labels (no fetch of its own).
+    Projects,
+}
+
+/// A resource awaiting inline remove confirmation. Tagged by kind so the
+/// confirm row dispatches the right `*_blocking` call; only one is pending at
+/// a time and it's cleared whenever the tab changes.
+#[derive(Clone, PartialEq)]
+enum PendingRemove {
+    Container(String),
+    Volume(String),
+    Network(String),
+}
+
+/// Which text field of the inline Run form currently captures keystrokes.
+/// (Restart is a cycle button, not a text field, so it isn't represented here.)
+#[derive(Clone, Copy, PartialEq, Default)]
+enum RunField {
+    #[default]
+    Image,
+    Name,
+    Port,
+    Env,
+}
+
+/// State for the inline `docker run -d` form. Mirrors the sftp `Edit` pattern:
+/// one shared input focus, the active field captures keys. Single port / env
+/// by design (no multi-row repeater).
+#[derive(Default)]
+struct RunForm {
+    /// Image reference (required), e.g. `nginx:latest`.
+    image: String,
+    /// Optional `--name`.
+    name: String,
+    /// One `host:container` mapping (bare `container` lets docker pick the host).
+    port: String,
+    /// One `KEY=value` environment variable.
+    env: String,
+    /// Restart policy: `""` | `always` | `on-failure` | `unless-stopped`.
+    restart: String,
+    /// Which text field is focused for keyboard input.
+    field: RunField,
+    /// True while the `docker run` round-trip is in flight.
+    submitting: bool,
+}
+
+impl RunForm {
+    /// The buffer for the currently-focused field, for key accumulation.
+    fn active_buf(&mut self) -> &mut String {
+        match self.field {
+            RunField::Image => &mut self.image,
+            RunField::Name => &mut self.name,
+            RunField::Port => &mut self.port,
+            RunField::Env => &mut self.env,
+        }
+    }
+}
+
+/// Restart-policy values the Run form cycles through (first = none).
+const RESTART_CYCLE: [&str; 4] = ["", "always", "on-failure", "unless-stopped"];
+
+/// One Compose service within a project: its containers and their run state.
+struct ComposeService {
+    name: String,
+    /// `(container id, is_running)` for each member.
+    members: Vec<(String, bool)>,
+}
+
+/// A Compose project derived from container labels.
+struct ComposeProject {
+    name: String,
+    services: Vec<ComposeService>,
+    running: usize,
+    total: usize,
 }
 
 pub struct DockerPanel {
@@ -59,14 +143,36 @@ pub struct DockerPanel {
     images_loaded: bool,
     /// True while the `docker images` round-trip is in flight.
     images_loading: bool,
-    /// Container id awaiting a remove confirmation, if any.
-    confirm_remove: Option<String>,
+    /// Volume rows from `docker volume ls`, fetched lazily on first Volumes view.
+    volumes: Vec<DockerVolume>,
+    /// True once volumes have been fetched for the current session.
+    volumes_loaded: bool,
+    /// True while the `docker volume ls` round-trip is in flight.
+    volumes_loading: bool,
+    /// Network rows from `docker network ls`, fetched lazily on first view.
+    networks: Vec<DockerNetwork>,
+    /// True once networks have been fetched for the current session.
+    networks_loaded: bool,
+    /// True while the `docker network ls` round-trip is in flight.
+    networks_loading: bool,
+    /// Resource (container/volume/network) awaiting a remove confirmation.
+    confirm_remove: Option<PendingRemove>,
     /// Container id whose logs are expanded inline, if any.
     logs_for: Option<String>,
     /// Captured `docker logs` output for [`Self::logs_for`].
     logs_text: String,
     /// True while a `docker logs` round-trip is in flight.
     logs_loading: bool,
+    /// Container id whose `docker inspect` JSON is expanded inline, if any.
+    inspect_for: Option<String>,
+    /// Captured `docker inspect` output for [`Self::inspect_for`].
+    inspect_text: String,
+    /// True while a `docker inspect` round-trip is in flight.
+    inspect_loading: bool,
+    /// Inline `docker run` form, present while open.
+    run_form: Option<RunForm>,
+    /// Focus handle shared by the Run form's text fields.
+    run_focus: FocusHandle,
     /// One-line failure from connect or listing, shown in `t.neg`.
     error: Option<String>,
     /// Bumped per connect so a stale background result (from a host the user
@@ -75,7 +181,7 @@ pub struct DockerPanel {
 }
 
 impl DockerPanel {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             // Placeholder; Render reassigns this from cx.global::<Theme>() on
             // the first (and every) frame, before anything is painted.
@@ -89,10 +195,21 @@ impl DockerPanel {
             images: Vec::new(),
             images_loaded: false,
             images_loading: false,
+            volumes: Vec::new(),
+            volumes_loaded: false,
+            volumes_loading: false,
+            networks: Vec::new(),
+            networks_loaded: false,
+            networks_loading: false,
             confirm_remove: None,
             logs_for: None,
             logs_text: String::new(),
             logs_loading: false,
+            inspect_for: None,
+            inspect_text: String::new(),
+            inspect_loading: false,
+            run_form: None,
+            run_focus: cx.focus_handle(),
             error: None,
             generation: 0,
         }
@@ -115,10 +232,20 @@ impl DockerPanel {
         self.images.clear();
         self.images_loaded = false;
         self.images_loading = false;
+        self.volumes.clear();
+        self.volumes_loaded = false;
+        self.volumes_loading = false;
+        self.networks.clear();
+        self.networks_loaded = false;
+        self.networks_loading = false;
         self.confirm_remove = None;
         self.logs_for = None;
         self.logs_text.clear();
         self.logs_loading = false;
+        self.inspect_for = None;
+        self.inspect_text.clear();
+        self.inspect_loading = false;
+        self.run_form = None;
         self.generation += 1;
         let gen = self.generation;
         cx.notify();
@@ -262,7 +389,7 @@ impl DockerPanel {
             Ok(list) => {
                 self.containers = list;
                 self.error = None;
-                // Drop a stale logs view if its container is gone now.
+                // Drop a stale logs / inspect view if its container is gone now.
                 let drop_logs = match &self.logs_for {
                     Some(id) => !self.containers.iter().any(|c| &c.id == id),
                     None => false,
@@ -271,6 +398,15 @@ impl DockerPanel {
                     self.logs_for = None;
                     self.logs_text.clear();
                     self.logs_loading = false;
+                }
+                let drop_inspect = match &self.inspect_for {
+                    Some(id) => !self.containers.iter().any(|c| &c.id == id),
+                    None => false,
+                };
+                if drop_inspect {
+                    self.inspect_for = None;
+                    self.inspect_text.clear();
+                    self.inspect_loading = false;
                 }
             }
             Err(e) => self.error = Some(e),
@@ -328,15 +464,28 @@ impl DockerPanel {
         .detach();
     }
 
-    /// Switch resource tabs, lazily fetching images the first time the
-    /// Images tab is opened for a session.
+    /// Switch resource tabs, lazily fetching the list the first time a
+    /// fetch-backed tab (Images / Volumes / Networks) is opened for a session.
+    /// Projects is derived from containers, so it needs no fetch.
     fn select_tab(&mut self, tab: DockerTab, cx: &mut Context<Self>) {
         if self.tab == tab {
             return;
         }
         self.tab = tab;
-        if tab == DockerTab::Images && !self.images_loaded && !self.images_loading {
-            self.load_images(cx);
+        // A pending confirm belongs to the tab it was opened on; drop it so it
+        // can't match a row on the tab we're switching to.
+        self.confirm_remove = None;
+        match tab {
+            DockerTab::Images if !self.images_loaded && !self.images_loading => {
+                self.load_images(cx)
+            }
+            DockerTab::Volumes if !self.volumes_loaded && !self.volumes_loading => {
+                self.load_volumes(cx)
+            }
+            DockerTab::Networks if !self.networks_loaded && !self.networks_loading => {
+                self.load_networks(cx)
+            }
+            _ => {}
         }
         cx.notify();
     }
@@ -373,6 +522,410 @@ impl DockerPanel {
         .detach();
     }
 
+    /// Fetch `docker volume ls` off the render path and cache the rows.
+    fn load_volumes(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        self.volumes_loading = true;
+        cx.notify();
+        let gen = self.generation;
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { list_volumes_blocking(&session).map_err(|e| e.to_string()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != gen {
+                    return; // a newer selection superseded this fetch
+                }
+                this.volumes_loading = false;
+                match res {
+                    Ok(list) => {
+                        this.volumes = list;
+                        this.volumes_loaded = true;
+                        this.error = None;
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Fetch `docker network ls` off the render path and cache the rows.
+    fn load_networks(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        self.networks_loading = true;
+        cx.notify();
+        let gen = self.generation;
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { list_networks_blocking(&session).map_err(|e| e.to_string()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != gen {
+                    return; // a newer selection superseded this fetch
+                }
+                this.networks_loading = false;
+                match res {
+                    Ok(list) => {
+                        this.networks = list;
+                        this.networks_loaded = true;
+                        this.error = None;
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Remove the named volume (`docker volume rm`), then re-list volumes.
+    /// Triggered from the inline confirm row.
+    fn remove_volume(&mut self, name: String, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        self.confirm_remove = None;
+        cx.notify();
+        let gen = self.generation;
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    remove_volume_blocking(&session, &name).map_err(|e| e.to_string())?;
+                    list_volumes_blocking(&session).map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != gen {
+                    return; // the session changed under us; drop this result
+                }
+                match res {
+                    Ok(list) => {
+                        this.volumes = list;
+                        this.error = None;
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Remove the named network (`docker network rm`), then re-list networks.
+    /// Triggered from the inline confirm row.
+    fn remove_network(&mut self, name: String, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        self.confirm_remove = None;
+        cx.notify();
+        let gen = self.generation;
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    remove_network_blocking(&session, &name).map_err(|e| e.to_string())?;
+                    list_networks_blocking(&session).map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != gen {
+                    return; // the session changed under us; drop this result
+                }
+                match res {
+                    Ok(list) => {
+                        this.networks = list;
+                        this.error = None;
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Run `op` over every container id in `ids` sequentially, then refresh the
+    /// container list once. Backs the Compose Projects per-service buttons; the
+    /// caller pre-filters out no-ops (e.g. Start only passes stopped members),
+    /// so an empty `ids` is a no-op.
+    fn service_op(&mut self, op: CtrOp, ids: Vec<String>, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        if ids.is_empty() {
+            return;
+        }
+        let gen = self.generation;
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    for id in &ids {
+                        match op {
+                            CtrOp::Start => start_blocking(&session, id),
+                            CtrOp::Stop => stop_blocking(&session, id),
+                            CtrOp::Restart => restart_blocking(&session, id),
+                        }
+                        .map_err(|e| e.to_string())?;
+                    }
+                    list_containers_blocking(&session, true).map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != gen {
+                    return; // the session changed under us; drop this result
+                }
+                this.apply_container_list(res);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Toggle the inline inspect region for `id`, fetching `docker inspect <id>`
+    /// (raw JSON) off the render path when opening. Mirrors [`Self::toggle_logs`].
+    fn toggle_inspect(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.inspect_for.as_deref() == Some(id.as_str()) {
+            self.inspect_for = None;
+            self.inspect_text.clear();
+            self.inspect_loading = false;
+            cx.notify();
+            return;
+        }
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        self.inspect_for = Some(id.clone());
+        self.inspect_text.clear();
+        self.inspect_loading = true;
+        cx.notify();
+
+        let fetch_id = id.clone();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    inspect_container_blocking(&session, &fetch_id).map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                // Ignore a stale fetch if the user switched away meanwhile.
+                if this.inspect_for.as_deref() != Some(id.as_str()) {
+                    return;
+                }
+                this.inspect_loading = false;
+                match res {
+                    Ok(out) => this.inspect_text = out,
+                    Err(e) => this.inspect_text = format!("inspect error: {e}"),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Open / close the inline Run form. Opening focuses the image field.
+    fn toggle_run_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.run_form.is_some() {
+            self.run_form = None;
+        } else {
+            self.run_form = Some(RunForm::default());
+            window.focus(&self.run_focus, cx);
+        }
+        cx.notify();
+    }
+
+    /// Advance the Run form's restart policy to the next value in the cycle.
+    fn cycle_restart(&mut self, cx: &mut Context<Self>) {
+        if let Some(form) = &mut self.run_form {
+            let next = RESTART_CYCLE
+                .iter()
+                .position(|r| *r == form.restart)
+                .map(|i| (i + 1) % RESTART_CYCLE.len())
+                .unwrap_or(0);
+            form.restart = RESTART_CYCLE[next].to_string();
+            cx.notify();
+        }
+    }
+
+    /// Feed a keystroke into the focused Run-form field. Enter submits, Escape
+    /// closes, Backspace pops, printable characters append. Mirrors sftp's
+    /// `on_input_key`.
+    fn on_run_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        match ks.key.as_str() {
+            "enter" => {
+                self.submit_run(cx);
+                return;
+            }
+            "escape" => {
+                self.run_form = None;
+                cx.notify();
+                return;
+            }
+            "backspace" => {
+                if let Some(form) = &mut self.run_form {
+                    if form.active_buf().pop().is_some() {
+                        cx.notify();
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        let m = &ks.modifiers;
+        if m.control || m.alt || m.platform {
+            return;
+        }
+        if let Some(kc) = &ks.key_char {
+            if kc.is_empty() || kc.chars().any(|c| c.is_control()) {
+                return;
+            }
+            if let Some(form) = &mut self.run_form {
+                form.active_buf().push_str(kc);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Build `RunContainerOptions` from the form and run `docker run -d` off the
+    /// render path. On success, close the form, switch to Containers, and show
+    /// the refreshed list.
+    fn submit_run(&mut self, cx: &mut Context<Self>) {
+        // Copy every field out before any `self` mutation so the shared borrow
+        // of `run_form` ends here.
+        let (image, name, ports, env, restart) = {
+            let Some(form) = &self.run_form else {
+                return;
+            };
+            if form.submitting {
+                return;
+            }
+            (
+                form.image.trim().to_string(),
+                form.name.trim().to_string(),
+                parse_port(&form.port).into_iter().collect::<Vec<_>>(),
+                parse_env(&form.env).into_iter().collect::<Vec<_>>(),
+                form.restart.clone(),
+            )
+        };
+        if image.is_empty() {
+            self.error = Some("docker run: image is required".to_string());
+            cx.notify();
+            return;
+        }
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let opts = RunContainerOptions {
+            image,
+            name,
+            ports,
+            env,
+            volumes: Vec::new(),
+            restart,
+            command: String::new(),
+        };
+        if let Some(form) = &mut self.run_form {
+            form.submitting = true;
+        }
+        self.error = None;
+        cx.notify();
+        let gen = self.generation;
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    run_container_blocking(&session, &opts).map_err(|e| e.to_string())?;
+                    list_containers_blocking(&session, true).map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != gen {
+                    return; // the session changed under us; drop this result
+                }
+                match res {
+                    Ok(list) => {
+                        this.containers = list;
+                        this.error = None;
+                        this.run_form = None;
+                        this.tab = DockerTab::Containers;
+                    }
+                    Err(e) => {
+                        this.error = Some(e);
+                        if let Some(form) = &mut this.run_form {
+                            form.submitting = false;
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Group the cached containers into Compose projects by their
+    /// `com.docker.compose.project` / `.service` labels. Pure derivation from
+    /// `self.containers` (no IO); containers without a project label are
+    /// omitted. Projects are sorted by name.
+    fn compose_projects(&self) -> Vec<ComposeProject> {
+        let mut projects: Vec<ComposeProject> = Vec::new();
+        for c in &self.containers {
+            let Some(project) = label_value(&c.labels, "com.docker.compose.project") else {
+                continue;
+            };
+            if project.is_empty() {
+                continue;
+            }
+            let service = match label_value(&c.labels, "com.docker.compose.service") {
+                Some(s) if !s.is_empty() => s,
+                _ => "(no service)",
+            };
+            let running = c.is_running();
+            // Index-based find-or-insert (avoids the iter_mut().find() borrow).
+            let pi = match projects.iter().position(|p| p.name == project) {
+                Some(i) => i,
+                None => {
+                    projects.push(ComposeProject {
+                        name: project.to_string(),
+                        services: Vec::new(),
+                        running: 0,
+                        total: 0,
+                    });
+                    projects.len() - 1
+                }
+            };
+            let p = &mut projects[pi];
+            p.total += 1;
+            if running {
+                p.running += 1;
+            }
+            let si = match p.services.iter().position(|s| s.name == service) {
+                Some(i) => i,
+                None => {
+                    p.services.push(ComposeService {
+                        name: service.to_string(),
+                        members: Vec::new(),
+                    });
+                    p.services.len() - 1
+                }
+            };
+            p.services[si].members.push((c.id.clone(), running));
+        }
+        projects.sort_by(|a, b| a.name.cmp(&b.name));
+        projects
+    }
+
     /// A small icon button that runs `on_click` against the View.
     fn icon_btn(
         &self,
@@ -400,15 +953,23 @@ impl DockerPanel {
             .child(ui::icon(glyph, px(14.0), color))
     }
 
-    /// Containers / Images segmented toggle, shown once connected.
+    /// Resource tabs (Containers / Images / Volumes / Networks / Projects) plus
+    /// the Run button, shown once connected. Wraps to a second line on narrow
+    /// panels so every tab stays reachable.
     fn tab_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         h_flex()
+            .flex_wrap()
+            .items_center()
             .gap(t.sp1)
             .px(t.sp3)
             .pt(t.sp2)
             .child(self.tab_pill(cx, "Containers", DockerTab::Containers))
             .child(self.tab_pill(cx, "Images", DockerTab::Images))
+            .child(self.tab_pill(cx, "Volumes", DockerTab::Volumes))
+            .child(self.tab_pill(cx, "Networks", DockerTab::Networks))
+            .child(self.tab_pill(cx, "Projects", DockerTab::Projects))
+            .child(self.run_btn(cx))
     }
 
     /// One pill in the [`Self::tab_toggle`] segmented control.
@@ -417,7 +978,7 @@ impl DockerPanel {
         let active = self.tab == tab;
         div()
             .id(SharedString::from(format!("dtab-{label}")))
-            .px(t.sp3)
+            .px(t.sp2)
             .py(t.sp1)
             .rounded(t.radius_sm)
             .text_size(t.fs_ui)
@@ -431,15 +992,41 @@ impl DockerPanel {
             .child(label)
     }
 
+    /// The "+ Run" button that toggles the inline run form, highlighted while
+    /// the form is open.
+    fn run_btn(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let open = self.run_form.is_some();
+        h_flex()
+            .id("docker-run-btn")
+            .items_center()
+            .gap(px(3.0))
+            .px(t.sp2)
+            .py(t.sp1)
+            .rounded(t.radius_sm)
+            .text_size(t.fs_ui)
+            .cursor_pointer()
+            .when(open, |d| d.bg(t.accent_dim).text_color(t.ink))
+            .when(!open, |d| d.text_color(t.muted).hover(|s| s.bg(t.hover)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| this.toggle_run_form(window, cx)),
+            )
+            .child(ui::icon("plus", px(12.0), if open { t.accent } else { t.muted }))
+            .child("Run")
+    }
+
     /// One container: running dot + name, image/ports meta, and the action
     /// buttons (lifecycle + logs + remove, or an inline remove confirmation).
     fn container_row(&self, cx: &mut Context<Self>, c: &Container) -> impl IntoElement {
         let t = &self.theme;
         let dot = if c.is_running() { t.pos } else { t.muted };
         let running = c.is_running();
-        let confirming = self.confirm_remove.as_deref() == Some(c.id.as_str());
+        let confirming = self.confirm_remove == Some(PendingRemove::Container(c.id.clone()));
         let logs_open = self.logs_for.as_deref() == Some(c.id.as_str());
         let logs_color = if logs_open { t.accent } else { t.muted };
+        let inspect_open = self.inspect_for.as_deref() == Some(c.id.as_str());
+        let inspect_color = if inspect_open { t.accent } else { t.muted };
         let mut meta = h_flex()
             .gap(t.sp2)
             .font_family(t.mono.clone())
@@ -510,7 +1097,7 @@ impl DockerPanel {
                     .child(self.icon_btn(cx, format!("dtrash-{}", c.id), "delete", t.neg, {
                         let id = c.id.clone();
                         move |this, cx| {
-                            this.confirm_remove = Some(id.clone());
+                            this.confirm_remove = Some(PendingRemove::Container(id.clone()));
                             cx.notify();
                         }
                     }))
@@ -519,23 +1106,34 @@ impl DockerPanel {
                     let id = c.id.clone();
                     move |this, cx| this.toggle_logs(id.clone(), cx)
                 }))
+                .child(self.icon_btn(cx, format!("dinsp-{}", c.id), "inspector", inspect_color, {
+                    let id = c.id.clone();
+                    move |this, cx| this.toggle_inspect(id.clone(), cx)
+                }))
             })
     }
 
-    /// Inline, scrollable `docker logs --tail 200` output for `c_id`.
-    fn logs_area(&self, c_id: &str) -> impl IntoElement {
+    /// Inline, scrollable monospace text region (shared by logs + inspect).
+    /// `key` must be unique per row so the scroll state tracks correctly.
+    fn mono_area(
+        &self,
+        key: String,
+        loading: bool,
+        text: &str,
+        loading_msg: &'static str,
+    ) -> impl IntoElement {
         let t = &self.theme;
         let mut body = v_flex().w_full().py(t.sp1);
-        if self.logs_loading {
+        if loading {
             body = body.child(
                 div()
                     .px(t.sp3)
                     .py(px(2.0))
                     .text_size(t.fs_sm)
                     .text_color(t.dim)
-                    .child("Loading logs…"),
+                    .child(loading_msg),
             );
-        } else if self.logs_text.trim().is_empty() {
+        } else if text.trim().is_empty() {
             body = body.child(
                 div()
                     .px(t.sp3)
@@ -545,7 +1143,7 @@ impl DockerPanel {
                     .child("(no output)"),
             );
         } else {
-            for line in self.logs_text.lines() {
+            for line in text.lines() {
                 body = body.child(
                     div()
                         .w_full()
@@ -559,7 +1157,7 @@ impl DockerPanel {
             }
         }
         div()
-            .id(SharedString::from(format!("dlogsbox-{c_id}")))
+            .id(SharedString::from(key))
             .w_full()
             .max_h(px(240.0))
             .overflow_y_scroll()
@@ -568,6 +1166,26 @@ impl DockerPanel {
             .border_b_1()
             .border_color(t.line)
             .child(body)
+    }
+
+    /// Inline, scrollable `docker logs --tail 200` output for `c_id`.
+    fn logs_area(&self, c_id: &str) -> impl IntoElement {
+        self.mono_area(
+            format!("dlogsbox-{c_id}"),
+            self.logs_loading,
+            &self.logs_text,
+            "Loading logs…",
+        )
+    }
+
+    /// Inline, scrollable `docker inspect` JSON for `c_id`.
+    fn inspect_area(&self, c_id: &str) -> impl IntoElement {
+        self.mono_area(
+            format!("dinspbox-{c_id}"),
+            self.inspect_loading,
+            &self.inspect_text,
+            "Loading inspect…",
+        )
     }
 
     /// One image: hard-drive glyph + repository, then tag / size / created.
@@ -615,22 +1233,388 @@ impl DockerPanel {
                     .child(sub),
             )
     }
+
+    /// One volume: database glyph + name, driver / mountpoint meta, and a
+    /// delete button (or an inline remove confirmation).
+    fn volume_row(&self, cx: &mut Context<Self>, v: &DockerVolume) -> impl IntoElement {
+        let t = &self.theme;
+        let confirming = self.confirm_remove == Some(PendingRemove::Volume(v.name.clone()));
+        let mut meta = h_flex()
+            .gap(t.sp2)
+            .font_family(t.mono.clone())
+            .text_size(t.fs_sm)
+            .text_color(t.muted)
+            .child(div().child(v.driver.clone()));
+        if !v.mountpoint.is_empty() {
+            meta = meta.child(div().overflow_hidden().child(v.mountpoint.clone()));
+        }
+        h_flex()
+            .id(SharedString::from(format!("dvol-{}", v.name)))
+            .items_center()
+            .gap(t.sp2)
+            .py(px(6.0))
+            .px(t.sp3)
+            .hover(|s| s.bg(t.hover))
+            .child(ui::icon("database", px(14.0), t.muted))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(t.ink)
+                            .child(v.name.clone()),
+                    )
+                    .child(meta),
+            )
+            .when(confirming, |d| {
+                d.child(div().text_size(t.fs_sm).text_color(t.muted).child("Remove?"))
+                    .child(self.icon_btn(cx, format!("dvol-ok-{}", v.name), "check", t.neg, {
+                        let name = v.name.clone();
+                        move |this, cx| this.remove_volume(name.clone(), cx)
+                    }))
+                    .child(self.icon_btn(cx, format!("dvol-no-{}", v.name), "close", t.muted, {
+                        move |this, cx| {
+                            this.confirm_remove = None;
+                            cx.notify();
+                        }
+                    }))
+            })
+            .when(!confirming, |d| {
+                d.child(self.icon_btn(cx, format!("dvol-rm-{}", v.name), "delete", t.neg, {
+                    let name = v.name.clone();
+                    move |this, cx| {
+                        this.confirm_remove = Some(PendingRemove::Volume(name.clone()));
+                        cx.notify();
+                    }
+                }))
+            })
+    }
+
+    /// One network: network glyph + name, driver / scope meta, and a delete
+    /// button (or an inline remove confirmation). The predefined `bridge` /
+    /// `host` / `none` networks can't be removed, so they show no delete.
+    fn network_row(&self, cx: &mut Context<Self>, n: &DockerNetwork) -> impl IntoElement {
+        let t = &self.theme;
+        let confirming = self.confirm_remove == Some(PendingRemove::Network(n.name.clone()));
+        let removable = !matches!(n.name.as_str(), "bridge" | "host" | "none");
+        let mut meta = h_flex()
+            .gap(t.sp2)
+            .font_family(t.mono.clone())
+            .text_size(t.fs_sm)
+            .text_color(t.muted)
+            .child(div().child(n.driver.clone()));
+        if !n.scope.is_empty() {
+            meta = meta.child(div().child(n.scope.clone()));
+        }
+        h_flex()
+            .id(SharedString::from(format!("dnet-{}", n.id)))
+            .items_center()
+            .gap(t.sp2)
+            .py(px(6.0))
+            .px(t.sp3)
+            .hover(|s| s.bg(t.hover))
+            .child(ui::icon("network", px(14.0), t.muted))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(t.ink)
+                            .child(n.name.clone()),
+                    )
+                    .child(meta),
+            )
+            .when(confirming, |d| {
+                d.child(div().text_size(t.fs_sm).text_color(t.muted).child("Remove?"))
+                    .child(self.icon_btn(cx, format!("dnet-ok-{}", n.id), "check", t.neg, {
+                        let name = n.name.clone();
+                        move |this, cx| this.remove_network(name.clone(), cx)
+                    }))
+                    .child(self.icon_btn(cx, format!("dnet-no-{}", n.id), "close", t.muted, {
+                        move |this, cx| {
+                            this.confirm_remove = None;
+                            cx.notify();
+                        }
+                    }))
+            })
+            .when(!confirming && removable, |d| {
+                d.child(self.icon_btn(cx, format!("dnet-rm-{}", n.id), "delete", t.neg, {
+                    let name = n.name.clone();
+                    move |this, cx| {
+                        this.confirm_remove = Some(PendingRemove::Network(name.clone()));
+                        cx.notify();
+                    }
+                }))
+            })
+    }
+
+    /// One Compose service row: status dot + service name, running/total meta,
+    /// and Start / Stop / Restart that fan out over the service's containers.
+    /// Each button pre-filters no-ops (Start skips already-running members,
+    /// Stop skips stopped ones).
+    fn service_row(&self, cx: &mut Context<Self>, project: &str, svc: &ComposeService) -> impl IntoElement {
+        let t = &self.theme;
+        let total = svc.members.len();
+        let running = svc.members.iter().filter(|(_, r)| *r).count();
+        let dot = if running > 0 { t.pos } else { t.muted };
+        let start_ids: Vec<String> = svc
+            .members
+            .iter()
+            .filter(|(_, r)| !*r)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let stop_ids: Vec<String> = svc
+            .members
+            .iter()
+            .filter(|(_, r)| *r)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let all_ids: Vec<String> = svc.members.iter().map(|(id, _)| id.clone()).collect();
+        let key = format!("{project}-{}", svc.name);
+        h_flex()
+            .id(SharedString::from(format!("dsvc-{key}")))
+            .items_center()
+            .gap(t.sp2)
+            .py(px(6.0))
+            .px(t.sp3)
+            .hover(|s| s.bg(t.hover))
+            .child(ui::status_dot(dot))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(t.ink)
+                            .child(svc.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .font_family(t.mono.clone())
+                            .text_size(t.fs_sm)
+                            .text_color(t.muted)
+                            .child(format!("{running}/{total} running")),
+                    ),
+            )
+            .child(self.icon_btn(cx, format!("dsvc-start-{key}"), "play", t.pos, {
+                let ids = start_ids;
+                move |this, cx| this.service_op(CtrOp::Start, ids.clone(), cx)
+            }))
+            .child(self.icon_btn(cx, format!("dsvc-stop-{key}"), "pause", t.warn, {
+                let ids = stop_ids;
+                move |this, cx| this.service_op(CtrOp::Stop, ids.clone(), cx)
+            }))
+            .child(self.icon_btn(cx, format!("dsvc-rst-{key}"), "redo-2", t.info, {
+                let ids = all_ids;
+                move |this, cx| this.service_op(CtrOp::Restart, ids.clone(), cx)
+            }))
+    }
+
+    /// The inline `docker run -d` form (rendered below the tabs while open).
+    fn run_form_view(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let t = &self.theme;
+        let form = self.run_form.as_ref()?;
+        let run_label = if form.submitting { "Running…" } else { "Run" };
+        let restart_label = if form.restart.is_empty() {
+            "none".to_string()
+        } else {
+            form.restart.clone()
+        };
+        Some(
+            v_flex()
+                .mx(t.sp3)
+                .my(t.sp2)
+                .py(t.sp2)
+                .gap(px(2.0))
+                .rounded(t.radius_md)
+                .bg(t.surface)
+                .border_1()
+                .border_color(t.line_2)
+                .child(
+                    h_flex()
+                        .items_center()
+                        .px(t.sp3)
+                        .pb(t.sp1)
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(t.fs_ui)
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(t.ink)
+                                .child("Run container"),
+                        )
+                        .child(self.icon_btn(cx, "drun-close".to_string(), "close", t.muted, {
+                            move |this, cx| {
+                                this.run_form = None;
+                                cx.notify();
+                            }
+                        })),
+                )
+                .child(self.run_field(cx, RunField::Image, "image", form.image.clone(), "nginx:latest"))
+                .child(self.run_field(cx, RunField::Name, "name", form.name.clone(), "(optional)"))
+                .child(self.run_field(cx, RunField::Port, "port", form.port.clone(), "8080:80"))
+                .child(self.run_field(cx, RunField::Env, "env", form.env.clone(), "KEY=value"))
+                .child(
+                    self.run_field_row("restart").child(
+                        div()
+                            .id("drun-restart")
+                            .h(px(22.0))
+                            .px(t.sp2)
+                            .flex()
+                            .items_center()
+                            .rounded(t.radius_sm)
+                            .bg(t.panel_2)
+                            .border_1()
+                            .border_color(t.line)
+                            .font_family(t.mono.clone())
+                            .text_size(t.fs_sm)
+                            .text_color(t.ink_2)
+                            .cursor_pointer()
+                            .hover(|s| s.border_color(t.line_3))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseDownEvent, _w, cx| this.cycle_restart(cx)),
+                            )
+                            .child(restart_label),
+                    ),
+                )
+                .child(
+                    h_flex().px(t.sp3).pt(t.sp1).child(
+                        div()
+                            .id("drun-submit")
+                            .px(t.sp3)
+                            .py(px(4.0))
+                            .rounded(t.radius_sm)
+                            .bg(t.accent)
+                            .text_color(t.accent_ink)
+                            .text_size(t.fs_ui)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(t.accent_hover))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseDownEvent, _w, cx| this.submit_run(cx)),
+                            )
+                            .child(run_label),
+                    ),
+                ),
+        )
+    }
+
+    /// A label + control row in the Run form (the control is supplied by the
+    /// caller).
+    fn run_field_row(&self, label: &'static str) -> gpui::Div {
+        let t = &self.theme;
+        h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .px(t.sp3)
+            .py(px(2.0))
+            .child(
+                div()
+                    .w(px(52.0))
+                    .flex_none()
+                    .text_size(t.fs_sm)
+                    .text_color(t.muted)
+                    .child(label),
+            )
+    }
+
+    /// One text field in the Run form: the focused field is an editable input;
+    /// the others are clickable cells that activate (focus) themselves.
+    fn run_field(
+        &self,
+        cx: &mut Context<Self>,
+        field: RunField,
+        label: &'static str,
+        value: String,
+        placeholder: &'static str,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        let active = self.run_form.as_ref().map(|f| f.field) == Some(field);
+        let empty = value.is_empty();
+        let cell = if active {
+            div()
+                .track_focus(&self.run_focus)
+                .key_context("DockerRunInput")
+                .on_key_down(cx.listener(Self::on_run_key))
+                .w_full()
+                .h(px(22.0))
+                .px(t.sp2)
+                .flex()
+                .items_center()
+                .rounded(t.radius_sm)
+                .bg(t.panel_2)
+                .border_1()
+                .border_color(t.accent)
+                .font_family(t.mono.clone())
+                .text_size(t.fs_sm)
+                .when(empty, |d| d.text_color(t.dim).child(placeholder))
+                .when(!empty, |d| d.text_color(t.ink).child(value))
+                .into_any_element()
+        } else {
+            div()
+                .id(SharedString::from(format!("drun-{label}")))
+                .w_full()
+                .h(px(22.0))
+                .px(t.sp2)
+                .flex()
+                .items_center()
+                .rounded(t.radius_sm)
+                .bg(t.panel_2)
+                .border_1()
+                .border_color(t.line)
+                .font_family(t.mono.clone())
+                .text_size(t.fs_sm)
+                .cursor_pointer()
+                .hover(|s| s.border_color(t.line_3))
+                .when(empty, |d| d.text_color(t.dim).child(placeholder))
+                .when(!empty, |d| d.text_color(t.ink).child(value))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                        if let Some(form) = &mut this.run_form {
+                            form.field = field;
+                        }
+                        window.focus(&this.run_focus, cx);
+                        cx.notify();
+                    }),
+                )
+                .into_any_element()
+        };
+        self.run_field_row(label)
+            .child(div().flex_1().min_w(px(0.0)).child(cell))
+    }
 }
 
 impl Render for DockerPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme = cx.global::<Theme>().clone();
         let t = &self.theme;
+        // Compose projects are derived from the loaded containers; compute once
+        // for both the header count and the Projects body.
+        let projects = if self.session.is_some() && self.tab == DockerTab::Projects {
+            self.compose_projects()
+        } else {
+            Vec::new()
+        };
         let count = if self.session.is_some() {
             match self.tab {
                 DockerTab::Containers => self.containers.len().to_string(),
-                DockerTab::Images => {
-                    if self.images_loaded {
-                        self.images.len().to_string()
-                    } else {
-                        String::new()
-                    }
-                }
+                DockerTab::Images => maybe_count(self.images_loaded, self.images.len()),
+                DockerTab::Volumes => maybe_count(self.volumes_loaded, self.volumes.len()),
+                DockerTab::Networks => maybe_count(self.networks_loaded, self.networks.len()),
+                DockerTab::Projects => projects.len().to_string(),
             }
         } else {
             String::new()
@@ -656,6 +1640,9 @@ impl Render for DockerPanel {
             col = col.child(ui::empty_state(t, "Connecting…"));
         } else if self.session.is_some() {
             col = col.child(self.tab_toggle(cx));
+            if let Some(form) = self.run_form_view(cx) {
+                col = col.child(form);
+            }
             match self.tab {
                 DockerTab::Containers => {
                     if self.containers.is_empty() {
@@ -668,6 +1655,9 @@ impl Render for DockerPanel {
                             col = col.child(self.container_row(cx, c));
                             if self.logs_for.as_deref() == Some(c.id.as_str()) {
                                 col = col.child(self.logs_area(&c.id));
+                            }
+                            if self.inspect_for.as_deref() == Some(c.id.as_str()) {
+                                col = col.child(self.inspect_area(&c.id));
                             }
                         }
                     }
@@ -682,6 +1672,49 @@ impl Render for DockerPanel {
                             .child(ui::section_label(t, format!("IMAGES · {}", self.images.len())));
                         for img in &self.images {
                             col = col.child(self.image_row(img));
+                        }
+                    }
+                }
+                DockerTab::Volumes => {
+                    if self.volumes_loading {
+                        col = col.child(ui::empty_state(t, "Loading volumes…"));
+                    } else if self.volumes.is_empty() {
+                        col = col.child(ui::empty_state(t, "No volumes"));
+                    } else {
+                        col = col.child(
+                            ui::section_label(t, format!("VOLUMES · {}", self.volumes.len())),
+                        );
+                        for v in &self.volumes {
+                            col = col.child(self.volume_row(cx, v));
+                        }
+                    }
+                }
+                DockerTab::Networks => {
+                    if self.networks_loading {
+                        col = col.child(ui::empty_state(t, "Loading networks…"));
+                    } else if self.networks.is_empty() {
+                        col = col.child(ui::empty_state(t, "No networks"));
+                    } else {
+                        col = col.child(
+                            ui::section_label(t, format!("NETWORKS · {}", self.networks.len())),
+                        );
+                        for n in &self.networks {
+                            col = col.child(self.network_row(cx, n));
+                        }
+                    }
+                }
+                DockerTab::Projects => {
+                    if projects.is_empty() {
+                        col = col.child(ui::empty_state(t, "No Compose projects"));
+                    } else {
+                        for p in &projects {
+                            col = col.child(ui::section_label(
+                                t,
+                                format!("{} · {}/{} up", p.name, p.running, p.total),
+                            ));
+                            for svc in &p.services {
+                                col = col.child(self.service_row(cx, &p.name, svc));
+                            }
                         }
                     }
                 }
@@ -701,4 +1734,58 @@ impl Render for DockerPanel {
             .overflow_y_scroll()
             .child(col)
     }
+}
+
+/// Count string for a lazily-loaded tab: blank until the first fetch lands so
+/// the header doesn't show a misleading `0` before any data is in.
+fn maybe_count(loaded: bool, n: usize) -> String {
+    if loaded {
+        n.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Look up `key` in a comma-separated `k=v,k2=v2` docker label string (the
+/// shape `docker ps --format '{{json .}}'` emits in `Labels`). Returns the
+/// first match, trimmed. Naive split on `,` / `=` — Compose project/service
+/// names contain neither, which is all this is used for.
+fn label_value<'a>(labels: &'a str, key: &str) -> Option<&'a str> {
+    labels.split(',').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        if k.trim() == key {
+            Some(v.trim())
+        } else {
+            None
+        }
+    })
+}
+
+/// Split a `host:container` (or bare `container`) port string into the
+/// `(host, container)` pair `RunContainerOptions` wants. Empty input → `None`;
+/// a bare port leaves the host empty so docker assigns one.
+fn parse_port(s: &str) -> Option<(String, String)> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    match s.split_once(':') {
+        Some((h, g)) => Some((h.trim().to_string(), g.trim().to_string())),
+        None => Some((String::new(), s.to_string())),
+    }
+}
+
+/// Split a `KEY=value` env string into a pair. Empty input or a missing `=`
+/// (or empty key) → `None`.
+fn parse_env(s: &str) -> Option<(String, String)> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (k, v) = s.split_once('=')?;
+    let k = k.trim();
+    if k.is_empty() {
+        return None;
+    }
+    Some((k.to_string(), v.trim().to_string()))
 }

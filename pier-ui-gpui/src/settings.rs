@@ -15,6 +15,8 @@ use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, SharedString, Window};
 use gpui_component::{h_flex, v_flex};
 
+use pier_core::ssh::AuthMethod;
+
 use crate::data;
 use crate::theme::Theme;
 use crate::ui;
@@ -25,9 +27,16 @@ enum Page {
     Appearance,
     Typography,
     Terminal,
+    Editor,
     Connections,
+    Profiles,
     Git,
+    SshKeys,
     Keymap,
+    Diagnostics,
+    Privacy,
+    Security,
+    General,
     About,
 }
 
@@ -36,9 +45,16 @@ const PAGES: &[(Page, &str, &str)] = &[
     (Page::Appearance, "sun", "Appearance"),
     (Page::Typography, "a-large-small", "Typography"),
     (Page::Terminal, "square-terminal", "Terminal"),
+    (Page::Editor, "file-text", "Editor"),
     (Page::Connections, "server", "Connections"),
+    (Page::Profiles, "user", "Profiles"),
     (Page::Git, "git-branch", "Git"),
+    (Page::SshKeys, "asterisk", "SSH Keys"),
     (Page::Keymap, "command", "Keymap"),
+    (Page::Diagnostics, "activity", "Diagnostics"),
+    (Page::Privacy, "eye-off", "Privacy"),
+    (Page::Security, "shield", "Security"),
+    (Page::General, "settings-2", "General"),
     (Page::About, "info", "About"),
 ];
 
@@ -172,6 +188,16 @@ impl SettingsView {
     fn content(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = &self.theme;
         let dash = |s: &str| if s.is_empty() { "—".to_string() } else { s.to_string() };
+        // A full-width dim prose line, the same chrome the existing read-only
+        // pages use for their "not configurable in this build" notes.
+        let note = |s: &str| {
+            div()
+                .px(t.sp3)
+                .py(t.sp2)
+                .text_size(t.fs_sm)
+                .text_color(t.dim)
+                .child(s.to_string())
+        };
         match self.page {
             Page::Appearance => v_flex()
                 .child(ui::section_label(t, "THEME"))
@@ -210,6 +236,12 @@ impl SettingsView {
                         .child("Cursor / scrollback / bell are not configurable in this build."),
                 )
                 .into_any_element(),
+            Page::Editor => v_flex()
+                .child(ui::section_label(t, "SFTP FILE EDITOR"))
+                .child(note(
+                    "Wrap, line numbers, tab width and on-save trimming live here in the full app. This build has no in-app file editor to configure.",
+                ))
+                .into_any_element(),
             Page::Connections => {
                 let mut col =
                     v_flex().child(ui::section_label(t, format!("SAVED · {}", self.conns.len())));
@@ -229,6 +261,13 @@ impl SettingsView {
                 }
                 col.into_any_element()
             }
+            Page::Profiles => v_flex()
+                .child(ui::section_label(t, "TERMINAL PROFILES"))
+                .child(ui::info_row(t, "Default shell", "powershell.exe"))
+                .child(note(
+                    "New terminals launch the default shell. Saved launch profiles (working directory and startup command) aren't configurable in this build.",
+                ))
+                .into_any_element(),
             Page::Git => v_flex()
                 .child(ui::section_label(t, "IDENTITY"))
                 .child(ui::info_row(t, "User name", dash(&self.git_name)))
@@ -236,6 +275,37 @@ impl SettingsView {
                 .child(ui::section_label(t, "REPOSITORY"))
                 .child(ui::info_row(t, "Path", self.repo.clone()))
                 .into_any_element(),
+            Page::SshKeys => {
+                // Key paths drawn from saved connections that authenticate with a
+                // private-key file. Read-only: this build lists what the saved
+                // profiles reference; it neither scans ~/.ssh nor manages keys.
+                let mut keys: Vec<(String, String)> = Vec::new();
+                for c in data::connections_raw() {
+                    let path = match &c.auth {
+                        AuthMethod::PublicKeyFile {
+                            private_key_path, ..
+                        } => Some(private_key_path.clone()),
+                        AuthMethod::AutoChain {
+                            explicit_key_path: Some(p),
+                            ..
+                        } => Some(p.clone()),
+                        _ => None,
+                    };
+                    if let Some(path) = path {
+                        keys.push((c.name.clone(), path));
+                    }
+                }
+                let mut col = v_flex()
+                    .child(ui::section_label(t, format!("IDENTITIES · {}", keys.len())));
+                if keys.is_empty() {
+                    col = col.child(note("No key-based connections saved"));
+                } else {
+                    for (name, path) in keys {
+                        col = col.child(ui::info_row(t, name, path));
+                    }
+                }
+                col.into_any_element()
+            }
             Page::Keymap => {
                 let mut col = v_flex().child(ui::section_label(t, "SHORTCUTS"));
                 for (chord, action) in KEYMAP {
@@ -243,6 +313,42 @@ impl SettingsView {
                 }
                 col.into_any_element()
             }
+            Page::Diagnostics => v_flex()
+                .child(ui::section_label(t, "LOGGING"))
+                .child(ui::info_row(t, "Destination", "stderr"))
+                .child(note(
+                    "Runtime logs and panel errors go to standard error. This build keeps no on-disk log file and has no verbosity switch.",
+                ))
+                .into_any_element(),
+            Page::Privacy => v_flex()
+                .child(ui::section_label(t, "LOCAL DATA"))
+                .child(note(
+                    "Pier-X is offline-first — connection profiles and preferences stay on this device and nothing here is sent anywhere.",
+                ))
+                .child(ui::section_label(t, "SECRET SCANNING"))
+                .child(note(
+                    "User-defined secret-scan patterns are a planned feature; this build has nothing to configure.",
+                ))
+                .into_any_element(),
+            Page::Security => v_flex()
+                .child(ui::section_label(t, "CREDENTIALS"))
+                .child(note(
+                    "Connection passwords and key passphrases live in the OS keychain. The Settings view only shows connection metadata and never reveals stored secrets.",
+                ))
+                .child(ui::section_label(t, "PRIVILEGE ELEVATION"))
+                .child(note(
+                    "Per-host sudo passwords and the elevation inventory are managed in the full app; this build has no editable security controls.",
+                ))
+                .into_any_element(),
+            Page::General => v_flex()
+                .child(ui::section_label(t, "LANGUAGE"))
+                .child(ui::info_row(t, "Interface", "English"))
+                .child(ui::section_label(t, "STARTUP"))
+                .child(ui::info_row(t, "Update check", "Off"))
+                .child(note(
+                    "Pier-X is offline by default. Language, update checks and developer toggles are fixed in this build.",
+                ))
+                .into_any_element(),
             Page::About => v_flex()
                 .child(ui::section_label(t, "ABOUT"))
                 .child(ui::info_row(t, "Version", "0.7.2"))

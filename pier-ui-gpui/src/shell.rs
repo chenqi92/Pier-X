@@ -168,6 +168,27 @@ enum GitFileOp {
     Discard,
 }
 
+/// A remote/branch git action dispatched off the render path.
+#[derive(Clone, Copy)]
+enum GitRemoteOp {
+    Push,
+    Pull,
+    Fetch,
+    Rebase,
+}
+
+impl GitRemoteOp {
+    /// Transient "in progress" line shown while the op runs.
+    fn pending(self) -> &'static str {
+        match self {
+            GitRemoteOp::Push => "Pushing…",
+            GitRemoteOp::Pull => "Pulling…",
+            GitRemoteOp::Fetch => "Fetching…",
+            GitRemoteOp::Rebase => "Rebasing…",
+        }
+    }
+}
+
 /// A draggable layout divider.
 #[derive(Clone, Copy, PartialEq)]
 enum DragTarget {
@@ -621,19 +642,21 @@ impl Shell {
         cx.notify();
     }
 
-    /// Run `git push`/`git pull` off the render path and surface the result.
-    fn git_action(&mut self, push: bool, cx: &mut Context<Self>) {
-        self.git_msg = Some(if push { "Pushing…".into() } else { "Pulling…".into() });
+    /// Run a remote git op (push/pull/fetch/rebase) off the render
+    /// path and surface the result line.
+    fn git_remote_op(&mut self, op: GitRemoteOp, cx: &mut Context<Self>) {
+        self.git_msg = Some(op.pending().to_string());
         cx.notify();
         let cwd = self.cwd.clone();
         cx.spawn(async move |this, cx| {
             let res = cx
                 .background_executor()
                 .spawn(async move {
-                    if push {
-                        data::git_push(&cwd)
-                    } else {
-                        data::git_pull(&cwd)
+                    match op {
+                        GitRemoteOp::Push => data::git_push(&cwd),
+                        GitRemoteOp::Pull => data::git_pull(&cwd),
+                        GitRemoteOp::Fetch => data::git_fetch(&cwd),
+                        GitRemoteOp::Rebase => data::git_rebase(&cwd),
                     }
                 })
                 .await;
@@ -654,6 +677,17 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    /// Switch the working tree to `branch` (local, fast) and reload.
+    fn checkout_branch(&mut self, branch: String, cx: &mut Context<Self>) {
+        self.git_msg = match data::git_checkout(&self.cwd, &branch) {
+            Ok(_) => Some(format!("Switched to {branch}")),
+            Err(e) => Some(e),
+        };
+        self.reload_git();
+        self.git_branch_list = data::git_branches(&self.cwd);
+        cx.notify();
     }
 
     /// Refresh the Monitor snapshot on an interval while the Monitor panel is
@@ -1687,13 +1721,14 @@ impl Shell {
             })
     }
 
-    /// `push = Some(true)` → Push, `Some(false)` → Pull, `None` → inert label.
+    /// `Some(op)` makes the button run that remote op; `None` renders
+    /// it inert/dim.
     fn git_btn(
         &self,
         cx: &mut Context<Self>,
         label: &'static str,
         primary: bool,
-        push: Option<bool>,
+        op: Option<GitRemoteOp>,
     ) -> impl IntoElement {
         let t = &self.theme;
         let mut d = div()
@@ -1705,12 +1740,12 @@ impl Shell {
             .when(primary, |d| d.bg(t.accent).text_color(t.accent_ink))
             .when(!primary, |d| d.bg(t.panel_2).text_color(t.ink_2))
             .child(label);
-        match push {
-            Some(is_push) => {
+        match op {
+            Some(op) => {
                 d = d.cursor_pointer().on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
-                        this.git_action(is_push, cx)
+                        this.git_remote_op(op, cx)
                     }),
                 );
             }
@@ -1757,8 +1792,9 @@ impl Shell {
             )
     }
 
-    fn git_branch_row(&self, name: &str, current: bool) -> impl IntoElement {
+    fn git_branch_row(&self, cx: &mut Context<Self>, name: &str, current: bool) -> impl IntoElement {
         let t = &self.theme;
+        let branch = name.to_string();
         h_flex()
             .id(SharedString::from(format!("gbr-{name}")))
             .items_center()
@@ -1766,6 +1802,15 @@ impl Shell {
             .h(px(26.0))
             .px(t.sp3)
             .hover(|s| s.bg(t.hover))
+            .when(!current, |d| {
+                let branch = branch.clone();
+                d.cursor_pointer().on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                        this.checkout_branch(branch.clone(), cx)
+                    }),
+                )
+            })
             .child(icon("git-branch", px(13.0), if current { t.accent } else { t.muted }))
             .child(
                 div()
@@ -1777,6 +1822,9 @@ impl Shell {
             )
             .when(current, |d| {
                 d.child(div().text_size(t.fs_sm).text_color(t.accent).child("current"))
+            })
+            .when(!current, |d| {
+                d.child(icon("chevron-right", px(13.0), t.dim))
             })
     }
 
@@ -1883,10 +1931,10 @@ impl Shell {
                         h_flex()
                             .gap(t.sp2)
                             .pt(t.sp1)
-                            .child(self.git_btn(cx, "Push", true, Some(true)))
-                            .child(self.git_btn(cx, "Pull", false, Some(false)))
-                            .child(self.git_btn(cx, "Fetch", false, None))
-                            .child(self.git_btn(cx, "Rebase", false, None)),
+                            .child(self.git_btn(cx, "Push", true, Some(GitRemoteOp::Push)))
+                            .child(self.git_btn(cx, "Pull", false, Some(GitRemoteOp::Pull)))
+                            .child(self.git_btn(cx, "Fetch", false, Some(GitRemoteOp::Fetch)))
+                            .child(self.git_btn(cx, "Rebase", false, Some(GitRemoteOp::Rebase))),
                     )
                     .when_some(self.git_msg.clone(), |d, msg| {
                         d.child(
@@ -1938,7 +1986,7 @@ impl Shell {
                     col = col.child(div().p(t.sp4).text_color(t.muted).child("No branches"));
                 } else {
                     for b in &self.git_branch_list {
-                        col = col.child(self.git_branch_row(b, b == &git.branch));
+                        col = col.child(self.git_branch_row(cx, b, b == &git.branch));
                     }
                 }
             }

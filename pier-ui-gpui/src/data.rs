@@ -315,6 +315,41 @@ pub fn git_numstat(repo: &Path) -> HashMap<String, (u32, u32)> {
     out
 }
 
+/// Run a `git` subcommand, returning trimmed stdout on success or
+/// stderr (falling back to stdout) on failure. Console-suppressed.
+fn run_git(repo: &Path, args: &[&str]) -> Result<String, String> {
+    let output = git_command(repo, args)
+        .output()
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() { stdout } else { stderr })
+    }
+}
+
+/// `git fetch --prune` for the repo (network — run off the render path).
+pub fn git_fetch(repo: &Path) -> Result<String, String> {
+    run_git(repo, &["fetch", "--prune"])
+}
+
+/// `git rebase` onto the current branch's configured upstream (run
+/// off the render path). Conflicts/errors come back as the Err string.
+pub fn git_rebase(repo: &Path) -> Result<String, String> {
+    run_git(repo, &["rebase"])
+}
+
+/// Switch the working tree to `branch` (local, fast). Fails when the
+/// worktree has conflicting changes — error surfaced to the caller.
+pub fn git_checkout(repo: &Path, branch: &str) -> Result<String, String> {
+    GitClient::open(&repo.to_string_lossy())
+        .map_err(|e| e.to_string())?
+        .checkout_branch(branch)
+        .map_err(|e| e.to_string())
+}
+
 /// Persisted shell layout/state, restored on launch. Terminals aren't restored
 /// (PTYs are live), but tool/panel/theme/widths/cwd are.
 pub struct UiState {

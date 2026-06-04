@@ -10,7 +10,7 @@
 //     data::connections_raw(), open an SshSession with data::connect_blocking on
 //     the background executor, and drive a read-only drill-down over it:
 //       database list → table list → columns + a `SELECT * … LIMIT 200` preview.
-//     Redis instead lists keys (`SCAN 0 COUNT 100`) and, per key, its
+//     Redis instead lists keys (a bounded `SCAN` loop) and, per key, its
 //     `TYPE` / `TTL` / value preview. Every remote command is issued through
 //     `ssh exec` against the host's own clients (`mysql` / `psql` / `redis-cli`)
 //     and is read-only — no writes or DDL are ever sent, honouring the
@@ -37,6 +37,21 @@ use pier_core::ssh::{SshConfig, SshSession};
 use crate::data;
 use crate::theme::Theme;
 use crate::ui;
+
+/// Hard cap on rows materialised from one query or preview. Applied while
+/// parsing the command output (not just at render) so an unbounded `SELECT *`
+/// can't pull a whole table into memory.
+const MAX_GRID_ROWS: usize = 500;
+
+/// How many rows the result grid paints. Kept at or below [`MAX_GRID_ROWS`] so
+/// the DOM stays light even when more rows are held in memory.
+const MAX_RENDER_ROWS: usize = 200;
+
+/// Caps for the Redis key drill-down: at most this many keys are collected, and
+/// at most this many SCAN round-trips are issued, so a large keyspace can't
+/// balloon the panel or spin forever.
+const MAX_REDIS_KEYS: usize = 500;
+const MAX_SCAN_ITERS: usize = 32;
 
 /// Which backend the panel is currently driving. All four DB tools share this
 /// one View, so the engine is chosen here rather than inferred from the tool.
@@ -65,14 +80,15 @@ impl Engine {
 
     /// A single read-only command listing the engine's databases, run over the
     /// SSH session. Relies on the remote host's local auth (peer / ~/.my.cnf);
-    /// stderr is dropped so a missing client surfaces as an empty result.
+    /// stderr is merged (`2>&1`) so the caller can surface "Access denied" and
+    /// similar failures instead of showing a blank list.
     fn list_command(self) -> &'static str {
         match self {
-            Engine::Mysql => "mysql -N -B -e 'SHOW DATABASES' 2>/dev/null",
+            Engine::Mysql => "mysql -N -B -e 'SHOW DATABASES' 2>&1",
             Engine::Postgres => {
-                "psql -At -c 'SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname' 2>/dev/null"
+                "psql -At -c 'SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname' 2>&1"
             }
-            Engine::Redis => "redis-cli INFO keyspace 2>/dev/null",
+            Engine::Redis => "redis-cli INFO keyspace 2>&1",
             Engine::Sqlite => "",
         }
     }
@@ -227,6 +243,9 @@ struct Grid {
     rows: Vec<Vec<String>>,
     elapsed_ms: u64,
     error: Option<String>,
+    /// True when rows were capped at [`MAX_GRID_ROWS`] during parsing, i.e. the
+    /// command produced more rows than are held here.
+    truncated: bool,
 }
 
 impl From<SqliteQueryResult> for Grid {
@@ -236,6 +255,7 @@ impl From<SqliteQueryResult> for Grid {
             rows: r.rows,
             elapsed_ms: r.elapsed_ms,
             error: r.error,
+            truncated: false,
         }
     }
 }
@@ -283,6 +303,8 @@ pub struct DbPanel {
     r_columns: Vec<Col>,
     // Redis key drill-down.
     redis_keys: Vec<String>,
+    /// True when the key list was capped before the SCAN cursor reached 0.
+    redis_keys_truncated: bool,
     selected_key: Option<usize>,
     redis_detail: Option<RedisDetail>,
 
@@ -296,6 +318,10 @@ pub struct DbPanel {
     // Shared.
     busy: bool,
     error: Option<String>,
+    /// Monotonic action counter. Each background action bumps it and captures
+    /// the value; a callback whose captured value no longer matches has been
+    /// superseded by a newer action and drops its result instead of writing back.
+    epoch: u64,
 }
 
 impl DbPanel {
@@ -317,6 +343,7 @@ impl DbPanel {
             r_selected_table: None,
             r_columns: Vec::new(),
             redis_keys: Vec::new(),
+            redis_keys_truncated: false,
             selected_key: None,
             redis_detail: None,
             query: String::new(),
@@ -325,6 +352,7 @@ impl DbPanel {
             expanded_row: None,
             busy: false,
             error: None,
+            epoch: 0,
         }
     }
 
@@ -384,6 +412,8 @@ impl DbPanel {
         self.busy = true;
         self.error = None;
         self.expanded_row = None;
+        self.epoch += 1;
+        let gen = self.epoch;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let res = cx
@@ -396,6 +426,9 @@ impl DbPanel {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
                 this.busy = false;
                 match res {
                     Ok(r) => {
@@ -428,6 +461,8 @@ impl DbPanel {
         self.busy = true;
         self.error = None;
         self.expanded_row = None;
+        self.epoch += 1;
+        let gen = self.epoch;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let res = cx
@@ -445,6 +480,9 @@ impl DbPanel {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
                 this.busy = false;
                 match res {
                     Ok(grid) => this.result = Some(grid),
@@ -476,6 +514,7 @@ impl DbPanel {
         self.r_selected_table = None;
         self.r_columns.clear();
         self.redis_keys.clear();
+        self.redis_keys_truncated = false;
         self.selected_key = None;
         self.redis_detail = None;
     }
@@ -490,6 +529,8 @@ impl DbPanel {
         self.expanded_row = None;
         self.error = None;
         self.busy = true;
+        self.epoch += 1;
+        let gen = self.epoch;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let res = cx
@@ -502,6 +543,9 @@ impl DbPanel {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
                 this.busy = false;
                 match res {
                     Ok(tables) => this.tables = tables,
@@ -525,6 +569,8 @@ impl DbPanel {
         self.columns.clear();
         self.error = None;
         self.busy = true;
+        self.epoch += 1;
+        let gen = self.epoch;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let res = cx
@@ -537,6 +583,9 @@ impl DbPanel {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
                 this.busy = false;
                 match res {
                     Ok(cols) => {
@@ -576,20 +625,28 @@ impl DbPanel {
         self.expanded_row = None;
         self.error = None;
         self.busy = true;
+        self.epoch += 1;
+        let gen = self.epoch;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let res = cx
                 .background_executor()
                 .spawn(async move {
                     let session = data::connect_blocking(&cfg)?;
-                    let (_code, out) = session
+                    let (code, out) = session
                         .exec_command_blocking(engine.list_command())
                         .map_err(|e| e.to_string())?;
+                    if code != 0 {
+                        return Err(err_text(out, "failed to list databases"));
+                    }
                     let dbs = engine.parse_list(&out);
                     Ok::<(SshSession, Vec<String>), String>((session, dbs))
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
                 this.busy = false;
                 match res {
                     Ok((session, dbs)) => {
@@ -619,12 +676,15 @@ impl DbPanel {
         self.r_selected_table = None;
         self.r_columns.clear();
         self.redis_keys.clear();
+        self.redis_keys_truncated = false;
         self.selected_key = None;
         self.redis_detail = None;
         self.result = None;
         self.expanded_row = None;
         self.error = None;
         self.busy = true;
+        self.epoch += 1;
+        let gen = self.epoch;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let res = cx
@@ -632,20 +692,39 @@ impl DbPanel {
                 .spawn(async move {
                     if matches!(engine, Engine::Redis) {
                         let n = redis_db_index(&db);
-                        let cmd = format!("redis-cli -n {n} SCAN 0 COUNT 100 2>&1");
-                        let (code, out) =
-                            session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
-                        if code != 0 {
-                            return Err(err_text(out, "SCAN failed"));
-                        }
-                        // First line is the SCAN cursor; the rest are keys.
-                        let keys = out
-                            .lines()
-                            .skip(1)
-                            .map(|l| l.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                        Ok::<Vec<String>, String>(keys)
+                        let mut cursor = "0".to_string();
+                        let mut keys: Vec<String> = Vec::new();
+                        let mut iters = 0usize;
+                        // SCAN is cursor-paginated; loop until the cursor wraps
+                        // back to 0, bounded by MAX_REDIS_KEYS / MAX_SCAN_ITERS
+                        // so a large keyspace can't spin or balloon the panel.
+                        let more = loop {
+                            let cmd = format!("redis-cli -n {n} SCAN {cursor} COUNT 200 2>&1");
+                            let (code, out) =
+                                session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
+                            if code != 0 {
+                                return Err(err_text(out, "SCAN failed"));
+                            }
+                            // First line is the next cursor; the rest are keys.
+                            let mut lines = out.lines();
+                            cursor = lines.next().unwrap_or("0").trim().to_string();
+                            for l in lines {
+                                let l = l.trim();
+                                if !l.is_empty() {
+                                    keys.push(l.to_string());
+                                }
+                            }
+                            iters += 1;
+                            if cursor == "0" {
+                                break false;
+                            }
+                            if keys.len() >= MAX_REDIS_KEYS || iters >= MAX_SCAN_ITERS {
+                                break true;
+                            }
+                        };
+                        let truncated = more || keys.len() > MAX_REDIS_KEYS;
+                        keys.truncate(MAX_REDIS_KEYS);
+                        Ok::<(Vec<String>, bool), String>((keys, truncated))
                     } else {
                         let cmd = engine.tables_command(&db);
                         let (code, out) =
@@ -658,16 +737,20 @@ impl DbPanel {
                             .map(|l| l.trim().to_string())
                             .filter(|s| !s.is_empty())
                             .collect();
-                        Ok::<Vec<String>, String>(tables)
+                        Ok::<(Vec<String>, bool), String>((tables, false))
                     }
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
                 this.busy = false;
                 match res {
-                    Ok(list) => {
+                    Ok((list, truncated)) => {
                         if matches!(engine, Engine::Redis) {
                             this.redis_keys = list;
+                            this.redis_keys_truncated = truncated;
                         } else {
                             this.r_tables = list;
                         }
@@ -702,6 +785,8 @@ impl DbPanel {
         self.expanded_row = None;
         self.error = None;
         self.busy = true;
+        self.epoch += 1;
+        let gen = self.epoch;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let res = cx
@@ -731,6 +816,9 @@ impl DbPanel {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
                 this.busy = false;
                 match res {
                     Ok((cols, grid)) => {
@@ -764,6 +852,8 @@ impl DbPanel {
         self.redis_detail = None;
         self.error = None;
         self.busy = true;
+        self.epoch += 1;
+        let gen = self.epoch;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let res = cx
@@ -801,6 +891,9 @@ impl DbPanel {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
                 this.busy = false;
                 match res {
                     Ok(detail) => this.redis_detail = Some(detail),
@@ -836,6 +929,7 @@ impl DbPanel {
                         this.result = None;
                         this.expanded_row = None;
                         this.error = None;
+                        this.epoch += 1;
                         cx.notify();
                     }
                 }),
@@ -1034,13 +1128,26 @@ impl DbPanel {
 
         if self.selected_db.is_some() {
             if matches!(self.engine, Engine::Redis) {
-                col = col.child(ui::section_label(t, format!("KEYS · {}", self.redis_keys.len())));
+                col = col.child(ui::section_label(
+                    t,
+                    format!(
+                        "KEYS · {}{}",
+                        self.redis_keys.len(),
+                        if self.redis_keys_truncated { "+" } else { "" }
+                    ),
+                ));
                 if self.redis_keys.is_empty() && !self.busy {
                     col = col.child(hint(t, "No keys"));
                 }
                 for (i, k) in self.redis_keys.iter().enumerate() {
                     let selected = self.selected_key == Some(i);
                     col = col.child(self.nav_row(cx, RowAct::Key, i, "asterisk", k.clone(), true, selected));
+                }
+                if self.redis_keys_truncated {
+                    col = col.child(hint(
+                        t,
+                        format!("Showing first {} keys · more exist", self.redis_keys.len()),
+                    ));
                 }
                 if let Some(detail) = &self.redis_detail {
                     col = col.child(self.redis_detail_view(detail));
@@ -1255,7 +1362,7 @@ impl DbPanel {
                 .border_color(t.line)
                 .children(r.columns.iter().map(|c| cell(c.clone(), true))),
         );
-        for (i, row) in r.rows.iter().take(200).enumerate() {
+        for (i, row) in r.rows.iter().take(MAX_RENDER_ROWS).enumerate() {
             let selected = self.expanded_row == Some(i);
             table = table.child(
                 h_flex()
@@ -1280,6 +1387,17 @@ impl DbPanel {
             );
         }
         let total = r.rows.len();
+        let shown = total.min(MAX_RENDER_ROWS);
+        // Honest note about what's painted vs. what the query produced.
+        let note: Option<String> = if r.truncated {
+            Some(format!(
+                "Showing {shown} of first {MAX_GRID_ROWS} rows · result capped"
+            ))
+        } else if total > shown {
+            Some(format!("Showing first {shown} of {total} rows"))
+        } else {
+            None
+        };
         // The expanded row's key/value detail, rendered full-width below the
         // horizontally-scrolling grid so long values stay readable.
         let detail: Option<AnyElement> = self
@@ -1289,7 +1407,12 @@ impl DbPanel {
         v_flex()
             .child(ui::section_label(
                 t,
-                format!("RESULT · {} rows · {} ms", total, r.elapsed_ms),
+                format!(
+                    "RESULT · {}{} rows · {} ms",
+                    total,
+                    if r.truncated { "+" } else { "" },
+                    r.elapsed_ms
+                ),
             ))
             .child(
                 div()
@@ -1299,7 +1422,7 @@ impl DbPanel {
                     .child(table),
             )
             .children(detail)
-            .when(total > 200, |d| d.child(hint(t, "Showing first 200 rows")))
+            .children(note.map(|s| hint(t, s).into_any_element()))
             .into_any_element()
     }
 }
@@ -1359,13 +1482,13 @@ impl Render for DbPanel {
 }
 
 /// A single muted hint line for empty sections.
-fn hint(t: &Theme, text: &'static str) -> impl IntoElement {
+fn hint(t: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
     div()
         .px(t.sp3)
         .py(t.sp2)
         .text_size(t.fs_sm)
         .text_color(t.dim)
-        .child(text)
+        .child(text.into())
 }
 
 /// One column row: mono name, type, and an optional key badge.
@@ -1450,8 +1573,20 @@ fn file_name(path: &str) -> String {
 }
 
 /// True for read-only statements honoured by the panel's read-only default.
+///
+/// Multi-statement input is rejected outright: the whole string is handed to
+/// `mysql -e` / `psql -c`, which run every `;`-separated statement, so a head
+/// of `SELECT` would otherwise let `SELECT 1; DROP TABLE x` smuggle a write
+/// past the guard. Any `;` other than a single trailing one is treated as a
+/// second statement and fails the check (a literal `;` inside a string is
+/// rejected too — conservative on purpose, since safety is the default).
 fn is_readonly_sql(sql: &str) -> bool {
-    let head = sql
+    let trimmed = sql.trim();
+    let body = trimmed.strip_suffix(';').unwrap_or(trimmed);
+    if body.contains(';') {
+        return false;
+    }
+    let head = body
         .split_whitespace()
         .next()
         .unwrap_or("")
@@ -1540,17 +1675,27 @@ fn parse_grid(out: &str, sep: char, elapsed_ms: u64) -> Grid {
             rows: Vec::new(),
             elapsed_ms,
             error: None,
+            truncated: false,
         };
     };
     let columns = header.split(sep).map(|s| s.to_string()).collect();
-    let rows = it
-        .map(|l| l.split(sep).map(|s| s.to_string()).collect())
-        .collect();
+    // Cap rows while parsing so an unbounded `SELECT *` can't pull a whole
+    // table into memory; `truncated` records that more rows were dropped.
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut truncated = false;
+    for line in it {
+        if rows.len() >= MAX_GRID_ROWS {
+            truncated = true;
+            break;
+        }
+        rows.push(line.split(sep).map(|s| s.to_string()).collect());
+    }
     Grid {
         columns,
         rows,
         elapsed_ms,
         error: None,
+        truncated,
     }
 }
 

@@ -491,6 +491,10 @@ pub fn git_checkout(repo: &Path, branch: &str) -> Result<String, String> {
 
 /// The repo's configured git identity `(user.name, user.email)` as git
 /// resolves it (local + global merged); empty strings when unset.
+///
+/// Best-effort and deliberately error-swallowing: a missing key, a
+/// non-repo, or a failed `git` all collapse to an empty string, since the
+/// Settings panel only displays the identity and has no error surface.
 pub fn git_identity(repo: &Path) -> (String, String) {
     let name = run_git(repo, &["config", "user.name"]).unwrap_or_default();
     let email = run_git(repo, &["config", "user.email"]).unwrap_or_default();

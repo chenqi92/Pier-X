@@ -201,6 +201,12 @@ pub struct Shell {
     /// When the New Connection overlay is editing an existing saved
     /// connection, the store index being edited; `None` = add a new one.
     conn_edit: Option<usize>,
+    /// The original [`AuthMethod`] of the connection being edited, kept so a
+    /// blank/unchanged secret field preserves the saved credential
+    /// (`KeychainPassword.credential_id`, a key's `passphrase_credential_id`,
+    /// or a stored `DirectPassword`) instead of overwriting it with an empty
+    /// one. `None` when adding a new connection.
+    conn_orig_auth: Option<AuthMethod>,
     /// Servers sidebar filter text + its focus handle.
     conn_search: String,
     conn_search_focus: FocusHandle,
@@ -401,6 +407,7 @@ impl Shell {
             conn_test: None,
             conn_error: None,
             conn_edit: None,
+            conn_orig_auth: None,
             conn_search: String::new(),
             conn_search_focus: cx.focus_handle(),
             conn_favorites: data::load_favorites(),
@@ -475,15 +482,36 @@ impl Shell {
                 .map_err(|_| "Port must be a number".to_string())?
         };
         let secret = self.conn_form[CONN_SECRET].clone();
+        // In edit mode an unchanged secret field reuses the saved `AuthMethod`
+        // verbatim, so we never downgrade a stored credential — a keychain
+        // `credential_id`, a key's `passphrase_credential_id`, or a saved
+        // `DirectPassword` — to an empty one. Typing a new secret, or switching
+        // auth kind, rebuilds from the form. For a new connection
+        // (`conn_orig_auth == None`) this falls through to the form values.
         let auth = match self.conn_auth {
-            ConnAuthKind::Password if secret.is_empty() => AuthMethod::KeychainPassword {
-                credential_id: String::new(),
+            ConnAuthKind::Password if secret.is_empty() => match &self.conn_orig_auth {
+                Some(
+                    a @ (AuthMethod::KeychainPassword { .. } | AuthMethod::DirectPassword { .. }),
+                ) => a.clone(),
+                _ => AuthMethod::KeychainPassword {
+                    credential_id: String::new(),
+                },
             },
             ConnAuthKind::Password => AuthMethod::DirectPassword { password: secret },
-            ConnAuthKind::Key => AuthMethod::PublicKeyFile {
-                private_key_path: secret.trim().to_string(),
-                passphrase_credential_id: None,
-            },
+            ConnAuthKind::Key => {
+                let path = secret.trim().to_string();
+                match &self.conn_orig_auth {
+                    Some(a @ AuthMethod::PublicKeyFile { private_key_path, .. })
+                        if *private_key_path == path =>
+                    {
+                        a.clone()
+                    }
+                    _ => AuthMethod::PublicKeyFile {
+                        private_key_path: path,
+                        passphrase_credential_id: None,
+                    },
+                }
+            }
             ConnAuthKind::Agent => AuthMethod::Agent,
         };
         let group = {
@@ -534,6 +562,7 @@ impl Shell {
                 self.conns = data::load_connections();
                 self.conn_error = None;
                 self.conn_edit = None;
+                self.conn_orig_auth = None;
                 self.run(Cmd::CloseOverlay, window, cx);
             }
             Err(e) => {
@@ -580,6 +609,9 @@ impl Shell {
         let Some(cfg) = data::connections_raw().into_iter().nth(idx) else {
             return;
         };
+        // The key *path* is safe to prefill (it isn't a secret); a stored
+        // password is — leave the field blank and keep the saved credential
+        // unless the user types a new one (see `build_conn_cfg`).
         let (auth, secret) = match &cfg.auth {
             AuthMethod::PublicKeyFile {
                 private_key_path, ..
@@ -587,8 +619,9 @@ impl Shell {
             AuthMethod::Agent | AuthMethod::Auto | AuthMethod::AutoChain { .. } => {
                 (ConnAuthKind::Agent, String::new())
             }
-            AuthMethod::DirectPassword { password } => (ConnAuthKind::Password, password.clone()),
-            AuthMethod::KeychainPassword { .. } => (ConnAuthKind::Password, String::new()),
+            AuthMethod::DirectPassword { .. } | AuthMethod::KeychainPassword { .. } => {
+                (ConnAuthKind::Password, String::new())
+            }
         };
         self.conn_form = [
             cfg.name.clone(),
@@ -603,6 +636,7 @@ impl Shell {
         self.conn_test = None;
         self.conn_error = None;
         self.conn_edit = Some(idx);
+        self.conn_orig_auth = Some(cfg.auth.clone());
         self.overlay = Overlay::NewConn;
         window.focus(&self.conn_focus, cx);
         cx.notify();
@@ -672,10 +706,30 @@ impl Shell {
         }
     }
 
-    /// Reload working-tree status + per-file line counts for the cwd.
-    fn reload_git(&mut self) {
-        self.git = data::git_status(&self.cwd);
-        self.git_numstat = data::git_numstat(&self.cwd);
+    /// Reload working-tree status + per-file line counts for the cwd off the
+    /// render path — each call spawns up to three `git` subprocesses
+    /// (`status` + two `diff --numstat`) — then write the result back on the
+    /// main thread. A reload whose captured `cwd` no longer matches the
+    /// shell's is dropped, so switching folders quickly can't clobber the new
+    /// repo's status with a slower in-flight reload of the old one.
+    fn reload_git_async(&mut self, cx: &mut Context<Self>) {
+        let cwd = self.cwd.clone();
+        cx.spawn(async move |this, cx| {
+            let probe = cwd.clone();
+            let (git, numstat) = cx
+                .background_executor()
+                .spawn(async move { (data::git_status(&probe), data::git_numstat(&probe)) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.cwd != cwd {
+                    return;
+                }
+                this.git = git;
+                this.git_numstat = numstat;
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Run a per-file staging action, then refresh status.
@@ -686,11 +740,12 @@ impl Shell {
             GitFileOp::Discard => data::git_discard(&self.cwd, &file),
         };
         self.git_msg = res.err();
-        self.reload_git();
+        self.reload_git_async(cx);
         cx.notify();
     }
 
-    /// Commit the staged changes with the current message.
+    /// Commit the staged changes with the current message off the render path
+    /// (a commit can run pre-commit hooks), then refresh status.
     fn do_commit(&mut self, cx: &mut Context<Self>) {
         let msg = self.commit_msg.trim().to_string();
         if msg.is_empty() {
@@ -698,23 +753,36 @@ impl Shell {
             cx.notify();
             return;
         }
-        match data::git_commit(&self.cwd, &msg) {
-            Ok(hash) => {
-                self.commit_msg.clear();
-                let short: String = hash.chars().take(7).collect();
-                self.git_msg = Some(format!("Committed {short}"));
-            }
-            Err(e) => self.git_msg = Some(e),
-        }
-        self.reload_git();
+        self.git_msg = Some("Committing…".to_string());
         cx.notify();
+        let cwd = self.cwd.clone();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { data::git_commit(&cwd, &msg) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match res {
+                    Ok(hash) => {
+                        this.commit_msg.clear();
+                        let short: String = hash.chars().take(7).collect();
+                        this.git_msg = Some(format!("Committed {short}"));
+                    }
+                    Err(e) => this.git_msg = Some(e),
+                }
+                this.reload_git_async(cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn on_commit_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let ks = &ev.keystroke;
         let m = &ks.modifiers;
         match ks.key.as_str() {
-            // Cmd/Ctrl+Enter commits; plain Enter inserts a newline-free submit too.
+            // Enter commits. The message box is single-line, so there is no
+            // newline insertion — any Enter, modified or not, submits.
             "enter" => {
                 self.do_commit(cx);
                 return;
@@ -877,6 +945,7 @@ impl Shell {
                 self.conn_test = None;
                 self.conn_error = None;
                 self.conn_edit = None;
+                self.conn_orig_auth = None;
                 window.focus(&self.conn_focus, cx);
             }
             Cmd::CloseOverlay => self.overlay = Overlay::None,
@@ -907,10 +976,14 @@ impl Shell {
             Cmd::CloseToLeft(i) => {
                 if i > 0 && i < self.tabs.len() {
                     self.tabs.drain(0..i);
-                    self.active_tab = self
-                        .active_tab
-                        .saturating_sub(i)
-                        .min(self.tabs.len().saturating_sub(1));
+                    // The active tab either survived (shift its index left by
+                    // `i`) or sat inside the closed range (fall to the new
+                    // first tab, which is the old tab `i`).
+                    self.active_tab = if self.active_tab < i {
+                        0
+                    } else {
+                        self.active_tab - i
+                    };
                 }
             }
             Cmd::CloseToRight(i) => {
@@ -931,16 +1004,34 @@ impl Shell {
         cx.notify();
     }
 
-    /// Reorder a tab by drag: move the tab at `from` to `to`'s slot.
+    /// Reorder a tab by drag: move the tab at `from` to `to`'s slot. The
+    /// active tab is kept by identity (like the web TabBar, which tracks it
+    /// by id), so dragging a background tab never steals focus from the
+    /// foreground terminal — only dragging the active tab lets active follow.
     fn move_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
         if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
             return;
         }
+        let was_active = self.active_tab;
         let tab = self.tabs.remove(from);
         let dest = if from < to { to - 1 } else { to };
         let dest = dest.min(self.tabs.len());
         self.tabs.insert(dest, tab);
-        self.active_tab = dest;
+        self.active_tab = if was_active == from {
+            // Dragged the active tab itself: it stays active at its new slot.
+            dest
+        } else {
+            // A different tab is active; remap its index through the same
+            // remove(from) + insert(dest) shift so it tracks the same tab.
+            let mut a = was_active;
+            if a > from {
+                a -= 1;
+            }
+            if a >= dest {
+                a += 1;
+            }
+            a
+        };
         cx.notify();
     }
 
@@ -1001,22 +1092,38 @@ impl Shell {
                     }
                     Err(e) => e,
                 });
-                this.reload_git();
+                this.reload_git_async(cx);
                 cx.notify();
             });
         })
         .detach();
     }
 
-    /// Switch the working tree to `branch` (local, fast) and reload.
+    /// Switch the working tree to `branch` off the render path (a checkout can
+    /// touch many files) and reload status + the branch list.
     fn checkout_branch(&mut self, branch: String, cx: &mut Context<Self>) {
-        self.git_msg = match data::git_checkout(&self.cwd, &branch) {
-            Ok(_) => Some(format!("Switched to {branch}")),
-            Err(e) => Some(e),
-        };
-        self.reload_git();
-        self.git_branch_list = data::git_branches(&self.cwd);
+        self.git_msg = Some(format!("Switching to {branch}…"));
         cx.notify();
+        let cwd = self.cwd.clone();
+        cx.spawn(async move |this, cx| {
+            let (res, branches) = cx
+                .background_executor()
+                .spawn(async move {
+                    let res = data::git_checkout(&cwd, &branch);
+                    (res.map(|_| branch), data::git_branches(&cwd))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.git_msg = Some(match res {
+                    Ok(branch) => format!("Switched to {branch}"),
+                    Err(e) => e,
+                });
+                this.git_branch_list = branches;
+                this.reload_git_async(cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Refresh the Monitor snapshot on an interval while the Monitor panel is
@@ -1287,7 +1394,7 @@ impl Shell {
         self.cwd_label = path.display().to_string();
         self.files = data::list_dir(&path);
         self.cwd = path;
-        self.reload_git();
+        self.reload_git_async(cx);
         self.persist(cx);
         cx.notify();
     }
@@ -2983,7 +3090,15 @@ impl Shell {
                     ),
             )
             .when(self.conn_auth == ConnAuthKind::Password, |d| {
-                d.child(self.conn_field_row(cx, CONN_SECRET, "Password", "password", true))
+                // Editing a connection that already stores a password: the
+                // blank field means "keep it", so hint that instead of
+                // prompting as if it were empty.
+                let saved = matches!(
+                    self.conn_orig_auth,
+                    Some(AuthMethod::KeychainPassword { .. } | AuthMethod::DirectPassword { .. })
+                );
+                let ph = if saved { "leave blank to keep saved" } else { "password" };
+                d.child(self.conn_field_row(cx, CONN_SECRET, "Password", ph, true))
             })
             .when(self.conn_auth == ConnAuthKind::Key, |d| {
                 d.child(self.conn_field_row(cx, CONN_SECRET, "Key file", "~/.ssh/id_ed25519", false))

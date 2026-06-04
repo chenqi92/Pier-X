@@ -28,6 +28,7 @@ enum Page {
     Connections,
     Git,
     Keymap,
+    About,
 }
 
 /// Left-nav entries: (page, icon stem, label).
@@ -38,6 +39,7 @@ const PAGES: &[(Page, &str, &str)] = &[
     (Page::Connections, "server", "Connections"),
     (Page::Git, "git-branch", "Git"),
     (Page::Keymap, "command", "Keymap"),
+    (Page::About, "info", "About"),
 ];
 
 /// The keyboard shortcuts bound in main.rs: (chord, action).
@@ -135,6 +137,12 @@ impl SettingsView {
                 cx.listener(move |_this, _: &MouseDownEvent, window, cx| {
                     if cx.global::<Theme>().dark != want_dark {
                         cx.set_global(if want_dark { Theme::dark() } else { Theme::light() });
+                        // Persist so the choice survives a restart, mirroring the
+                        // shell's ToggleTheme. Load-modify-save keeps the other
+                        // UiState fields (layout/cwd) the SettingsView doesn't hold.
+                        let mut s = data::load_ui_state();
+                        s.dark = want_dark;
+                        data::save_ui_state(&s);
                         window.refresh();
                     }
                 }),
@@ -235,6 +243,12 @@ impl SettingsView {
                 }
                 col.into_any_element()
             }
+            Page::About => v_flex()
+                .child(ui::section_label(t, "ABOUT"))
+                .child(ui::info_row(t, "Version", "0.7.2"))
+                .child(ui::info_row(t, "UI engine", "GPUI (native)"))
+                .child(ui::info_row(t, "Backend", "pier-core"))
+                .into_any_element(),
         }
     }
 }

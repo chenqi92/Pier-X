@@ -1,19 +1,22 @@
-// Docker panel — read-only container list over an SSH session.
+// Docker panel — container + image management over an SSH session.
 //
 // Flow: render a connection selector from the saved SSH configs
 // (data::connections_raw). On pick, connect off the render path
 // (data::connect_blocking) and list containers
 // (pier_core::services::docker::list_containers_blocking) on the
 // background executor, then cache the session + rows on the View and
-// notify. Per-container start/stop/restart run over the cached session and
-// refresh the list.
+// notify. Per-container start/stop/restart/remove run over the cached
+// session and refresh the list; container logs (`docker logs --tail 200`)
+// expand inline; a Containers/Images toggle lists `docker images`. Every
+// blocking call runs on cx.background_executor().
 
 use gpui::prelude::*;
-use gpui::{div, px, Context, FontWeight, MouseButton, MouseDownEvent, SharedString, Window};
+use gpui::{div, px, Context, FontWeight, Hsla, MouseButton, MouseDownEvent, SharedString, Window};
 use gpui_component::{h_flex, v_flex};
 
 use pier_core::services::docker::{
-    list_containers_blocking, restart_blocking, start_blocking, stop_blocking, Container,
+    exec_blocking, list_containers_blocking, list_images_blocking, remove_blocking,
+    restart_blocking, start_blocking, stop_blocking, Container, DockerImage,
 };
 use pier_core::ssh::{SshConfig, SshSession};
 
@@ -29,6 +32,13 @@ enum CtrOp {
     Restart,
 }
 
+/// Which resource list the connected view is showing.
+#[derive(Clone, Copy, PartialEq)]
+enum DockerTab {
+    Containers,
+    Images,
+}
+
 pub struct DockerPanel {
     theme: Theme,
     /// Saved SSH targets, loaded once at construction.
@@ -41,6 +51,22 @@ pub struct DockerPanel {
     session: Option<SshSession>,
     /// Container rows from the last successful `docker ps -a`.
     containers: Vec<Container>,
+    /// Active resource list (Containers / Images).
+    tab: DockerTab,
+    /// Image rows from `docker images`, fetched lazily on first Images view.
+    images: Vec<DockerImage>,
+    /// True once images have been fetched for the current session.
+    images_loaded: bool,
+    /// True while the `docker images` round-trip is in flight.
+    images_loading: bool,
+    /// Container id awaiting a remove confirmation, if any.
+    confirm_remove: Option<String>,
+    /// Container id whose logs are expanded inline, if any.
+    logs_for: Option<String>,
+    /// Captured `docker logs` output for [`Self::logs_for`].
+    logs_text: String,
+    /// True while a `docker logs` round-trip is in flight.
+    logs_loading: bool,
     /// One-line failure from connect or listing, shown in `t.neg`.
     error: Option<String>,
 }
@@ -54,6 +80,14 @@ impl DockerPanel {
             connecting: false,
             session: None,
             containers: Vec::new(),
+            tab: DockerTab::Containers,
+            images: Vec::new(),
+            images_loaded: false,
+            images_loading: false,
+            confirm_remove: None,
+            logs_for: None,
+            logs_text: String::new(),
+            logs_loading: false,
             error: None,
         }
     }
@@ -70,6 +104,15 @@ impl DockerPanel {
         self.error = None;
         self.session = None;
         self.containers.clear();
+        // Reset per-session view state so a new host starts clean.
+        self.tab = DockerTab::Containers;
+        self.images.clear();
+        self.images_loaded = false;
+        self.images_loading = false;
+        self.confirm_remove = None;
+        self.logs_for = None;
+        self.logs_text.clear();
+        self.logs_loading = false;
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -159,9 +202,141 @@ impl DockerPanel {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                this.apply_container_list(res);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Force-remove `id` (`docker rm -f`), then refresh the list. Triggered
+    /// from the inline confirm row, so the caller already confirmed intent.
+    fn remove_container(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        self.confirm_remove = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    remove_blocking(&session, &id, true).map_err(|e| e.to_string())?;
+                    list_containers_blocking(&session, true).map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.apply_container_list(res);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Write a refreshed container list (or error) onto the View, and drop a
+    /// pending logs view if its container is no longer present.
+    fn apply_container_list(&mut self, res: Result<Vec<Container>, String>) {
+        match res {
+            Ok(list) => {
+                self.containers = list;
+                self.error = None;
+                // Drop a stale logs view if its container is gone now.
+                let drop_logs = match &self.logs_for {
+                    Some(id) => !self.containers.iter().any(|c| &c.id == id),
+                    None => false,
+                };
+                if drop_logs {
+                    self.logs_for = None;
+                    self.logs_text.clear();
+                    self.logs_loading = false;
+                }
+            }
+            Err(e) => self.error = Some(e),
+        }
+    }
+
+    /// Toggle the inline logs region for `id`, fetching `docker logs
+    /// --tail 200 <id>` off the render path when opening.
+    fn toggle_logs(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.logs_for.as_deref() == Some(id.as_str()) {
+            self.logs_for = None;
+            self.logs_text.clear();
+            self.logs_loading = false;
+            cx.notify();
+            return;
+        }
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        self.logs_for = Some(id.clone());
+        self.logs_text.clear();
+        self.logs_loading = true;
+        cx.notify();
+
+        let fetch_id = id.clone();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    exec_blocking(
+                        &session,
+                        &[
+                            "logs".to_string(),
+                            "--tail".to_string(),
+                            "200".to_string(),
+                            fetch_id,
+                        ],
+                    )
+                    .map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                // Ignore a stale fetch if the user switched away meanwhile.
+                if this.logs_for.as_deref() != Some(id.as_str()) {
+                    return;
+                }
+                this.logs_loading = false;
+                match res {
+                    Ok((_exit, out)) => this.logs_text = out,
+                    Err(e) => this.logs_text = format!("logs error: {e}"),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Switch resource tabs, lazily fetching images the first time the
+    /// Images tab is opened for a session.
+    fn select_tab(&mut self, tab: DockerTab, cx: &mut Context<Self>) {
+        if self.tab == tab {
+            return;
+        }
+        self.tab = tab;
+        if tab == DockerTab::Images && !self.images_loaded && !self.images_loading {
+            self.load_images(cx);
+        }
+        cx.notify();
+    }
+
+    /// Fetch `docker images` off the render path and cache the rows.
+    fn load_images(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        self.images_loading = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { list_images_blocking(&session).map_err(|e| e.to_string()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.images_loading = false;
                 match res {
                     Ok(list) => {
-                        this.containers = list;
+                        this.images = list;
+                        this.images_loaded = true;
                         this.error = None;
                     }
                     Err(e) => this.error = Some(e),
@@ -172,19 +347,18 @@ impl DockerPanel {
         .detach();
     }
 
-    /// A small icon button running a container op.
-    fn ctr_btn(
+    /// A small icon button that runs `on_click` against the View.
+    fn icon_btn(
         &self,
         cx: &mut Context<Self>,
-        key: &str,
+        key: String,
         glyph: &'static str,
-        color: gpui::Hsla,
-        op: CtrOp,
-        id: String,
+        color: Hsla,
+        on_click: impl Fn(&mut Self, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
         let t = &self.theme;
         div()
-            .id(SharedString::from(format!("dop-{key}")))
+            .id(SharedString::from(key))
             .flex()
             .items_center()
             .justify_center()
@@ -195,19 +369,51 @@ impl DockerPanel {
             .hover(|s| s.bg(t.hover))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
-                    this.container_op(op, id.clone(), cx)
-                }),
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| on_click(this, cx)),
             )
             .child(ui::icon(glyph, px(14.0), color))
     }
 
-    /// One container: running dot + name, then image and ports.
+    /// Containers / Images segmented toggle, shown once connected.
+    fn tab_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        h_flex()
+            .gap(t.sp1)
+            .px(t.sp3)
+            .pt(t.sp2)
+            .child(self.tab_pill(cx, "Containers", DockerTab::Containers))
+            .child(self.tab_pill(cx, "Images", DockerTab::Images))
+    }
+
+    /// One pill in the [`Self::tab_toggle`] segmented control.
+    fn tab_pill(&self, cx: &mut Context<Self>, label: &'static str, tab: DockerTab) -> impl IntoElement {
+        let t = &self.theme;
+        let active = self.tab == tab;
+        div()
+            .id(SharedString::from(format!("dtab-{label}")))
+            .px(t.sp3)
+            .py(t.sp1)
+            .rounded(t.radius_sm)
+            .text_size(t.fs_ui)
+            .cursor_pointer()
+            .when(active, |d| d.bg(t.accent_dim).text_color(t.ink))
+            .when(!active, |d| d.text_color(t.muted).hover(|s| s.bg(t.hover)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| this.select_tab(tab, cx)),
+            )
+            .child(label)
+    }
+
+    /// One container: running dot + name, image/ports meta, and the action
+    /// buttons (lifecycle + logs + remove, or an inline remove confirmation).
     fn container_row(&self, cx: &mut Context<Self>, c: &Container) -> impl IntoElement {
         let t = &self.theme;
         let dot = if c.is_running() { t.pos } else { t.muted };
         let running = c.is_running();
-        let id = c.id.clone();
+        let confirming = self.confirm_remove.as_deref() == Some(c.id.as_str());
+        let logs_open = self.logs_for.as_deref() == Some(c.id.as_str());
+        let logs_color = if logs_open { t.accent } else { t.muted };
         let mut meta = h_flex()
             .gap(t.sp2)
             .font_family(t.mono.clone())
@@ -239,13 +445,147 @@ impl DockerPanel {
                     )
                     .child(meta),
             )
-            .when(running, |d| {
-                d.child(self.ctr_btn(cx, &format!("stop-{}", c.id), "pause", t.warn, CtrOp::Stop, id.clone()))
-                    .child(self.ctr_btn(cx, &format!("rst-{}", c.id), "redo-2", t.info, CtrOp::Restart, id.clone()))
+            .when(confirming, |d| {
+                d.child(
+                    div()
+                        .text_size(t.fs_sm)
+                        .text_color(t.muted)
+                        .child("Remove?"),
+                )
+                .child(self.icon_btn(cx, format!("dok-{}", c.id), "check", t.neg, {
+                    let id = c.id.clone();
+                    move |this, cx| this.remove_container(id.clone(), cx)
+                }))
+                .child(self.icon_btn(cx, format!("dno-{}", c.id), "close", t.muted, {
+                    move |this, cx| {
+                        this.confirm_remove = None;
+                        cx.notify();
+                    }
+                }))
             })
-            .when(!running, |d| {
-                d.child(self.ctr_btn(cx, &format!("start-{}", c.id), "play", t.pos, CtrOp::Start, id.clone()))
+            .when(!confirming, |d| {
+                d.when(running, |d| {
+                    d.child(self.icon_btn(cx, format!("dstop-{}", c.id), "pause", t.warn, {
+                        let id = c.id.clone();
+                        move |this, cx| this.container_op(CtrOp::Stop, id.clone(), cx)
+                    }))
+                    .child(self.icon_btn(cx, format!("drst-{}", c.id), "redo-2", t.info, {
+                        let id = c.id.clone();
+                        move |this, cx| this.container_op(CtrOp::Restart, id.clone(), cx)
+                    }))
+                })
+                .when(!running, |d| {
+                    d.child(self.icon_btn(cx, format!("dstart-{}", c.id), "play", t.pos, {
+                        let id = c.id.clone();
+                        move |this, cx| this.container_op(CtrOp::Start, id.clone(), cx)
+                    }))
+                })
+                .child(self.icon_btn(cx, format!("dlog-{}", c.id), "scroll-text", logs_color, {
+                    let id = c.id.clone();
+                    move |this, cx| this.toggle_logs(id.clone(), cx)
+                }))
+                .child(self.icon_btn(cx, format!("dtrash-{}", c.id), "delete", t.neg, {
+                    let id = c.id.clone();
+                    move |this, cx| {
+                        this.confirm_remove = Some(id.clone());
+                        cx.notify();
+                    }
+                }))
             })
+    }
+
+    /// Inline, scrollable `docker logs --tail 200` output for `c_id`.
+    fn logs_area(&self, c_id: &str) -> impl IntoElement {
+        let t = &self.theme;
+        let mut body = v_flex().w_full().py(t.sp1);
+        if self.logs_loading {
+            body = body.child(
+                div()
+                    .px(t.sp3)
+                    .py(px(2.0))
+                    .text_size(t.fs_sm)
+                    .text_color(t.dim)
+                    .child("Loading logs…"),
+            );
+        } else if self.logs_text.trim().is_empty() {
+            body = body.child(
+                div()
+                    .px(t.sp3)
+                    .py(px(2.0))
+                    .text_size(t.fs_sm)
+                    .text_color(t.dim)
+                    .child("(no output)"),
+            );
+        } else {
+            for line in self.logs_text.lines() {
+                body = body.child(
+                    div()
+                        .w_full()
+                        .px(t.sp3)
+                        .py(px(1.0))
+                        .font_family(t.mono.clone())
+                        .text_size(t.fs_sm)
+                        .text_color(t.ink_2)
+                        .child(line.to_string()),
+                );
+            }
+        }
+        div()
+            .id(SharedString::from(format!("dlogsbox-{c_id}")))
+            .w_full()
+            .max_h(px(240.0))
+            .overflow_y_scroll()
+            .bg(t.surface)
+            .border_t_1()
+            .border_b_1()
+            .border_color(t.line)
+            .child(body)
+    }
+
+    /// One image: hard-drive glyph + repository, then tag / size / created.
+    fn image_row(&self, img: &DockerImage) -> impl IntoElement {
+        let t = &self.theme;
+        let repo = if img.repository.is_empty() {
+            "<none>".to_string()
+        } else {
+            img.repository.clone()
+        };
+        let tag = if img.tag.is_empty() {
+            "<none>".to_string()
+        } else {
+            img.tag.clone()
+        };
+        let mut sub = h_flex()
+            .gap(t.sp2)
+            .font_family(t.mono.clone())
+            .text_size(t.fs_sm)
+            .child(div().text_color(t.accent).child(tag))
+            .child(div().text_color(t.muted).child(img.size.clone()));
+        if !img.created.is_empty() {
+            sub = sub.child(div().overflow_hidden().text_color(t.muted).child(img.created.clone()));
+        }
+        h_flex()
+            .id(SharedString::from(format!("dimg-{}-{}-{}", img.repository, img.tag, img.id)))
+            .items_center()
+            .gap(t.sp2)
+            .py(px(6.0))
+            .px(t.sp3)
+            .hover(|s| s.bg(t.hover))
+            .child(ui::icon("hard-drive", px(14.0), t.muted))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(t.ink)
+                            .child(repo),
+                    )
+                    .child(sub),
+            )
     }
 }
 
@@ -254,7 +594,16 @@ impl Render for DockerPanel {
         self.theme = cx.global::<Theme>().clone();
         let t = &self.theme;
         let count = if self.session.is_some() {
-            self.containers.len().to_string()
+            match self.tab {
+                DockerTab::Containers => self.containers.len().to_string(),
+                DockerTab::Images => {
+                    if self.images_loaded {
+                        self.images.len().to_string()
+                    } else {
+                        String::new()
+                    }
+                }
+            }
         } else {
             String::new()
         };
@@ -278,12 +627,35 @@ impl Render for DockerPanel {
         if self.connecting {
             col = col.child(ui::empty_state(t, "Connecting…"));
         } else if self.session.is_some() {
-            if self.containers.is_empty() {
-                col = col.child(ui::empty_state(t, "No containers"));
-            } else {
-                col = col.child(ui::section_label(t, format!("CONTAINERS · {}", self.containers.len())));
-                for c in &self.containers {
-                    col = col.child(self.container_row(cx, c));
+            col = col.child(self.tab_toggle(cx));
+            match self.tab {
+                DockerTab::Containers => {
+                    if self.containers.is_empty() {
+                        col = col.child(ui::empty_state(t, "No containers"));
+                    } else {
+                        col = col.child(
+                            ui::section_label(t, format!("CONTAINERS · {}", self.containers.len())),
+                        );
+                        for c in &self.containers {
+                            col = col.child(self.container_row(cx, c));
+                            if self.logs_for.as_deref() == Some(c.id.as_str()) {
+                                col = col.child(self.logs_area(&c.id));
+                            }
+                        }
+                    }
+                }
+                DockerTab::Images => {
+                    if self.images_loading {
+                        col = col.child(ui::empty_state(t, "Loading images…"));
+                    } else if self.images.is_empty() {
+                        col = col.child(ui::empty_state(t, "No images"));
+                    } else {
+                        col = col
+                            .child(ui::section_label(t, format!("IMAGES · {}", self.images.len())));
+                        for img in &self.images {
+                            col = col.child(self.image_row(img));
+                        }
+                    }
                 }
             }
         } else if self.conns.is_empty() {

@@ -12,6 +12,7 @@
 // sidebar toggle, connection-row selection, collapse right panel — all native
 // GPUI state on the Shell entity. The center is the real TerminalView.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -120,6 +121,9 @@ pub struct Shell {
     files: Vec<FileEntry>,
     conns: Vec<ConnRow>,
     git: Option<GitData>,
+    /// Per-file `+adds -dels` line counts for the current cwd, keyed
+    /// by repo-relative path (refreshed alongside `git`).
+    git_numstat: HashMap<String, (u32, u32)>,
     git_tab: GitTab,
     git_history: Vec<data::CommitInfo>,
     git_branch_list: Vec<String>,
@@ -245,6 +249,7 @@ impl Shell {
         let files = data::list_dir(&cwd);
         let conns = data::load_connections();
         let git = data::git_status(&cwd);
+        let git_numstat = data::git_numstat(&cwd);
         let tab_title = cwd
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -265,6 +270,7 @@ impl Shell {
             files,
             conns,
             git,
+            git_numstat,
             git_tab: GitTab::Changes,
             git_history: Vec::new(),
             git_branch_list: Vec::new(),
@@ -371,6 +377,12 @@ impl Shell {
         }
     }
 
+    /// Reload working-tree status + per-file line counts for the cwd.
+    fn reload_git(&mut self) {
+        self.git = data::git_status(&self.cwd);
+        self.git_numstat = data::git_numstat(&self.cwd);
+    }
+
     /// Run a per-file staging action, then refresh status.
     fn git_file_op(&mut self, op: GitFileOp, file: String, cx: &mut Context<Self>) {
         let res = match op {
@@ -379,7 +391,7 @@ impl Shell {
             GitFileOp::Discard => data::git_discard(&self.cwd, &file),
         };
         self.git_msg = res.err();
-        self.git = data::git_status(&self.cwd);
+        self.reload_git();
         cx.notify();
     }
 
@@ -399,7 +411,7 @@ impl Shell {
             }
             Err(e) => self.git_msg = Some(e),
         }
-        self.git = data::git_status(&self.cwd);
+        self.reload_git();
         cx.notify();
     }
 
@@ -637,7 +649,7 @@ impl Shell {
                     }
                     Err(e) => e,
                 });
-                this.git = data::git_status(&this.cwd);
+                this.reload_git();
                 cx.notify();
             });
         })
@@ -910,8 +922,8 @@ impl Shell {
     fn navigate_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.cwd_label = path.display().to_string();
         self.files = data::list_dir(&path);
-        self.git = data::git_status(&path);
         self.cwd = path;
+        self.reload_git();
         self.persist(cx);
         cx.notify();
     }
@@ -1509,12 +1521,19 @@ impl Shell {
         let t = &self.theme;
         let (mark, mark_color) = status_style(t, &c.status);
         let path = c.path.clone();
+        let numstat = self
+            .git_numstat
+            .get(&c.path)
+            .copied()
+            .filter(|(add, del)| *add > 0 || *del > 0);
         h_flex()
             .id(SharedString::from(format!("gch-{}-{}", staged, c.path)))
             .items_center()
             .gap(t.sp2)
             .h(px(26.0))
             .px(t.sp3)
+            .border_l_2()
+            .border_color(mark_color)
             .hover(|s| s.bg(t.hover))
             .child(
                 div()
@@ -1532,6 +1551,21 @@ impl Shell {
                     .text_color(t.ink_2)
                     .child(c.path.clone()),
             )
+            .when_some(numstat, |d, (add, del)| {
+                d.child(
+                    h_flex()
+                        .flex_none()
+                        .gap(px(4.0))
+                        .font_family(t.mono.clone())
+                        .text_size(t.fs_sm)
+                        .when(add > 0, |d| {
+                            d.child(div().text_color(t.pos).child(format!("+{add}")))
+                        })
+                        .when(del > 0, |d| {
+                            d.child(div().text_color(t.neg).child(format!("-{del}")))
+                        }),
+                )
+            })
             .when(staged, |d| {
                 d.child(self.git_file_btn(
                     cx,
@@ -1636,7 +1670,20 @@ impl Shell {
             )
             .child(label)
             .when_some(count, |d, n| {
-                d.child(div().text_size(t.fs_sm).text_color(t.muted).child(n.to_string()))
+                d.child(
+                    div()
+                        .flex_none()
+                        .min_w(px(16.0))
+                        .px(px(5.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(t.accent_dim)
+                        .text_size(t.fs_sm)
+                        .text_color(t.accent)
+                        .child(n.to_string()),
+                )
             })
     }
 

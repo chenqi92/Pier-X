@@ -6,8 +6,10 @@
 // synchronous and cheap (single git invocation / one read_dir / one JSON
 // load); the shell calls them on construction and on demand, not per frame.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::SystemTime;
 
 use pier_core::connections::ConnectionStore;
@@ -259,6 +261,58 @@ pub fn git_pull(path: &Path) -> Result<String, String> {
         .map_err(|e| e.to_string())?
         .pull()
         .map_err(|e| e.to_string())
+}
+
+/// A `git` subprocess rooted at `repo`, with the console window
+/// suppressed on Windows so a GUI launch never flashes a `cmd`
+/// window (mirrors pier-core's `configure_background_command`,
+/// which is crate-private). The GitClient wrappers above already
+/// hide it; these direct calls cover the few subcommands GitClient
+/// doesn't expose (numstat / fetch / rebase).
+fn git_command(repo: &Path, args: &[&str]) -> Command {
+    let mut c = Command::new("git");
+    c.current_dir(repo);
+    c.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        c.creation_flags(CREATE_NO_WINDOW);
+    }
+    c
+}
+
+/// Per-file added/deleted line counts, merging the worktree
+/// (`git diff --numstat`) and index (`--cached`) views keyed by
+/// repo-root-relative path. Binary files (numstat `-`) count as
+/// zero. Best-effort: a non-repo or git failure yields an empty
+/// map, so the Git panel just omits the inline `+N -N`.
+pub fn git_numstat(repo: &Path) -> HashMap<String, (u32, u32)> {
+    let mut out: HashMap<String, (u32, u32)> = HashMap::new();
+    for cached in [false, true] {
+        let mut args = vec!["diff", "--numstat"];
+        if cached {
+            args.push("--cached");
+        }
+        let Ok(output) = git_command(repo, &args).output() else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let mut parts = line.splitn(3, '\t');
+            let (Some(add), Some(del), Some(path)) = (parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            let entry = out.entry(path.to_string()).or_insert((0, 0));
+            entry.0 += add.parse::<u32>().unwrap_or(0);
+            entry.1 += del.parse::<u32>().unwrap_or(0);
+        }
+    }
+    out
 }
 
 /// Persisted shell layout/state, restored on launch. Terminals aren't restored

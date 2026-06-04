@@ -21,6 +21,9 @@ pier-core = { path = "../pier-core" }
 # Embed the SVG icon set into the binary (see src/assets.rs).
 rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }
 anyhow = "1"
+# CancellationToken for the SFTP transfer queue's per-item cancel. Already in
+# the lock transitively via pier-core; declared here so the panel can name it.
+tokio-util = { version = "0.7", default-features = false }
 
 # Force EVERY reference to the zed repo (ours + gpui-component's transitive
 # one) onto the rev that gpui-component @9ad30e6 locks in its own Cargo.lock.

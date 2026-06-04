@@ -5288,6 +5288,7 @@ dependencies = [
  "gpui_platform",
  "pier-core",
  "rust-embed",
+ "tokio-util",
 ]
 
 [[package]]

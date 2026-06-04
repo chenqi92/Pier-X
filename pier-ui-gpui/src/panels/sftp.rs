@@ -9,25 +9,42 @@
 //   * Rename — a row button flips the name cell into an inline input.
 //   * Delete — a trash button asks for inline confirmation first.
 //   * chmod — clicking the permission cell opens an inline octal input.
-//   * Download / Upload — native save / open dialogs.
+//   * Download / Upload — native save / open dialogs feed a transfer queue.
 //
 // Every mutation runs over the cached SftpClient on the background executor and
 // re-lists the current directory on success. Failures surface as one error line.
+//
+// Downloads and uploads don't block: each picked file is appended to a transfer
+// queue pinned below the listing. A single drain worker runs them one at a time
+// via the chunked, cancellable SftpClient transfers, writing byte progress into
+// per-item atomics that a ~8 fps ticker samples into a live progress bar. Each
+// row can be cancelled (queued items drop immediately; a running one aborts
+// between chunks) and finished rows can be cleared.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, Context, FocusHandle, Hsla, KeyDownEvent, MouseButton, MouseDownEvent,
-    PathPromptOptions, SharedString, Window,
+    div, px, relative, AnyElement, Context, FocusHandle, FontWeight, Hsla, KeyDownEvent,
+    MouseButton, MouseDownEvent, PathPromptOptions, SharedString, Window,
 };
 use gpui_component::{h_flex, v_flex};
+use tokio_util::sync::CancellationToken;
 
 use pier_core::ssh::{RemoteFileEntry, SftpClient, SshConfig, SshSession};
 
 use crate::data;
 use crate::theme::Theme;
 use crate::ui;
+
+/// Repaint cadence for the transfer queue while a transfer is running — fast
+/// enough for a smooth progress bar (~8 fps) without flooding the main thread
+/// with re-renders. The bytes themselves are written by the background
+/// progress callback into atomics; this timer just samples them.
+const XFER_TICK: Duration = Duration::from_millis(120);
 
 /// An inline editing action that temporarily captures keyboard input. Only one
 /// is active at a time; the panel renders the matching inline control and
@@ -71,6 +88,115 @@ struct Editor {
     confirm_close: bool,
 }
 
+/// Which way a queued transfer moves bytes.
+#[derive(Clone, Copy, PartialEq)]
+enum XferDir {
+    /// Local → remote.
+    Up,
+    /// Remote → local.
+    Down,
+}
+
+/// Lifecycle of one transfer-queue item. `Queued` and the three terminal
+/// states are only ever set on the main thread; `Running`'s byte counters live
+/// in the [`Transfer`] atomics so the background transfer can update them
+/// without touching the View.
+enum XferState {
+    /// Waiting for the drain worker to pick it up.
+    Queued,
+    /// Currently streaming bytes (see the `done`/`total` atomics).
+    Running,
+    /// Finished successfully.
+    Done,
+    /// Finished with an error (message shown under the row).
+    Failed(String),
+    /// Cancelled by the user before completing.
+    Cancelled,
+}
+
+/// One entry in the upload/download queue. Cheap to keep around after it
+/// finishes so the user can see the result until they clear it. `done`/`total`
+/// are shared with the running background transfer via its progress callback;
+/// `cancel` is shared with the in-flight transfer so the row's cancel button
+/// can abort it between chunks.
+struct Transfer {
+    /// Monotonic id, stable for row keying and lookup across re-renders.
+    id: u64,
+    dir: XferDir,
+    /// Leaf name shown on the row.
+    name: String,
+    /// Absolute remote path.
+    remote: String,
+    /// Absolute local path.
+    local: PathBuf,
+    state: XferState,
+    /// Bytes transferred so far (written by the background progress callback).
+    done: Arc<AtomicU64>,
+    /// Total bytes, 0 until the first progress event reports it.
+    total: Arc<AtomicU64>,
+    /// Fires to abort the transfer mid-flight; shared with the running call.
+    cancel: CancellationToken,
+}
+
+impl Transfer {
+    fn is_queued(&self) -> bool {
+        matches!(self.state, XferState::Queued)
+    }
+    fn is_running(&self) -> bool {
+        matches!(self.state, XferState::Running)
+    }
+    fn is_finished(&self) -> bool {
+        matches!(
+            self.state,
+            XferState::Done | XferState::Failed(_) | XferState::Cancelled
+        )
+    }
+}
+
+/// The data the drain worker needs to run one transfer off the render path —
+/// a snapshot of a [`Transfer`]'s fields (the SftpClient, paths, shared
+/// progress atomics, and cancel token) so the blocking call owns no borrow of
+/// the panel.
+struct RunHandle {
+    id: u64,
+    sftp: SftpClient,
+    dir: XferDir,
+    remote: String,
+    local: PathBuf,
+    done: Arc<AtomicU64>,
+    total: Arc<AtomicU64>,
+    cancel: CancellationToken,
+}
+
+impl RunHandle {
+    /// Run the transfer to completion on the calling (background) thread,
+    /// folding byte progress into the shared atomics as it goes. Blocks; call
+    /// only off the render path.
+    fn execute(self) -> Result<(), String> {
+        let done = self.done.clone();
+        let total = self.total.clone();
+        let on_progress = move |bytes: u64, total_bytes: u64| {
+            done.store(bytes, Ordering::Relaxed);
+            total.store(total_bytes, Ordering::Relaxed);
+        };
+        let res = match self.dir {
+            XferDir::Up => self.sftp.upload_from_with_progress_cancel_blocking(
+                &self.local,
+                &self.remote,
+                on_progress,
+                Some(&self.cancel),
+            ),
+            XferDir::Down => self.sftp.download_to_with_progress_cancel_blocking(
+                &self.remote,
+                &self.local,
+                on_progress,
+                Some(&self.cancel),
+            ),
+        };
+        res.map(|_| ()).map_err(|e| e.to_string())
+    }
+}
+
 pub struct SftpPanel {
     theme: Theme,
     /// Saved connections, loaded once on construction.
@@ -102,6 +228,16 @@ pub struct SftpPanel {
     editor: Option<Editor>,
     /// Focus handle for the editor's key capture.
     editor_focus: FocusHandle,
+    /// Upload/download queue, newest last. Holds queued, running, and finished
+    /// items until cleared.
+    transfers: Vec<Transfer>,
+    /// Next transfer id to hand out.
+    next_xfer_id: u64,
+    /// Whether a drain worker (and its repaint ticker) is currently alive. Set
+    /// true when a transfer is enqueued onto an idle queue; cleared by the
+    /// worker when it finds the queue empty. Gates against spawning duplicate
+    /// workers — see [`Self::kick_drain`].
+    draining: bool,
 }
 
 impl SftpPanel {
@@ -123,6 +259,9 @@ impl SftpPanel {
             bookmarks_open: false,
             editor: None,
             editor_focus: cx.focus_handle(),
+            transfers: Vec::new(),
+            next_xfer_id: 0,
+            draining: false,
         }
     }
 
@@ -165,6 +304,16 @@ impl SftpPanel {
                         this.host_key = host_key;
                         this.bookmarks_open = false;
                         this.editor = None;
+                        // Abort and drop any queue from the previous host: a
+                        // queued upload's remote path is meaningless against a
+                        // new connection. An in-flight transfer (held by the
+                        // old worker) sees its token fire and ends as
+                        // Cancelled; the worker then finds the queue empty and
+                        // winds itself down.
+                        for x in &this.transfers {
+                            x.cancel.cancel();
+                        }
+                        this.transfers.clear();
                     }
                     Err(e) => this.error = Some(e),
                 }
@@ -243,77 +392,257 @@ impl SftpPanel {
         .detach();
     }
 
-    /// Download a remote file to a local path chosen via the native dialog.
+    /// Queue a download of a remote file to a local path chosen via the native
+    /// save dialog. The bytes move through the drain worker with a live
+    /// progress bar in the transfer queue, not inline here.
     fn download(&mut self, remote: String, name: String, cx: &mut Context<Self>) {
-        let Some(sftp) = self.sftp.clone() else {
+        if self.sftp.is_none() {
             return;
-        };
+        }
         let dir = data::current_dir();
         cx.spawn(async move |this, cx| {
             let recv = cx.update(|cx| cx.prompt_for_new_path(&dir, Some(name.as_str())));
             let Ok(Ok(Some(local))) = recv.await else {
                 return; // cancelled or errored
             };
-            let res = cx
-                .background_executor()
-                .spawn(async move {
-                    sftp.download_to_blocking(&remote, &local)
-                        .map_err(|e| e.to_string())
-                })
-                .await;
             let _ = this.update(cx, |this, cx| {
-                this.error = res.err();
+                this.push_transfer(XferDir::Down, name, remote, local);
+                this.kick_drain(cx);
                 cx.notify();
             });
         })
         .detach();
     }
 
-    /// Upload a locally-chosen file into the current remote directory.
+    /// Queue an upload of one or more locally-chosen files into the current
+    /// remote directory. Each picked file becomes its own queue item.
     fn upload(&mut self, cx: &mut Context<Self>) {
-        let Some(sftp) = self.sftp.clone() else {
+        if self.sftp.is_none() {
             return;
-        };
+        }
         let remote_dir = self.cwd.clone();
         cx.spawn(async move |this, cx| {
             let opts = PathPromptOptions {
                 files: true,
                 directories: false,
-                multiple: false,
+                multiple: true,
                 prompt: None,
             };
             let recv = cx.update(|cx| cx.prompt_for_paths(opts));
             let Ok(Ok(Some(paths))) = recv.await else {
                 return;
             };
-            let Some(local) = paths.into_iter().next() else {
-                return;
-            };
-            let fname = local
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let remote = join_remote(&remote_dir, &fname);
-            let listed = cx
-                .background_executor()
-                .spawn(async move {
-                    sftp.upload_from_blocking(&local, &remote)
-                        .map_err(|e| e.to_string())?;
-                    sftp.list_dir_blocking(&remote_dir).map_err(|e| e.to_string())
-                })
-                .await;
             let _ = this.update(cx, |this, cx| {
-                match listed {
-                    Ok(entries) => {
-                        this.entries = entries;
-                        this.error = None;
+                for local in paths {
+                    let fname = local
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    if fname.is_empty() {
+                        continue;
                     }
-                    Err(e) => this.error = Some(e),
+                    let remote = join_remote(&remote_dir, &fname);
+                    this.push_transfer(XferDir::Up, fname, remote, local);
                 }
+                this.kick_drain(cx);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Append a transfer to the queue in the `Queued` state. Does not start
+    /// the drain worker — the caller follows with [`Self::kick_drain`] once all
+    /// items for this action are pushed.
+    fn push_transfer(&mut self, dir: XferDir, name: String, remote: String, local: PathBuf) {
+        let id = self.next_xfer_id;
+        self.next_xfer_id += 1;
+        self.transfers.push(Transfer {
+            id,
+            dir,
+            name,
+            remote,
+            local,
+            state: XferState::Queued,
+            done: Arc::new(AtomicU64::new(0)),
+            total: Arc::new(AtomicU64::new(0)),
+            cancel: CancellationToken::new(),
+        });
+    }
+
+    /// Start draining the queue if it isn't already being drained. Spawns two
+    /// cooperating tasks: a worker that runs queued transfers one at a time,
+    /// and a ticker that repaints the running bar at [`XFER_TICK`]. Both stop
+    /// when the queue empties. A no-op while a worker is already alive (it
+    /// picks up newly-queued items on its next iteration) or when nothing is
+    /// queued.
+    fn kick_drain(&mut self, cx: &mut Context<Self>) {
+        if self.draining || !self.transfers.iter().any(Transfer::is_queued) {
+            return;
+        }
+        self.draining = true;
+
+        // Repaint ticker — samples the running transfer's byte atomics into a
+        // re-render a few times a second. It owns no transfer state; the
+        // background callback writes the bytes, this just asks for a frame.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(XFER_TICK).await;
+                let alive = this.update(cx, |this, cx| {
+                    if this.transfers.iter().any(Transfer::is_running) {
+                        cx.notify();
+                    }
+                    this.draining
+                });
+                if !matches!(alive, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        // Drain worker — runs queued transfers sequentially. Taking the next
+        // item and clearing `draining` when none remain happen in one update
+        // so an enqueue can never slip between them and strand an item.
+        cx.spawn(async move |this, cx| {
+            loop {
+                let next = this.update(cx, |this, cx| match this.take_next_run() {
+                    Some(run) => {
+                        cx.notify();
+                        Some(run)
+                    }
+                    None => {
+                        this.draining = false;
+                        cx.notify();
+                        None
+                    }
+                });
+                let run = match next {
+                    Ok(Some(run)) => run,
+                    _ => break, // queue drained, or the View is gone
+                };
+                let id = run.id;
+                let res = cx
+                    .background_executor()
+                    .spawn(async move { run.execute() })
+                    .await;
+                if this
+                    .update(cx, |this, cx| this.finish_run(id, res, cx))
+                    .is_err()
+                {
+                    break; // View gone
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Flip the first queued transfer to `Running` and snapshot what the worker
+    /// needs to run it. Returns `None` when nothing is queued or the session is
+    /// gone (so the worker stops draining).
+    fn take_next_run(&mut self) -> Option<RunHandle> {
+        let sftp = self.sftp.clone()?;
+        let t = self.transfers.iter_mut().find(|t| t.is_queued())?;
+        t.state = XferState::Running;
+        Some(RunHandle {
+            id: t.id,
+            sftp,
+            dir: t.dir,
+            remote: t.remote.clone(),
+            local: t.local.clone(),
+            done: t.done.clone(),
+            total: t.total.clone(),
+            cancel: t.cancel.clone(),
+        })
+    }
+
+    /// Fold a finished transfer's result back into its row. A cancelled token
+    /// (rather than the error text) is the source of truth for distinguishing
+    /// a user cancel from a real failure. A successful upload into the current
+    /// directory triggers a quiet re-list so the new file appears.
+    fn finish_run(&mut self, id: u64, res: Result<(), String>, cx: &mut Context<Self>) {
+        let cwd = self.cwd.clone();
+        let mut relist = false;
+        if let Some(t) = self.transfers.iter_mut().find(|t| t.id == id) {
+            match res {
+                Ok(()) => {
+                    // Snap the bar to 100% — the last progress event may have
+                    // landed a chunk short of total.
+                    let total = t.total.load(Ordering::Relaxed);
+                    if total > 0 {
+                        t.done.store(total, Ordering::Relaxed);
+                    }
+                    t.state = XferState::Done;
+                    if t.dir == XferDir::Up && parent_of(&t.remote) == cwd {
+                        relist = true;
+                    }
+                }
+                Err(msg) => {
+                    t.state = if t.cancel.is_cancelled() {
+                        XferState::Cancelled
+                    } else {
+                        XferState::Failed(msg)
+                    };
+                }
+            }
+        }
+        if relist {
+            self.refresh_listing(cx);
+        }
+        cx.notify();
+    }
+
+    /// Re-list the current directory without disturbing the transfer queue or
+    /// the panel's error line (a transient listing failure shouldn't surface
+    /// over a transfer that just succeeded).
+    fn refresh_listing(&mut self, cx: &mut Context<Self>) {
+        let Some(sftp) = self.sftp.clone() else {
+            return;
+        };
+        let dir = self.cwd.clone();
+        cx.spawn(async move |this, cx| {
+            let listed = cx
+                .background_executor()
+                .spawn(async move { sftp.list_dir_blocking(&dir).map_err(|e| e.to_string()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(entries) = listed {
+                    this.entries = entries;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Cancel a transfer: a queued one flips straight to `Cancelled`; a running
+    /// one has its token fired and flips when the worker observes the abort.
+    fn cancel_transfer(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(t) = self.transfers.iter_mut().find(|t| t.id == id) {
+            match t.state {
+                XferState::Queued => {
+                    t.cancel.cancel();
+                    t.state = XferState::Cancelled;
+                }
+                XferState::Running => t.cancel.cancel(),
+                _ => {}
+            }
+        }
+        cx.notify();
+    }
+
+    /// Drop a single finished transfer from the queue (the row's ✕ once it is
+    /// done/failed/cancelled). Never removes a queued or running item.
+    fn remove_transfer(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.transfers
+            .retain(|t| !(t.id == id && t.is_finished()));
+        cx.notify();
+    }
+
+    /// Drop every finished transfer, keeping queued and running ones.
+    fn clear_finished(&mut self, cx: &mut Context<Self>) {
+        self.transfers.retain(|t| !t.is_finished());
+        cx.notify();
     }
 
     /// Feed a keystroke into the active inline input. Enter commits, Escape
@@ -1031,6 +1360,181 @@ impl SftpPanel {
             }))
     }
 
+    /// The transfer queue, pinned below the listing: a header with the count
+    /// and a clear-finished button, over a capped, scrollable list of rows.
+    fn transfers_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let any_finished = self.transfers.iter().any(Transfer::is_finished);
+        let header = h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .h(px(28.0))
+            .px(t.sp3)
+            .border_t_1()
+            .border_color(t.line)
+            .child(ui::icon("inbox", px(13.0), t.muted))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_size(t.fs_sm)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(t.muted)
+                    .child(format!("TRANSFERS · {}", self.transfers.len())),
+            )
+            .when(any_finished, |d| {
+                d.child(self.head_btn(cx, "sftp-xfer-clear", "close", |this, _w, cx| {
+                    this.clear_finished(cx);
+                }))
+            });
+        let mut list = v_flex().id("sftp-xfers").max_h(px(168.0)).overflow_y_scroll();
+        for x in &self.transfers {
+            list = list.child(self.transfer_row(cx, x));
+        }
+        v_flex().child(header).child(list)
+    }
+
+    /// One transfer row: a direction glyph + name on the first line, a
+    /// state-dependent trailing cluster (progress %, status glyph, cancel /
+    /// remove button), and an optional second line — a progress bar with byte
+    /// counts while running, or the error message when failed.
+    fn transfer_row(&self, cx: &mut Context<Self>, x: &Transfer) -> impl IntoElement {
+        let t = &self.theme;
+        let id = x.id;
+        let dir_glyph = match x.dir {
+            XferDir::Up => "arrow-up",
+            XferDir::Down => "arrow-down",
+        };
+
+        // Trailing cluster: status hint + cancel (queued/running) or remove
+        // (finished) button.
+        let trailing = match &x.state {
+            XferState::Queued => h_flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(div().text_size(t.fs_sm).text_color(t.dim).child("Queued"))
+                .child(self.row_btn(cx, format!("sftp-xfer-c-{id}"), "close", t.muted, move |this, _w, cx| {
+                    this.cancel_transfer(id, cx);
+                }))
+                .into_any_element(),
+            XferState::Running => {
+                let done = x.done.load(Ordering::Relaxed);
+                let total = x.total.load(Ordering::Relaxed);
+                let pct = if total > 0 {
+                    ((done as f64 / total as f64) * 100.0).round() as u32
+                } else {
+                    0
+                };
+                h_flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .w(px(34.0))
+                            .flex()
+                            .justify_end()
+                            .font_family(t.mono.clone())
+                            .text_size(t.fs_sm)
+                            .text_color(t.muted)
+                            .child(format!("{pct}%")),
+                    )
+                    .child(self.row_btn(cx, format!("sftp-xfer-c-{id}"), "close", t.muted, move |this, _w, cx| {
+                        this.cancel_transfer(id, cx);
+                    }))
+                    .into_any_element()
+            }
+            XferState::Done => h_flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(ui::icon("check", px(13.0), t.pos))
+                .child(self.row_btn(cx, format!("sftp-xfer-r-{id}"), "close", t.muted, move |this, _w, cx| {
+                    this.remove_transfer(id, cx);
+                }))
+                .into_any_element(),
+            XferState::Failed(_) => h_flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(ui::icon("triangle-alert", px(13.0), t.neg))
+                .child(self.row_btn(cx, format!("sftp-xfer-r-{id}"), "close", t.muted, move |this, _w, cx| {
+                    this.remove_transfer(id, cx);
+                }))
+                .into_any_element(),
+            XferState::Cancelled => h_flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(div().text_size(t.fs_sm).text_color(t.dim).child("Cancelled"))
+                .child(self.row_btn(cx, format!("sftp-xfer-r-{id}"), "close", t.muted, move |this, _w, cx| {
+                    this.remove_transfer(id, cx);
+                }))
+                .into_any_element(),
+        };
+
+        let line1 = h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .child(ui::icon(dir_glyph, px(13.0), t.muted))
+            .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(x.name.clone()))
+            .child(trailing);
+
+        // Optional second line: a progress bar + byte counts while running, or
+        // the error string when failed.
+        let detail: Option<AnyElement> = match &x.state {
+            XferState::Running => {
+                let done = x.done.load(Ordering::Relaxed);
+                let total = x.total.load(Ordering::Relaxed);
+                let frac = if total > 0 {
+                    (done as f64 / total as f64) as f32
+                } else {
+                    0.0
+                };
+                Some(
+                    h_flex()
+                        .items_center()
+                        .gap(t.sp2)
+                        .child(
+                            div()
+                                .flex_1()
+                                .h(px(4.0))
+                                .rounded(px(2.0))
+                                .bg(t.panel_2)
+                                .child(div().h_full().w(relative(frac)).rounded(px(2.0)).bg(t.accent)),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .font_family(t.mono.clone())
+                                .text_size(t.fs_sm)
+                                .text_color(t.muted)
+                                .child(format!("{} / {}", human_size(done), human_size(total))),
+                        )
+                        .into_any_element(),
+                )
+            }
+            XferState::Failed(msg) => Some(
+                div()
+                    .overflow_hidden()
+                    .text_size(t.fs_sm)
+                    .text_color(t.neg)
+                    .child(msg.clone())
+                    .into_any_element(),
+            ),
+            _ => None,
+        };
+
+        let mut row = v_flex()
+            .id(SharedString::from(format!("sftp-xfer-{id}")))
+            .gap(px(3.0))
+            .px(t.sp3)
+            .py(px(5.0))
+            .text_color(t.ink_2)
+            .hover(|s| s.bg(t.hover))
+            .child(line1);
+        if let Some(detail) = detail {
+            row = row.child(detail);
+        }
+        row
+    }
+
     /// The full-height text editor that replaces the listing while a file is
     /// open: a header (name + state + Save/Close) over a scrollable, monospace
     /// rendering of the buffer, line by line.
@@ -1222,10 +1726,15 @@ impl Render for SftpPanel {
             }
         }
 
-        v_flex()
+        let mut root = v_flex()
             .size_full()
             .child(ui::panel_header(&t, "folder", "SFTP", meta))
-            .child(body)
+            .child(body);
+        // The transfer queue is pinned below the listing whenever it has items.
+        if !self.transfers.is_empty() {
+            root = root.child(self.transfers_view(cx));
+        }
+        root
     }
 }
 

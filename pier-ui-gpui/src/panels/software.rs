@@ -4,34 +4,69 @@
 // session OFF the render path (cx.background_executor) and gathers the host's
 // package-manager environment, its installed-package list, and the current
 // mirror via pier-core's `package_manager` / `package_mirror` services. The
-// curated registry probe supplies versions + service state, which we join back
-// onto the host's installed package names so a row shows a version when Pier-X
-// recognises the software. Read-only this milestone — no install / uninstall /
-// mirror switching.
+// curated registry probe supplies versions + service state + category, which
+// we join back onto the host's installed package names so a row shows a
+// version, a service dot, and lands in the right category section when Pier-X
+// recognises the software.
+//
+// Per-row actions are command-injection only (PRODUCT-SPEC-safe): the panel
+// never runs a privileged command itself. Each action button copies the exact
+// `sudo apt install …` / `sudo systemctl restart …` command (built for the
+// host's detected manager via crate::data) to the clipboard for the user to
+// paste into a terminal.
 
 use std::collections::HashMap;
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Context, MouseButton, MouseDownEvent, SharedString, Window};
+use gpui::{
+    div, px, AnyElement, ClipboardItem, Context, FocusHandle, Hsla, KeyDownEvent, MouseButton,
+    MouseDownEvent, SharedString, Window,
+};
 use gpui_component::{h_flex, v_flex};
 
-use crate::data;
+use crate::data::{self, PkgAction};
 use crate::theme::Theme;
 use crate::ui;
 
-use pier_core::services::{package_manager, package_mirror};
+use pier_core::services::package_manager::{self, PackageDescriptor, PackageManager};
+use pier_core::services::package_mirror;
 use pier_core::ssh::SshConfig;
 
-/// How many package rows to paint before collapsing the tail into a "+N more"
-/// line. The host's installed list can run to several hundred entries.
+/// How many rows to paint in the catch-all "Other" section before collapsing
+/// the tail into a "+N more" line. Recognised category sections are bounded by
+/// the curated registry and always shown in full; only the long tail of
+/// unrecognised host packages is capped.
 const MAX_ROWS: usize = 80;
+
+/// Registry category id → section header, in the same order the web panel
+/// (`SoftwarePanel.tsx`) groups its app-store sections. Anything with an empty
+/// or unlisted category falls into "Other".
+const CATEGORY_ORDER: &[(&str, &str)] = &[
+    ("database", "DATABASES"),
+    ("container", "CONTAINERS"),
+    ("web", "WEB SERVERS"),
+    ("runtime", "LANGUAGES & RUNTIMES"),
+    ("dev", "BUILD TOOLS"),
+    ("editor", "EDITORS"),
+    ("terminal", "SHELLS & MULTIPLEXERS"),
+    ("network", "NETWORK TOOLS"),
+    ("text", "TEXT & SEARCH"),
+    ("system", "SYSTEM UTILITIES"),
+];
 
 pub struct SoftwarePanel {
     theme: Theme,
+    /// Focus handle backing the package filter input.
+    focus: FocusHandle,
     /// Saved SSH connections, loaded once on construction.
     conns: Vec<SshConfig>,
     /// Index into `conns` of the host being inspected.
     selected: Option<usize>,
+    /// Live filter text matched against each row's name / display / category.
+    query: String,
+    /// The command most recently copied to the clipboard, echoed in a banner
+    /// so the otherwise-invisible copy is visible to the user.
+    last_copied: Option<SharedString>,
     load: Load,
 }
 
@@ -68,20 +103,36 @@ struct SoftwareData {
 
 /// A single installed package as the list paints it.
 struct PkgRow {
+    /// Host-reported package name — the exact token install / update /
+    /// uninstall commands target.
     name: String,
+    /// Friendly label: the registry display name when recognised, else the
+    /// raw package name.
+    display: String,
+    /// Registry category id (e.g. `"database"`); empty when unrecognised.
+    category: &'static str,
     /// Version from the curated registry probe, when Pier-X tracks the package.
     version: Option<String>,
     /// Service-unit liveness from the registry probe: `Some(true)` active,
     /// `Some(false)` inactive, `None` for software without a service unit.
     service: Option<bool>,
+    /// Resolved systemd unit for the host's manager — `Some` only for
+    /// recognised software that declares a service. Drives the start/stop/
+    /// restart buttons.
+    service_unit: Option<String>,
+    /// Packages passed to the install / update / uninstall commands.
+    pkgs: Vec<String>,
 }
 
 impl SoftwarePanel {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             theme: Theme::dark(),
+            focus: cx.focus_handle(),
             conns: data::connections_raw(),
             selected: None,
+            query: String::new(),
+            last_copied: None,
             load: Load::Idle,
         }
     }
@@ -95,6 +146,8 @@ impl SoftwarePanel {
             return;
         };
         self.selected = Some(idx);
+        self.query.clear();
+        self.last_copied = None;
         self.load = Load::Loading;
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -114,6 +167,45 @@ impl SoftwarePanel {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Copy `cmd` to the clipboard and record it for the confirmation banner.
+    fn copy_command(&mut self, cmd: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(cmd.clone()));
+        self.last_copied = Some(cmd.into());
+        cx.notify();
+    }
+
+    /// Live-filter keystrokes for the package search box.
+    fn on_search_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        match ks.key.as_str() {
+            "enter" => return,
+            "backspace" => {
+                if self.query.pop().is_some() {
+                    cx.notify();
+                }
+                return;
+            }
+            "escape" => {
+                if !self.query.is_empty() {
+                    self.query.clear();
+                    cx.notify();
+                }
+                return;
+            }
+            _ => {}
+        }
+        let m = &ks.modifiers;
+        if m.control || m.alt || m.platform {
+            return; // leave shortcuts alone
+        }
+        if let Some(kc) = &ks.key_char {
+            if !kc.is_empty() && !kc.chars().any(|c| c.is_control()) {
+                self.query.push_str(kc);
+                cx.notify();
+            }
+        }
     }
 
     /// The saved-server picker, always visible above the body.
@@ -180,7 +272,7 @@ impl SoftwarePanel {
     }
 
     /// The state-dependent body below the selector.
-    fn body(&self) -> AnyElement {
+    fn body(&self, focused: bool, cx: &mut Context<Self>) -> AnyElement {
         let t = &self.theme;
         match &self.load {
             Load::Idle => {
@@ -199,14 +291,18 @@ impl SoftwarePanel {
                         .child(format!("Connection failed: {err}")),
                 )
                 .into_any_element(),
-            Load::Ready(data) => self.ready(data).into_any_element(),
+            Load::Ready(data) => self.ready(data, focused, cx).into_any_element(),
         }
     }
 
-    /// Paint the gathered software state for one host.
-    fn ready(&self, d: &SoftwareData) -> impl IntoElement {
+    /// Paint the gathered software state for one host: environment summary +
+    /// filter box + category-grouped package rows.
+    fn ready(&self, d: &SoftwareData, focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
-        let mut col = v_flex()
+        let manager = d.manager.as_deref();
+
+        // Environment summary — pinned above the scrolling package list.
+        let mut env = v_flex()
             .child(ui::section_label(t, "ENVIRONMENT"))
             .child(ui::info_row(
                 t,
@@ -218,7 +314,7 @@ impl SoftwarePanel {
             .child(ui::info_row(t, "Root", if d.is_root { "yes" } else { "no" }))
             .child(ui::info_row(t, "Installed", d.total.to_string()));
         if d.manager.is_none() {
-            col = col.child(
+            env = env.child(
                 div()
                     .px(t.sp3)
                     .py(t.sp1)
@@ -228,47 +324,185 @@ impl SoftwarePanel {
             );
         }
 
-        col = col.child(ui::section_label(t, format!("PACKAGES · {}", d.rows.len())));
-        if d.rows.is_empty() {
-            col = col.child(
-                div()
-                    .px(t.sp3)
-                    .py(t.sp1)
-                    .text_size(t.fs_sm)
-                    .text_color(t.dim)
-                    .child("none"),
-            );
-        } else {
-            for row in d.rows.iter().take(MAX_ROWS) {
-                col = col.child(self.pkg_row(row));
+        // Filter, then bucket rows into the registry's category order; the
+        // long tail of unrecognised packages collects into "Other".
+        let q = self.query.trim().to_lowercase();
+        let mut groups: Vec<(&str, &str, Vec<&PkgRow>)> = CATEGORY_ORDER
+            .iter()
+            .map(|&(id, label)| (id, label, Vec::new()))
+            .collect();
+        let mut other: Vec<&PkgRow> = Vec::new();
+        for r in &d.rows {
+            if !row_matches(r, &q) {
+                continue;
             }
-            if d.rows.len() > MAX_ROWS {
+            match groups.iter_mut().find(|(id, _, _)| *id == r.category) {
+                Some((_, _, v)) => v.push(r),
+                None => other.push(r),
+            }
+        }
+
+        let mut col = v_flex();
+        let mut any = false;
+        for (_, label, rows) in &groups {
+            if rows.is_empty() {
+                continue;
+            }
+            any = true;
+            col = col.child(ui::section_label(t, format!("{label} · {}", rows.len())));
+            for r in rows.iter().copied() {
+                col = col.child(self.pkg_row(cx, r, manager, d.is_root));
+            }
+        }
+        if !other.is_empty() {
+            any = true;
+            col = col.child(ui::section_label(t, format!("OTHER · {}", other.len())));
+            for r in other.iter().take(MAX_ROWS).copied() {
+                col = col.child(self.pkg_row(cx, r, manager, d.is_root));
+            }
+            if other.len() > MAX_ROWS {
                 col = col.child(
                     div()
                         .px(t.sp3)
                         .py(t.sp1)
                         .text_size(t.fs_sm)
                         .text_color(t.muted)
-                        .child(format!("+{} more", d.rows.len() - MAX_ROWS)),
+                        .child(format!("+{} more", other.len() - MAX_ROWS)),
                 );
             }
         }
+        if !any {
+            let msg = if q.is_empty() {
+                "none"
+            } else {
+                "No matching packages"
+            };
+            col = col.child(
+                div()
+                    .px(t.sp3)
+                    .py(t.sp2)
+                    .text_size(t.fs_sm)
+                    .text_color(t.dim)
+                    .child(msg),
+            );
+        }
 
-        // Body scrolls; the header + selector above stay pinned.
-        div()
-            .id("sw-scroll")
+        // "Copied <cmd>" confirmation, since the clipboard write is invisible.
+        let banner: Option<AnyElement> = self.last_copied.as_ref().map(|cmd| {
+            h_flex()
+                .items_center()
+                .gap(t.sp2)
+                .mx(t.sp3)
+                .mb(t.sp2)
+                .px(t.sp3)
+                .py(px(5.0))
+                .rounded(t.radius_md)
+                .bg(t.accent_subtle)
+                .child(ui::icon("copy", px(13.0), t.accent))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .overflow_hidden()
+                        .font_family(t.mono.clone())
+                        .text_size(t.fs_sm)
+                        .text_color(t.ink_2)
+                        .child(cmd.clone()),
+                )
+                .into_any_element()
+        });
+
+        v_flex()
             .flex_1()
             .min_h(px(0.0))
-            .overflow_y_scroll()
-            .child(col)
+            .child(env)
+            .child(self.search_bar(focused, cx))
+            .children(banner)
+            .child(
+                div()
+                    .id("sw-scroll")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .child(col),
+            )
     }
 
-    /// One package row: optional service dot + name on the left, version on the
-    /// right (mono) when known.
-    fn pkg_row(&self, row: &PkgRow) -> impl IntoElement {
+    /// The package filter input (mirrors the Search panel's query box).
+    fn search_bar(&self, focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
-        let mut left = h_flex().items_center().gap(t.sp2).min_w(px(0.0)).flex_1().overflow_hidden();
-        if let Some(active) = row.service {
+        let caret = || div().flex_none().w(px(2.0)).h(px(15.0)).bg(t.accent);
+        let content: AnyElement = if self.query.is_empty() {
+            if focused {
+                h_flex().items_center().child(caret()).into_any_element()
+            } else {
+                div()
+                    .text_color(t.dim)
+                    .child("Filter by name, id, or category…")
+                    .into_any_element()
+            }
+        } else {
+            let mut row = h_flex().items_center().min_w(px(0.0)).overflow_hidden().child(
+                div()
+                    .flex_none()
+                    .text_color(t.ink)
+                    .child(self.query.clone()),
+            );
+            if focused {
+                row = row.child(caret());
+            }
+            row.into_any_element()
+        };
+
+        h_flex()
+            .id("sw-search")
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::on_search_key))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    window.focus(&this.focus, cx);
+                    cx.notify();
+                }),
+            )
+            .items_center()
+            .gap(t.sp2)
+            .mx(t.sp3)
+            .my(t.sp2)
+            .px(t.sp3)
+            .h(px(30.0))
+            .rounded(t.radius_md)
+            .bg(t.panel)
+            .border_1()
+            .border_color(if focused { t.accent } else { t.line })
+            .child(ui::icon("search", px(14.0), t.muted))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(content),
+            )
+    }
+
+    /// One package row: optional service dot + name on the left; version,
+    /// service controls, and package actions on the right.
+    fn pkg_row(
+        &self,
+        cx: &mut Context<Self>,
+        r: &PkgRow,
+        manager: Option<&str>,
+        is_root: bool,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+
+        let mut left = h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .min_w(px(0.0))
+            .flex_1()
+            .overflow_hidden();
+        if let Some(active) = r.service {
             left = left.child(ui::status_dot(if active { t.pos } else { t.muted }));
         }
         left = left.child(
@@ -276,34 +510,132 @@ impl SoftwarePanel {
                 .overflow_hidden()
                 .text_size(t.fs_ui)
                 .text_color(t.ink_2)
-                .child(row.name.clone()),
+                .child(r.display.clone()),
         );
 
-        let mut r = h_flex()
-            .items_center()
-            .justify_between()
-            .gap(t.sp2)
-            .px(t.sp3)
-            .py(px(3.0))
-            .child(left);
-        if let Some(version) = &row.version {
-            r = r.child(
+        let mut right = h_flex().items_center().gap(px(2.0)).flex_none();
+        if let Some(version) = &r.version {
+            right = right.child(
                 div()
                     .flex_none()
+                    .mr(t.sp1)
                     .font_family(t.mono.clone())
                     .text_size(t.fs_sm)
                     .text_color(t.muted)
                     .child(version.clone()),
             );
         }
-        r
+
+        // Service controls (command-injection): contextual like the Docker
+        // panel — active services show restart + stop, stopped ones show start.
+        if let Some(unit) = &r.service_unit {
+            let active = r.service.unwrap_or(false);
+            if active {
+                right = right
+                    .child(self.copy_btn(
+                        cx,
+                        format!("{}-restart", r.name),
+                        "redo-2",
+                        t.info,
+                        data::systemctl_command("restart", unit, is_root),
+                    ))
+                    .child(self.copy_btn(
+                        cx,
+                        format!("{}-stop", r.name),
+                        "pause",
+                        t.warn,
+                        data::systemctl_command("stop", unit, is_root),
+                    ));
+            } else {
+                right = right.child(self.copy_btn(
+                    cx,
+                    format!("{}-start", r.name),
+                    "play",
+                    t.pos,
+                    data::systemctl_command("start", unit, is_root),
+                ));
+            }
+        }
+
+        // Package actions (install / update / uninstall), gated on a known
+        // manager so the copied command is always correct for the host.
+        if let Some(m) = manager {
+            if let Some(cmd) = data::pkg_command(m, PkgAction::Install, &r.pkgs, is_root) {
+                right = right.child(self.copy_btn(
+                    cx,
+                    format!("{}-install", r.name),
+                    "arrow-down",
+                    t.muted,
+                    cmd,
+                ));
+            }
+            if let Some(cmd) = data::pkg_command(m, PkgAction::Update, &r.pkgs, is_root) {
+                right = right.child(self.copy_btn(
+                    cx,
+                    format!("{}-update", r.name),
+                    "arrow-up",
+                    t.info,
+                    cmd,
+                ));
+            }
+            if let Some(cmd) = data::pkg_command(m, PkgAction::Uninstall, &r.pkgs, is_root) {
+                right = right.child(self.copy_btn(
+                    cx,
+                    format!("{}-remove", r.name),
+                    "delete",
+                    t.neg,
+                    cmd,
+                ));
+            }
+        }
+
+        h_flex()
+            .id(SharedString::from(format!("sw-row-{}", r.name)))
+            .items_center()
+            .justify_between()
+            .gap(t.sp2)
+            .px(t.sp3)
+            .py(px(3.0))
+            .hover(|s| s.bg(t.hover))
+            .child(left)
+            .child(right)
+    }
+
+    /// A 20×20 icon button that copies `cmd` to the clipboard on click.
+    fn copy_btn(
+        &self,
+        cx: &mut Context<Self>,
+        key: String,
+        glyph: &'static str,
+        color: Hsla,
+        cmd: String,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        div()
+            .id(SharedString::from(format!("sw-act-{key}")))
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(20.0))
+            .h(px(20.0))
+            .rounded(t.radius_sm)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                    this.copy_command(cmd.clone(), cx);
+                }),
+            )
+            .child(ui::icon(glyph, px(13.0), color))
     }
 }
 
 impl Render for SoftwarePanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme = cx.global::<Theme>().clone();
         let t = &self.theme;
+        let focused = self.focus.is_focused(window);
         let meta: SharedString = match &self.load {
             Load::Ready(d) => d.total.to_string().into(),
             _ => SharedString::default(),
@@ -312,7 +644,94 @@ impl Render for SoftwarePanel {
             .size_full()
             .child(ui::panel_header(t, "package", "SOFTWARE", meta))
             .child(self.selector(cx))
-            .child(self.body())
+            .child(self.body(focused, cx))
+    }
+}
+
+/// Resolve the service unit name for `descriptor` on `manager`.
+fn unit_for(d: &PackageDescriptor, manager: PackageManager) -> Option<String> {
+    d.service_units
+        .iter()
+        .find_map(|(m, u)| (*m == manager).then(|| u.to_string()))
+}
+
+/// Resolve the install package list for `descriptor` on `manager`.
+fn pkgs_for(d: &PackageDescriptor, manager: PackageManager) -> Option<Vec<String>> {
+    d.install_packages
+        .iter()
+        .find_map(|(m, ps)| (*m == manager).then(|| ps.iter().map(|s| s.to_string()).collect()))
+}
+
+/// Case-insensitive substring match of `q` (already lowercased) against a
+/// row's name, display label, or category id. Empty `q` matches everything.
+fn row_matches(r: &PkgRow, q: &str) -> bool {
+    if q.is_empty() {
+        return true;
+    }
+    r.name.to_lowercase().contains(q)
+        || r.display.to_lowercase().contains(q)
+        || r.category.contains(q)
+}
+
+/// Build a row from a registry descriptor id (the host's installed list was
+/// empty, so we fall back to the registry probe's detected set).
+fn row_for_descriptor(
+    id: &str,
+    version: Option<String>,
+    service: Option<bool>,
+    pm: Option<PackageManager>,
+) -> PkgRow {
+    let d = package_manager::descriptor(id);
+    let display = d
+        .map(|d| d.display_name.to_string())
+        .unwrap_or_else(|| id.to_string());
+    let category = d.map(|d| d.category).unwrap_or("");
+    let (service_unit, pkgs) = match (d, pm) {
+        (Some(d), Some(m)) => (
+            unit_for(d, m),
+            pkgs_for(d, m).unwrap_or_else(|| vec![id.to_string()]),
+        ),
+        _ => (None, vec![id.to_string()]),
+    };
+    PkgRow {
+        name: id.to_string(),
+        display,
+        category,
+        version,
+        service,
+        service_unit,
+        pkgs,
+    }
+}
+
+/// Build a row from a host-reported package name, joining the registry's
+/// version / service state / category / unit when Pier-X recognises it. The
+/// install/update/uninstall commands always target the actual installed
+/// package name.
+fn row_for_package(
+    name: &str,
+    versions: &HashMap<String, String>,
+    services: &HashMap<String, bool>,
+    pm: Option<PackageManager>,
+) -> PkgRow {
+    let id = pm.and_then(|m| package_manager::resolve_descriptor_for_package(name, m));
+    let d = id.and_then(package_manager::descriptor);
+    let display = d
+        .map(|d| d.display_name.to_string())
+        .unwrap_or_else(|| name.to_string());
+    let category = d.map(|d| d.category).unwrap_or("");
+    let service_unit = match (d, pm) {
+        (Some(d), Some(m)) => unit_for(d, m),
+        _ => None,
+    };
+    PkgRow {
+        name: name.to_string(),
+        display,
+        category,
+        version: id.and_then(|i| versions.get(i).cloned()),
+        service: id.and_then(|i| services.get(i).copied()),
+        service_unit,
+        pkgs: vec![name.to_string()],
     }
 }
 
@@ -348,11 +767,7 @@ fn collect(cfg: SshConfig) -> Result<SoftwareData, String> {
             if let Some(active) = p.service_active {
                 services.insert(p.id.clone(), active);
             }
-            detected.push(PkgRow {
-                name: p.id,
-                version: p.version,
-                service: p.service_active,
-            });
+            detected.push(row_for_descriptor(&p.id, p.version, p.service_active, pm));
         }
     }
 
@@ -363,14 +778,7 @@ fn collect(cfg: SshConfig) -> Result<SoftwareData, String> {
     } else {
         names
             .iter()
-            .map(|name| {
-                let id = pm.and_then(|m| package_manager::resolve_descriptor_for_package(name, m));
-                PkgRow {
-                    name: name.clone(),
-                    version: id.and_then(|i| versions.get(i).cloned()),
-                    service: id.and_then(|i| services.get(i).copied()),
-                }
-            })
+            .map(|name| row_for_package(name, &versions, &services, pm))
             .collect()
     };
 

@@ -354,3 +354,81 @@ fn rel_age(t: SystemTime) -> String {
         _ => format!("{}mo", secs / 2_592_000),
     }
 }
+
+// ── Software panel — clipboard command builders ──────────────────────
+//
+// The GPUI Software panel is command-injection only: it never runs a
+// privileged package-manager / systemctl command itself. Each row's action
+// button copies the exact shell command to the clipboard so the user can
+// paste it into a terminal. These helpers format those commands for the
+// host's detected package manager (the same per-manager mapping pier-core's
+// install/uninstall services use internally, in the plain user-typed form
+// rather than the non-interactive automation wrapping).
+
+/// A package lifecycle action whose command the Software panel copies to the
+/// clipboard.
+#[derive(Clone, Copy)]
+pub enum PkgAction {
+    Install,
+    Update,
+    Uninstall,
+}
+
+/// Format the paste-able package-manager command for `action` on `pkgs`,
+/// matching the host's detected manager id (`apt` / `dnf` / `yum` / `apk` /
+/// `pacman` / `zypper`). Prefixed with `sudo ` unless the remote session is
+/// root. Returns `None` for an unrecognised manager id or an empty package
+/// list.
+pub fn pkg_command(
+    manager: &str,
+    action: PkgAction,
+    pkgs: &[String],
+    is_root: bool,
+) -> Option<String> {
+    if pkgs.is_empty() {
+        return None;
+    }
+    let list = pkgs.join(" ");
+    let body = match manager {
+        "apt" => match action {
+            PkgAction::Install => format!("apt install {list}"),
+            PkgAction::Update => format!("apt install --only-upgrade {list}"),
+            PkgAction::Uninstall => format!("apt remove {list}"),
+        },
+        "dnf" => match action {
+            PkgAction::Install => format!("dnf install {list}"),
+            PkgAction::Update => format!("dnf upgrade {list}"),
+            PkgAction::Uninstall => format!("dnf remove {list}"),
+        },
+        "yum" => match action {
+            PkgAction::Install => format!("yum install {list}"),
+            PkgAction::Update => format!("yum update {list}"),
+            PkgAction::Uninstall => format!("yum remove {list}"),
+        },
+        "apk" => match action {
+            PkgAction::Install => format!("apk add {list}"),
+            PkgAction::Update => format!("apk add --upgrade {list}"),
+            PkgAction::Uninstall => format!("apk del {list}"),
+        },
+        "pacman" => match action {
+            PkgAction::Install => format!("pacman -S {list}"),
+            PkgAction::Update => format!("pacman -S {list}"),
+            PkgAction::Uninstall => format!("pacman -R {list}"),
+        },
+        "zypper" => match action {
+            PkgAction::Install => format!("zypper install {list}"),
+            PkgAction::Update => format!("zypper update {list}"),
+            PkgAction::Uninstall => format!("zypper remove {list}"),
+        },
+        _ => return None,
+    };
+    let prefix = if is_root { "" } else { "sudo " };
+    Some(format!("{prefix}{body}"))
+}
+
+/// Format the paste-able `systemctl <verb> <unit>` command, prefixed with
+/// `sudo ` unless the remote session is root.
+pub fn systemctl_command(verb: &str, unit: &str, is_root: bool) -> String {
+    let prefix = if is_root { "" } else { "sudo " };
+    format!("{prefix}systemctl {verb} {unit}")
+}

@@ -2400,6 +2400,59 @@ impl Shell {
         col.into_any_element()
     }
 
+    /// PROCESS / CPU% / MEM% header for a Monitor top-process table.
+    fn mon_proc_header(&self) -> impl IntoElement {
+        let t = &self.theme;
+        h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .px(t.sp3)
+            .pb(px(2.0))
+            .text_size(t.fs_sm)
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(t.muted)
+            .child(div().flex_1().child("PROCESS"))
+            .child(div().w(px(48.0)).flex_none().child("CPU%"))
+            .child(div().w(px(48.0)).flex_none().child("MEM%"))
+    }
+
+    /// One process row in a Monitor top-process table.
+    fn mon_proc_row(&self, p: &data::ProcInfo) -> impl IntoElement {
+        let t = &self.theme;
+        h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .px(t.sp3)
+            .py(px(2.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .text_size(t.fs_ui)
+                    .text_color(t.ink_2)
+                    .child(p.name.clone()),
+            )
+            .child(
+                div()
+                    .w(px(48.0))
+                    .flex_none()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.muted)
+                    .child(p.cpu.clone()),
+            )
+            .child(
+                div()
+                    .w(px(48.0))
+                    .flex_none()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.muted)
+                    .child(p.mem.clone()),
+            )
+    }
+
     // ── Monitor panel (real local metrics) ───────────────────────
     fn monitor_panel(&self) -> AnyElement {
         let t = &self.theme;
@@ -2454,6 +2507,40 @@ impl Shell {
             col = col.child(ui::info_row(t, "Load", format!("{l1:.2} {l5:.2} {l15:.2}")));
         }
         col = col.child(ui::info_row(t, "OS", m.os_label.clone()));
+
+        if !m.disks.is_empty() {
+            col = col.child(self.section_label("DISKS"));
+            for d in &m.disks {
+                col = col.child(ui::meter(
+                    t,
+                    d.mount.clone(),
+                    format!("{} / {}", d.used, d.total),
+                    d.use_pct,
+                ));
+            }
+        }
+
+        col = col
+            .child(self.section_label("NETWORK"))
+            .child(ui::info_row(t, "Download", fmt_rate(m.net_rx_bps)))
+            .child(ui::info_row(t, "Upload", fmt_rate(m.net_tx_bps)));
+
+        if !m.top_cpu.is_empty() {
+            col = col
+                .child(self.section_label("TOP BY CPU"))
+                .child(self.mon_proc_header());
+            for p in &m.top_cpu {
+                col = col.child(self.mon_proc_row(p));
+            }
+        }
+        if !m.top_mem.is_empty() {
+            col = col
+                .child(self.section_label("TOP BY MEMORY"))
+                .child(self.mon_proc_header());
+            for p in &m.top_mem {
+                col = col.child(self.mon_proc_row(p));
+            }
+        }
         col.into_any_element()
     }
 
@@ -3247,6 +3334,16 @@ impl Render for Shell {
                 d.child(self.tab_context_menu(cx))
             })
             .when(show_overlay, |d| d.child(self.overlay_layer(cx)))
+    }
+}
+
+/// Human-readable transfer rate; `—` while the sampler is warming up
+/// (the local probe returns a negative rate on its first tick).
+fn fmt_rate(bps: f64) -> String {
+    if bps < 0.0 {
+        "—".to_string()
+    } else {
+        format!("{}/s", human_size(bps as u64))
     }
 }
 

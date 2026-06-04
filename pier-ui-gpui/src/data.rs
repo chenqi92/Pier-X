@@ -235,6 +235,23 @@ pub fn git_status(path: &Path) -> Option<GitData> {
     })
 }
 
+/// One mounted filesystem's usage, for the Monitor disk table.
+pub struct DiskInfo {
+    pub mount: String,
+    /// Pre-humanized used / total (e.g. "12 GB").
+    pub used: String,
+    pub total: String,
+    pub use_pct: f64,
+}
+
+/// One process row for the Monitor top-process tables.
+pub struct ProcInfo {
+    pub name: String,
+    /// Pre-formatted percentages (e.g. "12.3").
+    pub cpu: String,
+    pub mem: String,
+}
+
 /// Live local-host metrics for the Monitor panel.
 pub struct MonStat {
     pub cpu_pct: f64,
@@ -248,17 +265,55 @@ pub struct MonStat {
     pub os_label: String,
     /// 1/5/15-minute load average, or None on platforms without it (Windows).
     pub load: Option<(f64, f64, f64)>,
+    /// Per-mount disk usage.
+    pub disks: Vec<DiskInfo>,
+    /// Aggregate network rate in bytes/sec; negative while warming up.
+    pub net_rx_bps: f64,
+    pub net_tx_bps: f64,
+    /// Top processes by CPU and by memory.
+    pub top_cpu: Vec<ProcInfo>,
+    pub top_mem: Vec<ProcInfo>,
 }
 
 /// Sample the local host once. Backed by `sysinfo`, so CPU/mem/uptime are
 /// real on every platform; load average is Unix-only.
 pub fn monitor_snapshot() -> MonStat {
-    let s = local_monitor::collect_snapshot(false);
+    let s = local_monitor::collect_snapshot(true);
     let load = if s.load_1 < 0.0 {
         None
     } else {
         Some((s.load_1, s.load_5, s.load_15))
     };
+    let disks = s
+        .disks
+        .iter()
+        .map(|d| DiskInfo {
+            mount: d.mountpoint.clone(),
+            used: d.used.clone(),
+            total: d.total.clone(),
+            use_pct: d.use_pct.max(0.0),
+        })
+        .collect();
+    let top_cpu = s
+        .top_processes
+        .iter()
+        .take(6)
+        .map(|p| ProcInfo {
+            name: p.command.clone(),
+            cpu: p.cpu_pct.clone(),
+            mem: p.mem_pct.clone(),
+        })
+        .collect();
+    let top_mem = s
+        .top_processes_mem
+        .iter()
+        .take(6)
+        .map(|p| ProcInfo {
+            name: p.command.clone(),
+            cpu: p.cpu_pct.clone(),
+            mem: p.mem_pct.clone(),
+        })
+        .collect();
     MonStat {
         cpu_pct: s.cpu_pct.max(0.0),
         cpu_count: s.cpu_count,
@@ -270,6 +325,11 @@ pub fn monitor_snapshot() -> MonStat {
         uptime: s.uptime,
         os_label: s.os_label,
         load,
+        disks,
+        net_rx_bps: s.net_rx_bps,
+        net_tx_bps: s.net_tx_bps,
+        top_cpu,
+        top_mem,
     }
 }
 

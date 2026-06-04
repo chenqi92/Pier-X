@@ -69,11 +69,16 @@ pub struct DockerPanel {
     logs_loading: bool,
     /// One-line failure from connect or listing, shown in `t.neg`.
     error: Option<String>,
+    /// Bumped per connect so a stale background result (from a host the user
+    /// has since switched away from) can't overwrite a newer selection.
+    generation: u64,
 }
 
 impl DockerPanel {
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self {
+            // Placeholder; Render reassigns this from cx.global::<Theme>() on
+            // the first (and every) frame, before anything is painted.
             theme: Theme::dark(),
             conns: data::connections_raw(),
             selected: None,
@@ -89,6 +94,7 @@ impl DockerPanel {
             logs_text: String::new(),
             logs_loading: false,
             error: None,
+            generation: 0,
         }
     }
 
@@ -113,6 +119,8 @@ impl DockerPanel {
         self.logs_for = None;
         self.logs_text.clear();
         self.logs_loading = false;
+        self.generation += 1;
+        let gen = self.generation;
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -126,6 +134,9 @@ impl DockerPanel {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.generation != gen {
+                    return; // a newer selection superseded this connect
+                }
                 this.connecting = false;
                 match result {
                     Ok((session, containers)) => {
@@ -188,6 +199,7 @@ impl DockerPanel {
         let Some(session) = self.session.clone() else {
             return;
         };
+        let gen = self.generation;
         cx.spawn(async move |this, cx| {
             let res = cx
                 .background_executor()
@@ -202,6 +214,9 @@ impl DockerPanel {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.generation != gen {
+                    return; // the session changed under us; drop this result
+                }
                 this.apply_container_list(res);
                 cx.notify();
             });
@@ -209,14 +224,18 @@ impl DockerPanel {
         .detach();
     }
 
-    /// Force-remove `id` (`docker rm -f`), then refresh the list. Triggered
-    /// from the inline confirm row, so the caller already confirmed intent.
+    /// Remove `id` (`docker rm -f`), then refresh the list. Triggered from the
+    /// inline confirm row, so the caller already confirmed intent. The trash
+    /// button that opens that row is only shown for stopped containers (see
+    /// [`Self::container_row`]), matching the web panel — so the force flag
+    /// only ever hard-removes an already-stopped container.
     fn remove_container(&mut self, id: String, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone() else {
             return;
         };
         self.confirm_remove = None;
         cx.notify();
+        let gen = self.generation;
         cx.spawn(async move |this, cx| {
             let res = cx
                 .background_executor()
@@ -226,6 +245,9 @@ impl DockerPanel {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.generation != gen {
+                    return; // the session changed under us; drop this result
+                }
                 this.apply_container_list(res);
                 cx.notify();
             });
@@ -326,12 +348,16 @@ impl DockerPanel {
         };
         self.images_loading = true;
         cx.notify();
+        let gen = self.generation;
         cx.spawn(async move |this, cx| {
             let res = cx
                 .background_executor()
                 .spawn(async move { list_images_blocking(&session).map_err(|e| e.to_string()) })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.generation != gen {
+                    return; // a newer selection superseded this fetch
+                }
                 this.images_loading = false;
                 match res {
                     Ok(list) => {
@@ -479,17 +505,19 @@ impl DockerPanel {
                         let id = c.id.clone();
                         move |this, cx| this.container_op(CtrOp::Start, id.clone(), cx)
                     }))
+                    // Remove is offered only for stopped containers, matching the
+                    // web panel; a running container must be stopped first.
+                    .child(self.icon_btn(cx, format!("dtrash-{}", c.id), "delete", t.neg, {
+                        let id = c.id.clone();
+                        move |this, cx| {
+                            this.confirm_remove = Some(id.clone());
+                            cx.notify();
+                        }
+                    }))
                 })
                 .child(self.icon_btn(cx, format!("dlog-{}", c.id), "scroll-text", logs_color, {
                     let id = c.id.clone();
                     move |this, cx| this.toggle_logs(id.clone(), cx)
-                }))
-                .child(self.icon_btn(cx, format!("dtrash-{}", c.id), "delete", t.neg, {
-                    let id = c.id.clone();
-                    move |this, cx| {
-                        this.confirm_remove = Some(id.clone());
-                        cx.notify();
-                    }
                 }))
             })
     }

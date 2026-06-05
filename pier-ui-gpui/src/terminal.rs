@@ -390,10 +390,106 @@ impl TerminalView {
         v_flex().children(rows)
     }
 
+    /// Extract the in-progress input line (from the OSC 133;B prompt-end to the
+    /// end of that row) and the prompt-end grid coord, when smart mode is active
+    /// and the shell is awaiting input. Single-row only (M2); wrapped input uses
+    /// the visible row. The line is read from the grid itself so it always
+    /// matches what the shell shows (history recall, paste, completion).
+    fn smart_line(&self, snap: &GridSnapshot) -> Option<(String, (u16, u16))> {
+        if !self.smart || !snap.awaiting_input {
+            return None;
+        }
+        let (pr, pc) = snap.prompt_end?;
+        let cols = snap.cols as usize;
+        let row = pr as usize;
+        let start_col = pc as usize;
+        if row >= snap.rows as usize || start_col >= cols {
+            return None;
+        }
+        let base = row * cols;
+        let mut line = String::new();
+        for c in start_col..cols {
+            line.push(glyph(snap.cells[base + c].ch));
+        }
+        Some((line.trim_end().to_string(), (pr, pc)))
+    }
+
+    /// Token fg colour + bold flag, mirroring the Tauri `terminal-syntax--*`
+    /// classes.
+    fn tok_style(&self, kind: TokKind) -> (Hsla, bool) {
+        let t = &self.theme;
+        match kind {
+            TokKind::Command => (t.accent, false),
+            TokKind::Opt => (t.info, false),
+            TokKind::Str => (t.pos, false),
+            TokKind::Path => (t.info, false),
+            TokKind::Var => (t.info, false),
+            TokKind::Operator => (t.warn, false),
+            TokKind::Redirect => (t.warn, true),
+            TokKind::Comment => (t.muted, false),
+            TokKind::Text | TokKind::Whitespace => (t.ink, false),
+        }
+    }
+
+    /// The smart-mode syntax + autosuggest overlay: a coloured copy of the input
+    /// line painted over the grid from the prompt-end cell, plus the history
+    /// ghost suffix. Returns `None` when there is nothing to draw.
+    fn smart_overlay(&self, snap: &GridSnapshot) -> Option<Div> {
+        let (line, (pr, pc)) = self.smart_line(snap)?;
+        let ghost = data::history_suggest(&line).unwrap_or_default();
+        if line.is_empty() && ghost.is_empty() {
+            return None;
+        }
+        let t = &self.theme;
+        let line_h = (f32::from(t.fs_body) * LINE_RATIO).round();
+        let pad = f32::from(t.sp3);
+        let mut row = div()
+            .absolute()
+            .top(px(pad + (pr as f32) * line_h))
+            .left(px(pad))
+            .h(px(line_h))
+            .line_height(px(line_h))
+            .flex()
+            .flex_row()
+            .font_family(t.mono.clone())
+            .text_size(t.fs_body);
+        // Spacer for the prompt cells before input — transparent so the real
+        // prompt underneath shows through. Token spans carry a bg matching the
+        // terminal so they cover (not double-print) the grid's plain echo.
+        if pc > 0 {
+            row = row.child(div().child(SharedString::from(" ".repeat(pc as usize))));
+        }
+        for (kind, text) in tokenize(&line) {
+            if matches!(kind, TokKind::Whitespace) {
+                row = row.child(div().child(SharedString::from(text)));
+                continue;
+            }
+            let (color, bold) = self.tok_style(kind);
+            let mut span = div().bg(t.bg).text_color(color).child(SharedString::from(text));
+            if bold {
+                span = span.font_weight(FontWeight::BOLD);
+            }
+            row = row.child(span);
+        }
+        if !ghost.is_empty() {
+            row = row.child(div().bg(t.bg).text_color(t.dim).child(SharedString::from(ghost)));
+        }
+        Some(row)
+    }
+
     fn on_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let bytes = keystroke_to_bytes(&ev.keystroke);
         if bytes.is_empty() {
             return;
+        }
+        // Smart mode: record the submitted command in the history ring on Enter,
+        // read from the grid before the newline scrolls it away.
+        if self.smart && ev.keystroke.key == "enter" {
+            if let Some(snap) = &self.snapshot {
+                if let Some((line, _)) = self.smart_line(snap) {
+                    data::history_push(&line);
+                }
+            }
         }
         if let Some(term) = &self.term {
             let _ = term.write(&bytes);
@@ -435,6 +531,12 @@ impl Render for TerminalView {
                 )
                 .into_any_element(),
         };
+        // Smart-mode syntax + autosuggest overlay, painted over the grid.
+        let overlay = self
+            .snapshot
+            .as_ref()
+            .filter(|_| self.error.is_none())
+            .and_then(|snap| self.smart_overlay(snap));
 
         div()
             .track_focus(&self.focus)
@@ -447,6 +549,7 @@ impl Render for TerminalView {
                     window.focus(&this.focus, cx);
                 }),
             )
+            .relative()
             .size_full()
             .min_h(px(0.0))
             .overflow_hidden()
@@ -457,6 +560,7 @@ impl Render for TerminalView {
             .line_height(px(line_h))
             .text_color(t.ink)
             .child(body)
+            .children(overlay)
     }
 }
 
@@ -542,4 +646,215 @@ fn keystroke_to_bytes(ks: &Keystroke) -> Vec<u8> {
         return ks.key.as_bytes().to_vec();
     }
     Vec::new()
+}
+
+/// Shell-input token flavour for the smart-mode syntax overlay. A subset of
+/// POSIX shell — enough to colour each character, not to evaluate the line.
+/// Ported 1:1 from the Tauri frontend's `shellLexer.ts`.
+#[derive(Clone, Copy, PartialEq)]
+enum TokKind {
+    Command,
+    Opt,
+    Str,
+    Path,
+    Var,
+    Operator,
+    Redirect,
+    Comment,
+    Whitespace,
+    Text,
+}
+
+/// Tokenise one line of shell input. Concatenating each token's text reproduces
+/// the input, so spans align cell-for-cell with the grid underneath.
+fn tokenize(input: &str) -> Vec<(TokKind, String)> {
+    let chars: Vec<char> = input.chars().collect();
+    let n = chars.len();
+    let mut out: Vec<(TokKind, String)> = Vec::new();
+    let slice = |a: usize, b: usize| -> String { chars[a..b].iter().collect() };
+    let mut cmd_pos = true;
+    let mut i = 0;
+    while i < n {
+        let ch = chars[i];
+        // Whitespace.
+        if ch == ' ' || ch == '\t' {
+            let s = i;
+            while i < n && (chars[i] == ' ' || chars[i] == '\t') {
+                i += 1;
+            }
+            out.push((TokKind::Whitespace, slice(s, i)));
+            continue;
+        }
+        // Comment (only at command position).
+        if ch == '#' && cmd_pos {
+            let s = i;
+            while i < n && chars[i] != '\n' {
+                i += 1;
+            }
+            out.push((TokKind::Comment, slice(s, i)));
+            continue;
+        }
+        // `|` / `||`.
+        if ch == '|' {
+            let s = i;
+            i += 1;
+            if i < n && chars[i] == '|' {
+                i += 1;
+            }
+            out.push((TokKind::Operator, slice(s, i)));
+            cmd_pos = true;
+            continue;
+        }
+        // `&` / `&&` / `&>` / `&>>`.
+        if ch == '&' {
+            let s = i;
+            i += 1;
+            if i < n && chars[i] == '&' {
+                i += 1;
+                out.push((TokKind::Operator, slice(s, i)));
+                cmd_pos = true;
+                continue;
+            }
+            if i < n && chars[i] == '>' {
+                i += 1;
+                if i < n && chars[i] == '>' {
+                    i += 1;
+                }
+                out.push((TokKind::Redirect, slice(s, i)));
+                continue;
+            }
+            out.push((TokKind::Operator, slice(s, i)));
+            cmd_pos = true;
+            continue;
+        }
+        if ch == ';' {
+            out.push((TokKind::Operator, ";".to_string()));
+            i += 1;
+            cmd_pos = true;
+            continue;
+        }
+        if ch == '\n' {
+            out.push((TokKind::Operator, "\n".to_string()));
+            i += 1;
+            cmd_pos = true;
+            continue;
+        }
+        // Redirects `>` `<` `>>` `<<`.
+        if ch == '>' || ch == '<' {
+            let s = i;
+            i += 1;
+            if i < n && chars[i] == ch {
+                i += 1;
+            }
+            out.push((TokKind::Redirect, slice(s, i)));
+            continue;
+        }
+        // `1>` `2>` `2>>` `2>&1`.
+        if (ch == '1' || ch == '2') && i + 1 < n && chars[i + 1] == '>' {
+            let s = i;
+            i += 2;
+            if i < n && chars[i] == '>' {
+                i += 1;
+            }
+            if i < n && chars[i] == '&' {
+                i += 1;
+                while i < n && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
+            }
+            out.push((TokKind::Redirect, slice(s, i)));
+            continue;
+        }
+        // Strings.
+        if ch == '"' || ch == '\'' {
+            let quote = ch;
+            let s = i;
+            i += 1;
+            while i < n && chars[i] != quote {
+                if quote == '"' && chars[i] == '\\' && i + 1 < n {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            if i < n {
+                i += 1;
+            }
+            out.push((TokKind::Str, slice(s, i)));
+            cmd_pos = false;
+            continue;
+        }
+        // Variables.
+        if ch == '$' {
+            let s = i;
+            i += 1;
+            if i < n && chars[i] == '{' {
+                i += 1;
+                while i < n && chars[i] != '}' {
+                    i += 1;
+                }
+                if i < n {
+                    i += 1;
+                }
+            } else if i < n && (chars[i].is_ascii_alphabetic() || chars[i] == '_') {
+                while i < n && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    i += 1;
+                }
+            } else if i < n && matches!(chars[i], '0'..='9' | '?' | '#' | '@' | '*' | '$' | '!' | '-') {
+                i += 1;
+            }
+            out.push((TokKind::Var, slice(s, i)));
+            cmd_pos = false;
+            continue;
+        }
+        // Word (command / option / path / generic argument).
+        let ws = i;
+        while i < n
+            && !matches!(
+                chars[i],
+                ' ' | '\t' | '\n' | '|' | '&' | ';' | '>' | '<' | '"' | '\'' | '$'
+            )
+        {
+            i += 1;
+        }
+        if i == ws {
+            out.push((TokKind::Text, chars[ws].to_string()));
+            i = ws + 1;
+            continue;
+        }
+        let text = slice(ws, i);
+        let kind = classify_word(&text, cmd_pos);
+        let is_opt = kind == TokKind::Opt;
+        out.push((kind, text));
+        if !is_opt {
+            cmd_pos = false;
+        }
+    }
+    out
+}
+
+/// Decide a word's flavour given whether it's at command position. Options keep
+/// command position so a following word is still an argument, not a command.
+fn classify_word(text: &str, cmd_pos: bool) -> TokKind {
+    if cmd_pos {
+        if text.starts_with('-') {
+            return TokKind::Opt;
+        }
+        return TokKind::Command;
+    }
+    if text.starts_with('-') {
+        if text == "-" {
+            return TokKind::Text;
+        }
+        return TokKind::Opt;
+    }
+    if text.starts_with('/')
+        || text.starts_with("./")
+        || text.starts_with("../")
+        || text.starts_with("~/")
+        || text == "~"
+    {
+        return TokKind::Path;
+    }
+    TokKind::Text
 }

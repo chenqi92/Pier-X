@@ -834,6 +834,41 @@ pub fn set_smart_mode(on: bool) {
     SMART_MODE.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Global smart-mode command-history ring (most-recent-first, deduped, capped).
+/// Cross-tab by design — a command typed in one terminal is suggestible in
+/// another, matching the Tauri frontend's global ring.
+static HISTORY_RING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+const HISTORY_CAP: usize = 500;
+
+/// Record a freshly-submitted command in the history ring.
+pub fn history_push(cmd: &str) {
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return;
+    }
+    if let Ok(mut ring) = HISTORY_RING.lock() {
+        if ring.first().map(String::as_str) == Some(cmd) {
+            return;
+        }
+        ring.retain(|c| c != cmd);
+        ring.insert(0, cmd.to_string());
+        ring.truncate(HISTORY_CAP);
+    }
+}
+
+/// The fish-style autosuggest suffix: the newest history entry that starts with
+/// `prefix` (and is strictly longer), with `prefix` stripped. `None` when the
+/// prefix is empty or nothing matches.
+pub fn history_suggest(prefix: &str) -> Option<String> {
+    if prefix.is_empty() {
+        return None;
+    }
+    let ring = HISTORY_RING.lock().ok()?;
+    ring.iter()
+        .find(|c| c.len() > prefix.len() && c.starts_with(prefix))
+        .map(|c| c[prefix.len()..].to_string())
+}
+
 impl Default for UiState {
     fn default() -> Self {
         Self {

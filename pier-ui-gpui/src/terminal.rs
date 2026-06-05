@@ -198,6 +198,14 @@ impl TerminalView {
                                         .write(&pier_core::terminal::smart::remote_init_payload());
                                 }
                                 this.term = Some(term);
+                                // Seed autosuggest from the remote host's own
+                                // shell history (background; pushes to the ring).
+                                if this.smart {
+                                    let s = session.clone();
+                                    cx.background_executor()
+                                        .spawn(async move { data::history_hydrate_remote(&s) })
+                                        .detach();
+                                }
                                 this.session = Some(session);
                                 this.status = None;
                                 this.dirty.store(true, Ordering::Release);
@@ -441,15 +449,21 @@ impl TerminalView {
         }
         let (pr, pc) = snap.prompt_end?;
         let cols = snap.cols as usize;
-        let row = pr as usize;
-        let start_col = pc as usize;
-        if row >= snap.rows as usize || start_col >= cols {
+        let rows = snap.rows as usize;
+        let start_row = pr as usize;
+        if start_row >= rows || pc as usize >= cols {
             return None;
         }
-        let base = row * cols;
+        // Read from the prompt-end across any wrapped rows to the bottom of the
+        // screen, then trim trailing blanks. At an active prompt everything
+        // below the input is empty, so what remains is the logical input line.
         let mut line = String::new();
-        for c in start_col..cols {
-            line.push(glyph(snap.cells[base + c].ch));
+        for r in start_row..rows {
+            let base = r * cols;
+            let from = if r == start_row { pc as usize } else { 0 };
+            for c in from..cols {
+                line.push(glyph(snap.cells[base + c].ch));
+            }
         }
         Some((line.trim_end().to_string(), (pr, pc)))
     }
@@ -526,29 +540,14 @@ impl TerminalView {
             return None;
         }
         let t = &self.theme;
+        let cols = snap.cols as usize;
         let line_h = (f32::from(t.fs_body) * LINE_RATIO).round();
         let pad = f32::from(t.sp3);
-        let mut row = div()
-            .absolute()
-            .top(px(pad + (pr as f32) * line_h))
-            .left(px(pad))
-            .h(px(line_h))
-            .line_height(px(line_h))
-            .flex()
-            .flex_row()
-            .font_family(t.mono.clone())
-            .text_size(t.fs_body);
-        // Spacer for the prompt cells before input — transparent so the real
-        // prompt underneath shows through. Token spans carry a bg matching the
-        // terminal so they cover (not double-print) the grid's plain echo.
-        if pc > 0 {
-            row = row.child(div().child(SharedString::from(" ".repeat(pc as usize))));
-        }
+
+        // Flatten the tokenised line + ghost suffix into per-char (colour, bold)
+        // so we can re-wrap them onto grid rows exactly where the shell wrapped.
+        let mut styled: Vec<(Hsla, bool, char)> = Vec::new();
         for (kind, text) in tokenize(&line) {
-            if matches!(kind, TokKind::Whitespace) {
-                row = row.child(div().child(SharedString::from(text)));
-                continue;
-            }
             // A command validated as not-found on the host reads as a typo.
             let missing =
                 matches!(kind, TokKind::Command) && self.cmd_valid.get(&text) == Some(&false);
@@ -557,16 +556,62 @@ impl TerminalView {
             } else {
                 self.tok_style(kind)
             };
-            let mut span = div().bg(t.bg).text_color(color).child(SharedString::from(text));
-            if bold {
-                span = span.font_weight(FontWeight::BOLD);
+            for ch in text.chars() {
+                styled.push((color, bold, ch));
             }
-            row = row.child(span);
         }
-        if !ghost.is_empty() {
-            row = row.child(div().bg(t.bg).text_color(t.dim).child(SharedString::from(ghost)));
+        for ch in ghost.chars() {
+            styled.push((t.dim, false, ch));
         }
-        Some(row)
+
+        // Lay out across rows: row 0 starts at the prompt-end column, wrapped
+        // rows at 0, breaking at `cols`. Adjacent same-style chars coalesce.
+        let mut rows_runs: Vec<Vec<(Hsla, bool, String)>> = vec![Vec::new()];
+        let mut col = pc as usize;
+        let mut ri = 0usize;
+        for (color, bold, ch) in styled {
+            if cols > 0 && col >= cols {
+                ri += 1;
+                col = 0;
+                rows_runs.push(Vec::new());
+            }
+            match rows_runs[ri].last_mut() {
+                Some((c, b, s)) if *c == color && *b == bold => s.push(ch),
+                _ => rows_runs[ri].push((color, bold, ch.to_string())),
+            }
+            col += 1;
+        }
+
+        // One stacked row per grid row, aligned by `line_h` from the prompt row.
+        let mut stack = div()
+            .absolute()
+            .top(px(pad + (pr as f32) * line_h))
+            .left(px(pad))
+            .flex()
+            .flex_col()
+            .font_family(t.mono.clone())
+            .text_size(t.fs_body);
+        for (idx, runs) in rows_runs.iter().enumerate() {
+            let mut row = div().h(px(line_h)).line_height(px(line_h)).flex().flex_row();
+            // Row 0 is offset by the prompt cells — a transparent spacer so the
+            // real prompt underneath shows through. Token spans carry the
+            // terminal bg so they cover (not double-print) the grid's echo.
+            if idx == 0 && pc > 0 {
+                row = row.child(div().child(SharedString::from(" ".repeat(pc as usize))));
+            }
+            for (color, bold, text) in runs {
+                let mut span = div()
+                    .bg(t.bg)
+                    .text_color(*color)
+                    .child(SharedString::from(text.clone()));
+                if *bold {
+                    span = span.font_weight(FontWeight::BOLD);
+                }
+                row = row.child(span);
+            }
+            stack = stack.child(row);
+        }
+        Some(stack)
     }
 
     /// Run Tab-completion for the current word: compute the line / cursor / word

@@ -869,6 +869,34 @@ pub fn history_suggest(prefix: &str) -> Option<String> {
         .map(|c| c[prefix.len()..].to_string())
 }
 
+/// Seed the history ring from the SSH host's own shell history so autosuggest
+/// reflects what the user actually runs on that host (the local shell is
+/// PowerShell, so local disk history wouldn't apply). Reads the last 500 lines
+/// of `~/.bash_history` / `~/.zsh_history`; sensitive lines are dropped. Blocking
+/// — call on the background executor.
+pub fn history_hydrate_remote(session: &SshSession) {
+    let cmd = "cat ~/.bash_history ~/.zsh_history 2>/dev/null | tail -n 500";
+    let Ok((_, out)) = session.exec_command_blocking(cmd) else {
+        return;
+    };
+    for line in out.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // zsh extended-history lines look like `: 1700000000:0;the command`.
+        let cmd_text = if line.starts_with(':') {
+            line.splitn(2, ';').nth(1).unwrap_or(line).trim()
+        } else {
+            line
+        };
+        if cmd_text.is_empty() || pier_core::terminal::history::is_sensitive(cmd_text) {
+            continue;
+        }
+        history_push(cmd_text);
+    }
+}
+
 /// Process-global bundled command library (subcommand / option descriptions),
 /// built once — `Library::bundled` parses the embedded packs.
 fn completion_library() -> &'static pier_core::terminal::library::Library {

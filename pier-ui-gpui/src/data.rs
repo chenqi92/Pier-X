@@ -877,40 +877,65 @@ fn completion_library() -> &'static pier_core::terminal::library::Library {
     LIB.get_or_init(pier_core::terminal::library::Library::bundled)
 }
 
+/// Lists a directory on the SSH host via `ls` so file completion in an SSH
+/// terminal queries the *remote* filesystem. Paths are normalised to POSIX
+/// because a Windows client's `PathBuf` join yields `\`.
+struct RemoteDirReader {
+    session: SshSession,
+}
+
+impl pier_core::terminal::completions::DirReader for RemoteDirReader {
+    fn list(&self, dir: &std::path::Path) -> Vec<pier_core::terminal::completions::DirReadEntry> {
+        let path = dir.to_string_lossy().replace('\\', "/");
+        // -1 one per line, -A dotfiles (no . / ..), -p trailing slash on dirs.
+        let cmd = format!("ls -1Ap -- '{}'", path.replace('\'', "'\\''"));
+        match self.session.exec_command_blocking(&cmd) {
+            Ok((0, out)) => out
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| pier_core::terminal::completions::DirReadEntry {
+                    name: l.trim_end_matches('/').to_string(),
+                    is_dir: l.ends_with('/'),
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
 /// Tab-completion candidates for `line` at byte offset `cursor`, using the
 /// shell's last-known `cwd` (OSC 7) for file completion and the bundled library
 /// for subcommand / option descriptions. `locale` selects the description
 /// language (e.g. "en" / "zh-CN").
 ///
-/// `remote` is set for SSH terminals: the completer reads the **local** PATH /
-/// filesystem, which is the wrong host, so remote completion is restricted to
-/// host-independent sources (shell builtins + library subcommands / options).
-/// Local-filesystem and remote-command completion is a follow-up.
+/// With a `session` (SSH terminal) file / directory rows come from the remote
+/// host via [`RemoteDirReader`]; command-position binaries still resolve against
+/// the **local** PATH (the completer's command branch isn't reader-driven), so
+/// those are dropped — the remaining builtin / subcommand / option / remote-file
+/// rows are valid for the remote shell.
 pub fn terminal_complete(
     line: &str,
     cursor: usize,
     cwd: Option<&str>,
     locale: &str,
-    remote: bool,
+    session: Option<SshSession>,
 ) -> Vec<pier_core::terminal::completions::Completion> {
     use pier_core::terminal::completions::CompletionKind;
     let cwd_path = cwd.map(std::path::Path::new);
-    let mut rows = pier_core::terminal::completions::complete_with_library(
-        line,
-        cursor,
-        cwd_path,
-        completion_library(),
-        locale,
-    );
-    if remote {
-        rows.retain(|r| {
-            matches!(
-                r.kind,
-                CompletionKind::Builtin | CompletionKind::Subcommand | CompletionKind::Option
-            )
-        });
+    let lib = completion_library();
+    match session {
+        Some(s) => {
+            let reader = RemoteDirReader { session: s };
+            let mut rows = pier_core::terminal::completions::complete_with_library_using(
+                line, cursor, cwd_path, lib, locale, &reader,
+            );
+            rows.retain(|r| !matches!(r.kind, CompletionKind::Binary));
+            rows
+        }
+        None => pier_core::terminal::completions::complete_with_library(
+            line, cursor, cwd_path, lib, locale,
+        ),
     }
-    rows
 }
 
 impl Default for UiState {

@@ -521,7 +521,9 @@ impl TerminalView {
         let word_start = word_start_of(&line, cursor_bytes);
         let prefix = line[word_start..cursor_bytes].to_string();
         let cwd = self.term.as_ref().and_then(|t| t.current_cwd());
-        let remote = self.session.is_some();
+        // Clone the SSH session (Arc) so remote file completion can `ls` the
+        // remote host on the background executor; `None` for local terminals.
+        let session = self.session.clone();
         let locale = if i18n::current().code() == "zh" {
             "zh-CN"
         } else {
@@ -533,7 +535,7 @@ impl TerminalView {
             let items = cx
                 .background_executor()
                 .spawn(async move {
-                    data::terminal_complete(&line, cursor_bytes, cwd.as_deref(), locale, remote)
+                    data::terminal_complete(&line, cursor_bytes, cwd.as_deref(), locale, session)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {

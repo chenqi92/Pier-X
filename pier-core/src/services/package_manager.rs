@@ -5692,30 +5692,53 @@ fn descriptor_service_unit(
 /// `version` is set. Pacman returns the unmodified list because Arch
 /// repos only carry the latest. Whitespace in the version string is
 /// stripped to keep the resulting shell argv clean.
+/// Render one package atom for splicing into the install command.
+/// Ordinary atoms (`nginx`, `nginx=1.2.3`, `nginx-1:2.3~deb`) are made
+/// of safe shell characters and pass through verbatim so the command
+/// preview stays readable. Anything carrying a shell metacharacter —
+/// e.g. a poisoned mirror version string `1.0; reboot` or a search
+/// hit `x$(curl evil)` — is single-quoted so it can't break out of
+/// the `sh -c` this string is spliced into and run as root
+/// (`wrap_sudo_sh` only quotes the OUTER `sh -c`, not the inner cmd).
+fn quote_pkg_atom(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | ':' | '=' | '~' | '-')
+        });
+    if safe {
+        s.to_string()
+    } else {
+        shell_single_quote(s)
+    }
+}
+
 fn format_packages_with_version(
     manager: PackageManager,
     packages: &[&str],
     version: Option<&str>,
 ) -> String {
+    let join_atoms = |items: Vec<String>| {
+        items
+            .iter()
+            .map(|s| quote_pkg_atom(s))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     let Some(v) = version else {
-        return packages.join(" ");
+        return join_atoms(packages.iter().map(|p| p.to_string()).collect());
     };
     let v = v.trim();
     if v.is_empty() {
-        return packages.join(" ");
+        return join_atoms(packages.iter().map(|p| p.to_string()).collect());
     }
     match manager {
-        PackageManager::Pacman => packages.join(" "),
-        PackageManager::Apt | PackageManager::Apk | PackageManager::Zypper => packages
-            .iter()
-            .map(|p| format!("{p}={v}"))
-            .collect::<Vec<_>>()
-            .join(" "),
-        PackageManager::Dnf | PackageManager::Yum => packages
-            .iter()
-            .map(|p| format!("{p}-{v}"))
-            .collect::<Vec<_>>()
-            .join(" "),
+        PackageManager::Pacman => join_atoms(packages.iter().map(|p| p.to_string()).collect()),
+        PackageManager::Apt | PackageManager::Apk | PackageManager::Zypper => {
+            join_atoms(packages.iter().map(|p| format!("{p}={v}")).collect())
+        }
+        PackageManager::Dnf | PackageManager::Yum => {
+            join_atoms(packages.iter().map(|p| format!("{p}-{v}")).collect())
+        }
     }
 }
 
@@ -6978,6 +7001,32 @@ mod tests {
             Some("7.0.4-1.1"),
         );
         assert!(cmd.contains("zypper --non-interactive install redis=7.0.4-1.1"));
+    }
+
+    #[test]
+    fn quote_pkg_atom_passes_safe_atoms_and_quotes_metachars() {
+        // Ordinary atoms stay verbatim so the preview is readable.
+        assert_eq!(quote_pkg_atom("nginx"), "nginx");
+        assert_eq!(quote_pkg_atom("nginx=1.2.3"), "nginx=1.2.3");
+        assert_eq!(quote_pkg_atom("redis-7.0.4-1.1"), "redis-7.0.4-1.1");
+        assert_eq!(quote_pkg_atom("php=1:2.3~deb"), "php=1:2.3~deb");
+        // A poisoned mirror "version" / search hit gets single-quoted
+        // so it can't break out of the inner `sh -c`.
+        assert_eq!(quote_pkg_atom("1.0; reboot"), "'1.0; reboot'");
+        assert_eq!(quote_pkg_atom("x$(curl evil)"), "'x$(curl evil)'");
+    }
+
+    #[test]
+    fn build_install_command_quotes_injection_version() {
+        let cmd = build_install_command(
+            PackageManager::Apt,
+            &["nginx"],
+            false,
+            Some("1.0; reboot"),
+        );
+        // The dangerous version must be single-quoted in the inner cmd.
+        assert!(cmd.contains("'nginx=1.0; reboot'"), "got: {cmd}");
+        assert!(!cmd.contains("nginx=1.0; reboot "), "unquoted leak: {cmd}");
     }
 
     #[test]

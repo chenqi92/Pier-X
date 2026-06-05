@@ -478,6 +478,34 @@ impl TerminalView {
     }
 
     fn on_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        // Smart mode: accept the history ghost with Right / End when the cursor
+        // is at the end of the line — fish-style. Writes the suffix to the PTY
+        // and consumes the key so it isn't also sent as a cursor move.
+        if self.smart
+            && !ev.keystroke.modifiers.control
+            && !ev.keystroke.modifiers.alt
+            && matches!(ev.keystroke.key.as_str(), "right" | "end")
+        {
+            if let Some(snap) = &self.snapshot {
+                if let Some((line, (pr, pc))) = self.smart_line(snap) {
+                    let at_end = snap.cursor_y == pr
+                        && snap.cursor_x as usize >= pc as usize + line.chars().count();
+                    if at_end {
+                        if let Some(ghost) = data::history_suggest(&line) {
+                            if !ghost.is_empty() {
+                                if let Some(term) = &self.term {
+                                    let _ = term.write(ghost.as_bytes());
+                                }
+                                self.dirty.store(true, Ordering::Release);
+                                cx.notify();
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let bytes = keystroke_to_bytes(&ev.keystroke);
         if bytes.is_empty() {
             return;

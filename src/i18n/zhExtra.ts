@@ -2833,4 +2833,19 @@ export const zhExtra: Record<string, string> = {
     "无法解析此命中的绝对路径 — 请先通过 SFTP 打开该文件。",
   "Results truncated at {n} hits — refine your query or scope.":
     "结果已截断至 {n} 条 — 请收紧查询或范围。",
+
+  // Git — discard confirm + whole-file conflict resolution
+  "Discard all working-tree changes to {file}? This overwrites the file with the last committed version and cannot be undone.":
+    "丢弃 {file} 的所有工作区改动？将用最近一次提交的版本覆盖该文件，且不可撤销。",
+  "Accept all ours": "全部采用本方",
+  "Accept all theirs": "全部采用对方",
+  "Accept all base": "全部采用基线",
+
+  // SFTP editor — non-UTF-8 (lossy) guard
+  "File contains non-UTF-8 bytes; saving would corrupt it. Download to edit instead.":
+    "文件含非 UTF-8 字节，保存会损坏它。请改用下载后编辑。",
+  "This file contains non-UTF-8 bytes (shown as U+FFFD). It is read-only — saving is disabled to avoid corrupting it. Download to edit.":
+    "该文件含非 UTF-8 字节（显示为 U+FFFD），为只读 —— 已禁用保存以免损坏。请下载后编辑。",
+  "File is not UTF-8 text and can't be duplicated in-place. Download and re-upload instead.":
+    "文件不是 UTF-8 文本，无法就地复制。请改用下载后再上传。",
 };

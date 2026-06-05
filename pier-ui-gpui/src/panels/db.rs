@@ -231,6 +231,60 @@ impl Engine {
             _ => String::new(),
         }
     }
+
+    /// A read-only command running `sql` and printing rows with NO header row,
+    /// using the engine's column separator. Used by the activity / foreign-key
+    /// metadata queries that parse their rows positionally.
+    fn headerless_command(self, db: &str, sql: &str) -> String {
+        // Activity / kill are server-wide and can run before a database is
+        // selected, so the db arg is omitted when empty (the engine connects to
+        // its default), rather than passing an invalid empty name.
+        match self {
+            Engine::Mysql if db.is_empty() => format!("mysql -N -B -e {} 2>&1", shq(sql)),
+            Engine::Mysql => format!("mysql -N -B -e {} {} 2>&1", shq(sql), shq(db)),
+            Engine::Postgres if db.is_empty() => format!(
+                "psql -w -At -F {} -v ON_ERROR_STOP=1 -c {} 2>&1",
+                shq("\u{1f}"),
+                shq(sql),
+            ),
+            Engine::Postgres => format!(
+                "psql -w -At -F {} -v ON_ERROR_STOP=1 -d {} -c {} 2>&1",
+                shq("\u{1f}"),
+                shq(db),
+                shq(sql),
+            ),
+            _ => String::new(),
+        }
+    }
+
+    /// Wrap `sql` in EXPLAIN (or EXPLAIN ANALYZE) and emit a command whose stdout
+    /// is the engine's plan *tree text*, with real newlines preserved.
+    fn explain_command(self, db: &str, sql: &str, analyze: bool) -> String {
+        match self {
+            // `--raw` stops `-B` escaping the embedded newlines in the single
+            // TREE cell; FORMAT=TREE needs MySQL 8.0.16+ (ANALYZE 8.0.18+) — an
+            // older server reports its own error, surfaced verbatim.
+            Engine::Mysql => {
+                let q = if analyze {
+                    format!("EXPLAIN ANALYZE {sql}")
+                } else {
+                    format!("EXPLAIN FORMAT=TREE {sql}")
+                };
+                format!("mysql -N -B --raw -e {} {} 2>&1", shq(&q), shq(db))
+            }
+            // Postgres' default text format is already an indented tree; `-At`
+            // prints one plan line per row.
+            Engine::Postgres => {
+                let q = if analyze {
+                    format!("EXPLAIN (ANALYZE, BUFFERS) {sql}")
+                } else {
+                    format!("EXPLAIN {sql}")
+                };
+                format!("psql -w -At -v ON_ERROR_STOP=1 -d {} -c {} 2>&1", shq(db), shq(&q))
+            }
+            _ => String::new(),
+        }
+    }
 }
 
 /// One column of the selected table, normalised across engines.
@@ -299,6 +353,48 @@ enum RowAct {
     Key,
 }
 
+/// A captured EXPLAIN / EXPLAIN ANALYZE plan, rendered as an indented mono tree
+/// above the result grid. The text is the engine's own tree output (MySQL
+/// `FORMAT=TREE`, Postgres' text plan, SQLite `EXPLAIN QUERY PLAN`).
+struct PlanView {
+    title: SharedString,
+    /// Raw plan text, one tree line per `\n`.
+    text: String,
+    elapsed_ms: u64,
+}
+
+/// One server session row for the activity (processlist) view.
+struct ProcRow {
+    id: String,
+    user: String,
+    host: String,
+    db: String,
+    /// MySQL `Command` / Postgres `state` — the session's current activity.
+    command: String,
+    time_s: i64,
+    /// MySQL `State` / Postgres `wait_event`.
+    state: String,
+    /// The running statement, if any.
+    info: String,
+}
+
+/// Which sessions the activity view shows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActFilter {
+    All,
+    Active,
+    Long,
+}
+
+/// A foreign key on the selected table, used to build clickable row-detail edges
+/// that drill into the referenced table. Multi-column keys AND their components.
+struct Fk {
+    columns: Vec<String>,
+    ref_schema: Option<String>,
+    ref_table: String,
+    ref_columns: Vec<String>,
+}
+
 pub struct DbPanel {
     theme: Theme,
     engine: Engine,
@@ -344,6 +440,20 @@ pub struct DbPanel {
     result: Option<Grid>,
     /// Index of the result row expanded inline as a key/value list.
     expanded_row: Option<usize>,
+    /// Captured EXPLAIN plan, shown above the result grid until dismissed.
+    plan: Option<PlanView>,
+    /// Foreign keys of the selected table (remote or SQLite), driving row-detail
+    /// drill-down edges. Empty when none apply.
+    fks: Vec<Fk>,
+
+    // Server activity (processlist). Server-wide, independent of selected_db.
+    /// `Some` while the activity view is open, hiding the table drill-down.
+    activity: Option<Vec<ProcRow>>,
+    activity_filter: ActFilter,
+    /// Session id armed for a connection-kill confirm — mirrors the web's
+    /// confirm on KILL CONNECTION / pg_terminate_backend (session management is
+    /// outside the read-only data guard, same as the Tauri panel).
+    kill_confirm: Option<String>,
 
     // Shared.
     busy: bool,
@@ -384,6 +494,11 @@ impl DbPanel {
             history: load_history(),
             result: None,
             expanded_row: None,
+            plan: None,
+            fks: Vec::new(),
+            activity: None,
+            activity_filter: ActFilter::All,
+            kill_confirm: None,
             busy: false,
             error: None,
             epoch: 0,
@@ -454,6 +569,8 @@ impl DbPanel {
         if sql.is_empty() {
             return;
         }
+        // A fresh result supersedes any plan shown above the grid.
+        self.plan = None;
         // Writes are anything the read classifier rejects. The read-only
         // default is never relaxed (PRODUCT-SPEC §5.5): a write needs the
         // toggle on, a single statement, and a "WRITE" confirmation, and the
@@ -619,6 +736,270 @@ impl DbPanel {
         .detach();
     }
 
+    /// Run EXPLAIN / EXPLAIN ANALYZE on the current query and show the engine's
+    /// plan tree above the result grid, without disturbing `self.result`.
+    fn run_explain(&mut self, analyze: bool, cx: &mut Context<Self>) {
+        let raw = self.query.trim().to_string();
+        if raw.is_empty() {
+            return;
+        }
+        let sql = strip_explain_prefix(&raw).to_string();
+        if !is_single_statement(&sql) {
+            self.error = Some(i18n::t("db.one_statement").to_string());
+            cx.notify();
+            return;
+        }
+        // EXPLAIN never executes; EXPLAIN ANALYZE *does*, so a write underneath
+        // it must clear the same read-only guard a normal run would, and re-lock
+        // after — the read-only default (PRODUCT-SPEC §5.5) is never relaxed.
+        let relock = analyze && !is_readonly_sql(&sql);
+        if relock {
+            if !self.write_unlocked {
+                self.error = Some(i18n::t("db.read_only_locked").to_string());
+                cx.notify();
+                return;
+            }
+            if !self.write_confirm.trim().eq_ignore_ascii_case("WRITE") {
+                self.error = Some(i18n::t("db.type_write_confirm").to_string());
+                cx.notify();
+                return;
+            }
+        }
+        match self.engine {
+            // SQLite uses EXPLAIN QUERY PLAN, which never executes the statement.
+            Engine::Sqlite => self.run_sqlite_explain(sql, cx),
+            Engine::Mysql | Engine::Postgres => self.run_remote_explain(sql, analyze, relock, cx),
+            Engine::Redis => {}
+        }
+    }
+
+    fn run_remote_explain(&mut self, sql: String, analyze: bool, relock: bool, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let Some(db) = self
+            .selected_db
+            .and_then(|d| self.databases.get(d))
+            .cloned()
+        else {
+            return;
+        };
+        let engine = self.engine;
+        let title = if analyze {
+            i18n::t("db.explain_analyze")
+        } else {
+            i18n::t("db.explain")
+        };
+        self.busy = true;
+        self.error = None;
+        self.epoch += 1;
+        let gen = self.epoch;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    let cmd = engine.explain_command(&db, &sql, analyze);
+                    let start = Instant::now();
+                    let (code, out) =
+                        session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
+                    let elapsed = start.elapsed().as_millis() as u64;
+                    if code != 0 {
+                        return Err(err_text(out, &i18n::t("db.err_query_failed")));
+                    }
+                    Ok::<(String, u64), String>((out.trim_end().to_string(), elapsed))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
+                this.busy = false;
+                match res {
+                    Ok((text, elapsed_ms)) => {
+                        // Re-lock after an EXPLAIN ANALYZE that executed a write.
+                        if relock {
+                            this.write_unlocked = false;
+                            this.write_confirm.clear();
+                        }
+                        this.plan = Some(PlanView {
+                            title,
+                            text,
+                            elapsed_ms,
+                        });
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn run_sqlite_explain(&mut self, sql: String, cx: &mut Context<Self>) {
+        let Some(path) = self.open_db.clone() else {
+            return;
+        };
+        let title = i18n::t("db.explain");
+        self.busy = true;
+        self.error = None;
+        self.epoch += 1;
+        let gen = self.epoch;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    match SqliteClient::open(&path) {
+                        Ok(c) => Ok(c.execute(&format!("EXPLAIN QUERY PLAN {sql}"))),
+                        Err(e) => Err(e.to_string()),
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
+                this.busy = false;
+                match res {
+                    Ok(r) => {
+                        if let Some(err) = r.error {
+                            this.error = Some(err);
+                        } else {
+                            this.plan = Some(PlanView {
+                                title,
+                                text: sqlite_plan_tree(&r.columns, &r.rows),
+                                elapsed_ms: r.elapsed_ms,
+                            });
+                        }
+                    }
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Open (or refresh) the server activity view — `SHOW FULL PROCESSLIST`
+    /// (MySQL) / `pg_stat_activity` (Postgres). Server-wide; needs only a live
+    /// session, not a selected database.
+    fn load_activity(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let engine = self.engine;
+        let db = self
+            .selected_db
+            .and_then(|d| self.databases.get(d))
+            .cloned()
+            .unwrap_or_default();
+        self.kill_confirm = None;
+        self.busy = true;
+        self.error = None;
+        self.epoch += 1;
+        let gen = self.epoch;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    let sql = match engine {
+                        Engine::Mysql => "SHOW FULL PROCESSLIST".to_string(),
+                        Engine::Postgres => PG_ACTIVITY_SQL.to_string(),
+                        _ => return Ok::<Vec<ProcRow>, String>(Vec::new()),
+                    };
+                    let cmd = engine.headerless_command(&db, &sql);
+                    let (code, out) =
+                        session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
+                    if code != 0 {
+                        return Err(err_text(out, &i18n::t("db.err_query_failed")));
+                    }
+                    Ok(parse_proc_rows(engine, &out))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
+                this.busy = false;
+                match res {
+                    Ok(rows) => this.activity = Some(rows),
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Cancel a running query (`terminate = false`) or drop a whole session
+    /// (`terminate = true`). Session management lives outside the read-only data
+    /// guard, matching the Tauri panel; the caller gates `terminate` behind a
+    /// confirm. `id` is validated as an integer before it reaches the command.
+    fn kill_proc(&mut self, id: String, terminate: bool, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let Ok(num) = id.trim().parse::<u64>() else {
+            return;
+        };
+        let engine = self.engine;
+        let db = self
+            .selected_db
+            .and_then(|d| self.databases.get(d))
+            .cloned()
+            .unwrap_or_default();
+        self.kill_confirm = None;
+        self.busy = true;
+        self.error = None;
+        self.epoch += 1;
+        let gen = self.epoch;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    let sql = match (engine, terminate) {
+                        (Engine::Mysql, false) => format!("KILL QUERY {num}"),
+                        (Engine::Mysql, true) => format!("KILL {num}"),
+                        (Engine::Postgres, false) => format!("SELECT pg_cancel_backend({num})"),
+                        (Engine::Postgres, true) => format!("SELECT pg_terminate_backend({num})"),
+                        _ => return Ok::<(), String>(()),
+                    };
+                    let cmd = engine.headerless_command(&db, &sql);
+                    let (code, out) =
+                        session.exec_command_blocking(&cmd).map_err(|e| e.to_string())?;
+                    if code != 0 {
+                        return Err(err_text(out, &i18n::t("db.err_query_failed")));
+                    }
+                    Ok(())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.epoch != gen {
+                    return;
+                }
+                this.busy = false;
+                match res {
+                    // Reload so the killed session drops out of the list.
+                    Ok(()) => this.load_activity(cx),
+                    Err(e) => {
+                        this.error = Some(e);
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Run a foreign-key drill-down: load `sql` into the console and execute it.
+    fn navigate_fk(&mut self, sql: String, cx: &mut Context<Self>) {
+        self.query = sql;
+        self.run_query(cx);
+    }
+
     // ── Actions (all blocking work happens on the background executor) ──
 
     /// Re-scan the working dir for SQLite files and reload saved connections.
@@ -646,6 +1027,10 @@ impl DbPanel {
         self.redis_detail = None;
         self.write_unlocked = false;
         self.write_confirm.clear();
+        self.activity = None;
+        self.kill_confirm = None;
+        self.plan = None;
+        self.fks.clear();
     }
 
     /// Open a SQLite file and list its tables.
@@ -656,6 +1041,8 @@ impl DbPanel {
         self.columns.clear();
         self.result = None;
         self.expanded_row = None;
+        self.plan = None;
+        self.fks.clear();
         self.error = None;
         // Switching files re-locks writes, same as reset_remote on engine
         // switch / reconnect: the read-only default (PRODUCT-SPEC §5.5) is never
@@ -702,6 +1089,8 @@ impl DbPanel {
         };
         self.selected_table = Some(idx);
         self.columns.clear();
+        self.fks.clear();
+        self.plan = None;
         self.error = None;
         self.busy = true;
         self.epoch += 1;
@@ -712,7 +1101,30 @@ impl DbPanel {
                 .background_executor()
                 .spawn(async move {
                     match SqliteClient::open(&path) {
-                        Ok(c) => c.table_columns(&table).map_err(|e| e.to_string()),
+                        Ok(c) => {
+                            let cols: Vec<Col> = c
+                                .table_columns(&table)
+                                .map_err(|e| e.to_string())?
+                                .into_iter()
+                                .map(|c| Col {
+                                    name: c.name,
+                                    ty: c.col_type,
+                                    key: if c.primary_key {
+                                        "PK".into()
+                                    } else if c.not_null {
+                                        "NN".into()
+                                    } else {
+                                        String::new()
+                                    },
+                                })
+                                .collect();
+                            let fk_q = format!(
+                                "PRAGMA foreign_key_list(\"{}\")",
+                                table.replace('"', "\"\"")
+                            );
+                            let fks = parse_sqlite_fks(&c.execute(&fk_q));
+                            Ok::<(Vec<Col>, Vec<Fk>), String>((cols, fks))
+                        }
                         Err(e) => Err(e.to_string()),
                     }
                 })
@@ -723,21 +1135,9 @@ impl DbPanel {
                 }
                 this.busy = false;
                 match res {
-                    Ok(cols) => {
-                        this.columns = cols
-                            .into_iter()
-                            .map(|c| Col {
-                                name: c.name,
-                                ty: c.col_type,
-                                key: if c.primary_key {
-                                    "PK".into()
-                                } else if c.not_null {
-                                    "NN".into()
-                                } else {
-                                    String::new()
-                                },
-                            })
-                            .collect();
+                    Ok((cols, fks)) => {
+                        this.columns = cols;
+                        this.fks = fks;
                     }
                     Err(e) => this.error = Some(e),
                 }
@@ -810,6 +1210,8 @@ impl DbPanel {
         self.r_tables.clear();
         self.r_selected_table = None;
         self.r_columns.clear();
+        self.fks.clear();
+        self.plan = None;
         self.redis_keys.clear();
         self.redis_keys_truncated = false;
         self.selected_key = None;
@@ -916,6 +1318,8 @@ impl DbPanel {
         let engine = self.engine;
         self.r_selected_table = Some(idx);
         self.r_columns.clear();
+        self.fks.clear();
+        self.plan = None;
         self.result = None;
         self.expanded_row = None;
         self.error = None;
@@ -947,7 +1351,14 @@ impl DbPanel {
                         return Err(err_text(pout, &i18n::t("db.err_preview")));
                     }
                     let grid = parse_grid(&pout, engine.sep(), elapsed);
-                    Ok::<(Vec<Col>, Grid), String>((columns, grid))
+                    // Foreign keys are best-effort: a metadata failure must not
+                    // sink the table preview, so any error yields no edges.
+                    let fk_cmd = engine.headerless_command(&db, &fk_sql(engine, &table));
+                    let fks = match session.exec_command_blocking(&fk_cmd) {
+                        Ok((0, fout)) => parse_fks(engine, &fout),
+                        _ => Vec::new(),
+                    };
+                    Ok::<(Vec<Col>, Grid, Vec<Fk>), String>((columns, grid, fks))
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -956,9 +1367,10 @@ impl DbPanel {
                 }
                 this.busy = false;
                 match res {
-                    Ok((cols, grid)) => {
+                    Ok((cols, grid, fks)) => {
                         this.r_columns = cols;
                         this.result = Some(grid);
+                        this.fks = fks;
                     }
                     Err(e) => this.error = Some(e),
                 }
@@ -1202,6 +1614,7 @@ impl DbPanel {
                 .child(ui::section_label(t, i18n::t("db.query_label")))
                 .child(self.query_console(cx))
                 .child(self.write_bar(cx))
+                .child(self.plan_view(cx))
                 .child(self.result_table(cx))
                 .child(self.history_section(cx));
         }
@@ -1262,6 +1675,16 @@ impl DbPanel {
                         ),
                 );
             }
+        }
+
+        // Server activity (processlist) — available once a MySQL / Postgres
+        // session is live; when open it replaces the table drill-down.
+        if self.session.is_some() && matches!(self.engine, Engine::Mysql | Engine::Postgres) {
+            col = col.child(self.activity_button(cx));
+        }
+        if let Some(rows) = &self.activity {
+            col = col.child(self.activity_view(cx, rows));
+            return col.into_any_element();
         }
 
         if self.session.is_some() {
@@ -1333,6 +1756,7 @@ impl DbPanel {
                     .child(ui::section_label(t, i18n::t("db.query_label")))
                     .child(self.query_console(cx))
                     .child(self.write_bar(cx))
+                    .child(self.plan_view(cx))
                     .child(self.result_table(cx))
                     .child(self.history_section(cx));
             }
@@ -1473,6 +1897,44 @@ impl DbPanel {
                     .when(empty, |d| d.text_color(t.dim).child(i18n::t("db.select_readonly_ph")))
                     .when(!empty, |d| d.text_color(t.ink).child(self.query.clone())),
             )
+            .child(
+                div()
+                    .id("sql-explain")
+                    .px(t.sp2)
+                    .py(px(5.0))
+                    .rounded(t.radius_sm)
+                    .bg(t.panel_2)
+                    .text_color(t.ink_2)
+                    .text_size(t.fs_ui)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.elev))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _w, cx| this.run_explain(false, cx)),
+                    )
+                    .child(i18n::t("db.explain")),
+            )
+            .when(self.engine != Engine::Sqlite, |row| {
+                row.child(
+                    div()
+                        .id("sql-analyze")
+                        .px(t.sp2)
+                        .py(px(5.0))
+                        .rounded(t.radius_sm)
+                        .bg(t.panel_2)
+                        .text_color(t.ink_2)
+                        .text_size(t.fs_ui)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(t.elev))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, _w, cx| {
+                                this.run_explain(true, cx)
+                            }),
+                        )
+                        .child(i18n::t("db.explain_analyze_short")),
+                )
+            })
             .child(
                 div()
                     .id("sql-run")
@@ -1682,6 +2144,438 @@ impl DbPanel {
 
     /// Render the last query / preview result as a scrollable table (capped at
     /// 200 rows). Clicking a row expands its columns inline as key/value pairs.
+    /// The EXPLAIN plan tree, shown above the result grid until dismissed.
+    fn plan_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = &self.theme;
+        let Some(p) = &self.plan else {
+            return div().into_any_element();
+        };
+        let mut body = v_flex()
+            .id("db-plan")
+            .mx(t.sp3)
+            .my(t.sp2)
+            .p(t.sp2)
+            .gap(px(1.0))
+            .rounded(t.radius_sm)
+            .bg(t.panel_2)
+            .border_1()
+            .border_color(t.line_2)
+            .overflow_x_scroll();
+        if p.text.is_empty() {
+            body = body.child(hint(t, i18n::t("db.plan_empty")));
+        } else {
+            for line in p.text.lines() {
+                body = body.child(
+                    div()
+                        .font_family(t.mono.clone())
+                        .text_size(t.fs_sm)
+                        .text_color(t.ink_2)
+                        .child(line.replace('\t', "    ")),
+                );
+            }
+        }
+        v_flex()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(t.sp1)
+                    .pr(t.sp3)
+                    .child(ui::section_label(
+                        t,
+                        i18n::tf("db.plan_meta", &[&p.title, &p.elapsed_ms.to_string()]),
+                    ))
+                    .child(div().flex_1())
+                    .child(
+                        h_flex()
+                            .id("db-plan-close")
+                            .items_center()
+                            .gap(t.sp1)
+                            .px(t.sp2)
+                            .py(px(2.0))
+                            .rounded(t.radius_sm)
+                            .text_size(t.fs_ui)
+                            .text_color(t.ink_2)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(t.elev))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseDownEvent, _w, cx| {
+                                    this.plan = None;
+                                    cx.notify();
+                                }),
+                            )
+                            .child(ui::icon("close", px(11.0), t.muted))
+                            .child(i18n::t("common.close")),
+                    ),
+            )
+            .child(body)
+            .into_any_element()
+    }
+
+    /// The "Server activity" launcher row (MySQL / Postgres, when connected).
+    fn activity_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        h_flex().px(t.sp3).py(t.sp1).child(
+            h_flex()
+                .id("db-activity-open")
+                .items_center()
+                .gap(t.sp1)
+                .px(t.sp2)
+                .py(px(3.0))
+                .rounded(t.radius_sm)
+                .bg(t.panel_2)
+                .text_size(t.fs_ui)
+                .text_color(t.ink_2)
+                .cursor_pointer()
+                .hover(|s| s.bg(t.elev))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _w, cx| this.load_activity(cx)),
+                )
+                .child(ui::icon("activity", px(12.0), t.muted))
+                .child(i18n::t("db.activity")),
+        )
+    }
+
+    /// One activity-view filter chip.
+    fn act_chip(
+        &self,
+        cx: &mut Context<Self>,
+        key: &'static str,
+        f: ActFilter,
+        id: &'static str,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        let active = self.activity_filter == f;
+        div()
+            .id(id)
+            .px(t.sp2)
+            .py(px(2.0))
+            .rounded(t.radius_sm)
+            .text_size(t.fs_ui)
+            .cursor_pointer()
+            .when(active, |d| d.bg(t.accent_dim).text_color(t.accent))
+            .when(!active, |d| d.text_color(t.ink_2).hover(|s| s.bg(t.elev)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                    this.activity_filter = f;
+                    cx.notify();
+                }),
+            )
+            .child(i18n::t(key))
+    }
+
+    /// The server activity (processlist) view: filter chips, refresh / close,
+    /// and one card per session with cancel / terminate controls.
+    fn activity_view(&self, cx: &mut Context<Self>, rows: &[ProcRow]) -> AnyElement {
+        let t = &self.theme;
+        let filter = self.activity_filter;
+        let visible: Vec<&ProcRow> = rows
+            .iter()
+            .filter(|r| match filter {
+                ActFilter::All => true,
+                ActFilter::Active => {
+                    let c = r.command.to_ascii_lowercase();
+                    c != "sleep" && c != "idle" && !c.starts_with("binlog dump")
+                }
+                ActFilter::Long => r.time_s >= 5,
+            })
+            .collect();
+
+        let header = h_flex()
+            .items_center()
+            .gap(t.sp1)
+            .px(t.sp3)
+            .py(t.sp1)
+            .child(ui::icon("activity", px(13.0), t.accent))
+            .child(
+                div()
+                    .text_size(t.fs_ui)
+                    .text_color(t.ink)
+                    .child(i18n::t("db.activity_title")),
+            )
+            .child(
+                div()
+                    .text_size(t.fs_sm)
+                    .text_color(t.muted)
+                    .child(i18n::tf("db.act_count", &[&visible.len().to_string()])),
+            )
+            .child(div().flex_1())
+            .child(self.act_chip(cx, "db.act_all", ActFilter::All, "act-f-all"))
+            .child(self.act_chip(cx, "db.act_active", ActFilter::Active, "act-f-active"))
+            .child(self.act_chip(cx, "db.act_long", ActFilter::Long, "act-f-long"))
+            .child(
+                div()
+                    .id("act-refresh")
+                    .px(t.sp2)
+                    .py(px(2.0))
+                    .rounded(t.radius_sm)
+                    .text_size(t.fs_ui)
+                    .text_color(t.ink_2)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.elev))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _w, cx| this.load_activity(cx)),
+                    )
+                    .child(i18n::t("common.refresh")),
+            )
+            .child(
+                div()
+                    .id("act-close")
+                    .px(t.sp2)
+                    .py(px(2.0))
+                    .rounded(t.radius_sm)
+                    .text_size(t.fs_ui)
+                    .text_color(t.ink_2)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.elev))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _w, cx| {
+                            this.activity = None;
+                            this.kill_confirm = None;
+                            cx.notify();
+                        }),
+                    )
+                    .child(i18n::t("common.close")),
+            );
+
+        let mut col = v_flex().child(header);
+        if visible.is_empty() {
+            col = col.child(hint(t, i18n::t("db.act_none")));
+        }
+        for r in &visible {
+            col = col.child(self.activity_card(cx, r));
+        }
+        col.into_any_element()
+    }
+
+    /// One session card in the activity view.
+    fn activity_card(&self, cx: &mut Context<Self>, r: &ProcRow) -> impl IntoElement {
+        let t = &self.theme;
+        let dur = r.time_s;
+        let dur_color = if dur >= 60 {
+            t.neg
+        } else if dur >= 5 {
+            t.warn
+        } else {
+            t.muted
+        };
+        let armed = self.kill_confirm.as_deref() == Some(r.id.as_str());
+        let id_cancel = r.id.clone();
+        let id_term = r.id.clone();
+        let id_arm = r.id.clone();
+
+        let mut head = h_flex()
+            .items_center()
+            .gap(t.sp2)
+            .child(
+                div()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.accent)
+                    .child(format!("#{}", r.id)),
+            )
+            .child(
+                div()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.ink)
+                    .child(if r.command.is_empty() {
+                        "—".to_string()
+                    } else {
+                        r.command.clone()
+                    }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .text_size(t.fs_sm)
+                    .text_color(t.muted)
+                    .child(format!("{}@{}", r.user, r.host)),
+            );
+        if !r.db.is_empty() {
+            head = head.child(div().text_size(t.fs_sm).text_color(t.dim).child(r.db.clone()));
+        }
+        head = head.child(
+            div()
+                .font_family(t.mono.clone())
+                .text_size(t.fs_sm)
+                .text_color(dur_color)
+                .child(format!("{dur}s")),
+        );
+        if !r.state.is_empty() {
+            head = head.child(div().text_size(t.fs_sm).text_color(t.dim).child(r.state.clone()));
+        }
+        // Cancel (KILL QUERY / pg_cancel_backend) — direct, matching the web.
+        head = head
+            .child(
+                div()
+                    .id(SharedString::from(format!("act-cancel-{}", r.id)))
+                    .px(t.sp2)
+                    .py(px(2.0))
+                    .rounded(t.radius_sm)
+                    .bg(t.panel)
+                    .text_size(t.fs_ui)
+                    .text_color(t.ink_2)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.elev))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                            this.kill_proc(id_cancel.clone(), false, cx)
+                        }),
+                    )
+                    .child(i18n::t("db.kill_cancel")),
+            )
+            // Terminate (KILL / pg_terminate_backend) — two-step confirm.
+            .child(if armed {
+                div()
+                    .id(SharedString::from(format!("act-term-{}", r.id)))
+                    .px(t.sp2)
+                    .py(px(2.0))
+                    .rounded(t.radius_sm)
+                    .bg(t.neg)
+                    .text_size(t.fs_ui)
+                    .text_color(t.accent_ink)
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                            this.kill_proc(id_term.clone(), true, cx)
+                        }),
+                    )
+                    .child(i18n::t("db.kill_confirm_btn"))
+            } else {
+                div()
+                    .id(SharedString::from(format!("act-term-{}", r.id)))
+                    .px(t.sp2)
+                    .py(px(2.0))
+                    .rounded(t.radius_sm)
+                    .text_size(t.fs_ui)
+                    .text_color(t.neg)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.elev))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                            this.kill_confirm = Some(id_arm.clone());
+                            cx.notify();
+                        }),
+                    )
+                    .child(i18n::t("db.kill_terminate"))
+            });
+
+        let mut card = v_flex()
+            .gap(px(2.0))
+            .mx(t.sp3)
+            .my(px(2.0))
+            .p(t.sp2)
+            .rounded(t.radius_sm)
+            .bg(t.panel_2)
+            .border_1()
+            .border_color(t.line_2)
+            .child(head);
+        if !r.info.is_empty() {
+            card = card.child(
+                div()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.ink_2)
+                    .overflow_hidden()
+                    .child(r.info.clone()),
+            );
+        }
+        card
+    }
+
+    /// Clickable foreign-key drill-down rows for the expanded result row,
+    /// matching `self.fks` against the result columns by name.
+    fn fk_edges(&self, cx: &mut Context<Self>, columns: &[String], row: &[String]) -> Vec<AnyElement> {
+        let t = &self.theme;
+        let engine = self.engine;
+        let mut out: Vec<AnyElement> = Vec::new();
+        for fk in &self.fks {
+            if fk.columns.is_empty() || fk.columns.len() != fk.ref_columns.len() {
+                continue;
+            }
+            let mut vals: Vec<String> = Vec::new();
+            let mut ok = true;
+            for c in &fk.columns {
+                match columns.iter().position(|x| x == c) {
+                    Some(i) => vals.push(row.get(i).cloned().unwrap_or_default()),
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if !ok || vals.iter().all(|v| v.is_empty()) {
+                continue;
+            }
+            let table_ref = match (&fk.ref_schema, engine) {
+                (Some(s), Engine::Postgres) => {
+                    format!("{}.{}", engine.ident(s), engine.ident(&fk.ref_table))
+                }
+                _ => engine.ident(&fk.ref_table),
+            };
+            let where_clause = fk
+                .ref_columns
+                .iter()
+                .zip(vals.iter())
+                .map(|(c, v)| {
+                    let lit = if v.is_empty() {
+                        "NULL".to_string()
+                    } else {
+                        sql_lit(v)
+                    };
+                    format!("{} = {}", engine.ident(c), lit)
+                })
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            let sql = format!("SELECT * FROM {table_ref} WHERE {where_clause} LIMIT 50");
+            let summary = fk
+                .columns
+                .iter()
+                .zip(vals.iter())
+                .map(|(c, v)| format!("{}={}", c, if v.is_empty() { "NULL" } else { v }))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let label = i18n::tf("db.fk_label", &[&fk.ref_table, &summary]);
+            out.push(
+                h_flex()
+                    .id(SharedString::from(format!("fk-{}", out.len())))
+                    .items_center()
+                    .gap(t.sp2)
+                    .px(t.sp2)
+                    .py(px(2.0))
+                    .rounded(t.radius_sm)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.hover))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                            this.navigate_fk(sql.clone(), cx)
+                        }),
+                    )
+                    .child(ui::icon("external-link", px(12.0), t.accent))
+                    .child(
+                        div()
+                            .font_family(t.mono.clone())
+                            .text_size(t.fs_sm)
+                            .text_color(t.accent)
+                            .child(label),
+                    )
+                    .into_any_element(),
+            );
+        }
+        out
+    }
+
     fn result_table(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = &self.theme;
         let Some(r) = &self.result else {
@@ -1765,7 +2659,22 @@ impl DbPanel {
         let detail: Option<AnyElement> = self
             .expanded_row
             .and_then(|i| r.rows.get(i))
-            .map(|row| row_detail(t, &r.columns, row).into_any_element());
+            .map(|row| {
+                let edges = self.fk_edges(cx, &r.columns, row);
+                let base = row_detail(t, &r.columns, row);
+                if edges.is_empty() {
+                    base.into_any_element()
+                } else {
+                    let mut fkbox = v_flex()
+                        .mx(t.sp3)
+                        .mb(t.sp2)
+                        .child(ui::section_label(t, i18n::t("db.foreign_keys")));
+                    for e in edges {
+                        fkbox = fkbox.child(e);
+                    }
+                    v_flex().child(base).child(fkbox).into_any_element()
+                }
+            });
         v_flex()
             .child(
                 h_flex()
@@ -1975,6 +2884,217 @@ fn is_readonly_sql(sql: &str) -> bool {
         head.as_str(),
         "SELECT" | "WITH" | "PRAGMA" | "EXPLAIN" | "SHOW" | "DESCRIBE" | "DESC"
     )
+}
+
+/// Strip a leading `EXPLAIN` / `EXPLAIN ANALYZE` / `EXPLAIN (...)` the user may
+/// have typed, so the panel's own EXPLAIN wrapper never double-wraps.
+fn strip_explain_prefix(sql: &str) -> &str {
+    let s = sql.trim();
+    if s.get(..7).map(|p| p.eq_ignore_ascii_case("explain")) != Some(true) {
+        return s;
+    }
+    let after = &s[7..];
+    let rest = after.trim_start();
+    // Must be the keyword: followed by whitespace or an options group.
+    if !after.starts_with(char::is_whitespace) && !rest.starts_with('(') {
+        return s;
+    }
+    // Drop an optional ANALYZE …
+    if rest.get(..7).map(|p| p.eq_ignore_ascii_case("analyze")) == Some(true) {
+        let a = &rest[7..];
+        if a.starts_with(char::is_whitespace) {
+            return a.trim_start();
+        }
+    }
+    // … or an optional (…) options group.
+    if let Some(stripped) = rest.strip_prefix('(') {
+        if let Some(close) = stripped.find(')') {
+            return stripped[close + 1..].trim_start();
+        }
+    }
+    rest
+}
+
+/// Render `EXPLAIN QUERY PLAN` output (columns id, parent, notused, detail) as
+/// an indented tree by walking each node's parent chain to the root.
+fn sqlite_plan_tree(columns: &[String], rows: &[Vec<String>]) -> String {
+    let detail_idx = columns.len().saturating_sub(1);
+    let mut out = String::new();
+    for row in rows {
+        let detail = row.get(detail_idx).map(String::as_str).unwrap_or("");
+        let depth = if columns.len() >= 4 {
+            let mut d = 0usize;
+            let mut parent = row.get(1).and_then(|p| p.parse::<i64>().ok()).unwrap_or(0);
+            let mut guard = 0;
+            while parent != 0 && guard < 32 {
+                d += 1;
+                let next = rows
+                    .iter()
+                    .find(|r| r.first().and_then(|i| i.parse::<i64>().ok()) == Some(parent));
+                match next.and_then(|r| r.get(1)).and_then(|p| p.parse::<i64>().ok()) {
+                    Some(p) => parent = p,
+                    None => break,
+                }
+                guard += 1;
+            }
+            d
+        } else {
+            0
+        };
+        out.push_str(&"  ".repeat(depth));
+        out.push_str(detail);
+        out.push('\n');
+    }
+    out.trim_end().to_string()
+}
+
+/// Postgres' activity query — column order pinned to match `parse_proc_rows`
+/// (pid, user, host, db, state, secs, wait, query). Whitespace in the query
+/// text is collapsed so each backend stays on one output line.
+const PG_ACTIVITY_SQL: &str = "SELECT pid, \
+coalesce(usename,''), \
+coalesce(host(client_addr),''), \
+coalesce(datname,''), \
+coalesce(state,''), \
+coalesce(extract(epoch from (now()-query_start))::int, 0), \
+coalesce(wait_event,''), \
+regexp_replace(coalesce(query,''), '\\s+', ' ', 'g') \
+FROM pg_stat_activity WHERE pid <> pg_backend_pid() ORDER BY 6 DESC NULLS LAST";
+
+/// Parse `SHOW FULL PROCESSLIST` / `pg_stat_activity` rows (no header) into
+/// positional [`ProcRow`]s. Both engines emit the same column order.
+fn parse_proc_rows(engine: Engine, out: &str) -> Vec<ProcRow> {
+    let sep = engine.sep();
+    out.lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            let p: Vec<&str> = l.split(sep).collect();
+            let g = |i: usize| p.get(i).copied().unwrap_or("").trim().to_string();
+            // MySQL prints SQL NULL as the literal "NULL"; treat it as blank.
+            let gz = |i: usize| {
+                let v = g(i);
+                if v == "NULL" {
+                    String::new()
+                } else {
+                    v
+                }
+            };
+            ProcRow {
+                id: g(0),
+                user: gz(1),
+                host: gz(2),
+                db: gz(3),
+                command: g(4),
+                time_s: g(5).parse().unwrap_or(0),
+                state: gz(6),
+                info: gz(7),
+            }
+        })
+        .collect()
+}
+
+/// The foreign-key metadata query for `table` (MySQL / Postgres). The first
+/// column is the constraint name so [`parse_fks`] can group composite keys.
+fn fk_sql(engine: Engine, table: &str) -> String {
+    match engine {
+        Engine::Mysql => format!(
+            "SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME \
+             FROM information_schema.KEY_COLUMN_USAGE \
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = {} \
+             AND REFERENCED_TABLE_NAME IS NOT NULL \
+             ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION",
+            sql_lit(table)
+        ),
+        Engine::Postgres => format!(
+            "SELECT tc.constraint_name, kcu.column_name, ccu.table_name, ccu.column_name, \
+             ccu.table_schema \
+             FROM information_schema.table_constraints tc \
+             JOIN information_schema.key_column_usage kcu \
+               ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema \
+             JOIN information_schema.constraint_column_usage ccu \
+               ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema \
+             WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public' \
+               AND tc.table_name = {} \
+             ORDER BY tc.constraint_name",
+            sql_lit(table)
+        ),
+        _ => String::new(),
+    }
+}
+
+/// Group FK metadata rows ([constraint, column, ref_table, ref_col, ref_schema?])
+/// by constraint name so composite keys become a single multi-column [`Fk`].
+fn parse_fks(engine: Engine, out: &str) -> Vec<Fk> {
+    let sep = engine.sep();
+    let mut fks: Vec<Fk> = Vec::new();
+    let mut cur: Option<String> = None;
+    for l in out.lines().filter(|l| !l.is_empty()) {
+        let p: Vec<&str> = l.split(sep).collect();
+        let name = p.first().copied().unwrap_or("").to_string();
+        let col = p.get(1).copied().unwrap_or("").to_string();
+        let ref_table = p.get(2).copied().unwrap_or("").to_string();
+        let ref_col = p.get(3).copied().unwrap_or("").to_string();
+        if col.is_empty() || ref_table.is_empty() {
+            continue;
+        }
+        let ref_schema = if matches!(engine, Engine::Postgres) {
+            p.get(4).map(|s| s.to_string()).filter(|s| !s.is_empty())
+        } else {
+            None
+        };
+        if cur.as_deref() == Some(name.as_str()) {
+            if let Some(last) = fks.last_mut() {
+                last.columns.push(col);
+                last.ref_columns.push(ref_col);
+                continue;
+            }
+        }
+        cur = Some(name);
+        fks.push(Fk {
+            columns: vec![col],
+            ref_schema,
+            ref_table,
+            ref_columns: vec![ref_col],
+        });
+    }
+    fks
+}
+
+/// Parse `PRAGMA foreign_key_list(table)` (columns id, seq, table, from, to, …)
+/// into grouped [`Fk`]s, one per `id`.
+fn parse_sqlite_fks(r: &SqliteQueryResult) -> Vec<Fk> {
+    let find = |name: &str| r.columns.iter().position(|c| c.eq_ignore_ascii_case(name));
+    let (Some(ci), Some(ctab), Some(cfrom), Some(cto)) =
+        (find("id"), find("table"), find("from"), find("to"))
+    else {
+        return Vec::new();
+    };
+    let mut fks: Vec<Fk> = Vec::new();
+    let mut cur: Option<String> = None;
+    for row in &r.rows {
+        let id = row.get(ci).cloned().unwrap_or_default();
+        let table = row.get(ctab).cloned().unwrap_or_default();
+        let from = row.get(cfrom).cloned().unwrap_or_default();
+        let to = row.get(cto).cloned().unwrap_or_default();
+        if from.is_empty() || table.is_empty() {
+            continue;
+        }
+        if cur.as_deref() == Some(id.as_str()) {
+            if let Some(last) = fks.last_mut() {
+                last.columns.push(from);
+                last.ref_columns.push(to);
+                continue;
+            }
+        }
+        cur = Some(id);
+        fks.push(Fk {
+            columns: vec![from],
+            ref_schema: None,
+            ref_table: table,
+            ref_columns: vec![to],
+        });
+    }
+    fks
 }
 
 /// The result grid as TSV — tab-separated columns, newline-separated rows. Any

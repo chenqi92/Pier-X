@@ -3290,23 +3290,31 @@ const readOnlySqlKeywords = new Set([
   "USE", "SET", "BEGIN", "START", "COMMIT", "ROLLBACK",
 ]);
 
-export function leadingSqlKeyword(sql: string): string | null {
+/** Strip leading line/block comments and whitespace, returning the
+ *  remaining SQL starting at the first real token. Returns "" when an
+ *  unterminated comment swallows the rest. */
+function stripLeadingSqlComments(sql: string): string {
   let remaining = sql.trimStart();
   while (remaining.length > 0) {
     if (remaining.startsWith("--")) {
       const newlineIndex = remaining.indexOf("\n");
-      if (newlineIndex < 0) return null;
+      if (newlineIndex < 0) return "";
       remaining = remaining.slice(newlineIndex + 1).trimStart();
       continue;
     }
     if (remaining.startsWith("/*")) {
       const commentEnd = remaining.indexOf("*/", 2);
-      if (commentEnd < 0) return null;
+      if (commentEnd < 0) return "";
       remaining = remaining.slice(commentEnd + 2).trimStart();
       continue;
     }
     break;
   }
+  return remaining;
+}
+
+export function leadingSqlKeyword(sql: string): string | null {
+  const remaining = stripLeadingSqlComments(sql);
   const match = /^[A-Za-z]+/.exec(remaining);
   return match ? match[0].toUpperCase() : null;
 }
@@ -3390,7 +3398,17 @@ export function isReadOnlySql(sql: string): boolean {
   // SELECT. Require a single statement, then check its leading keyword.
   if (hasMultipleStatements(sql)) return false;
   const keyword = leadingSqlKeyword(sql);
-  return keyword !== null && readOnlySqlKeywords.has(keyword);
+  if (keyword === null || !readOnlySqlKeywords.has(keyword)) return false;
+  // SET is allowed for benign session settings (SET NAMES, SET
+  // search_path, SET SESSION …) but SET GLOBAL / SET PERSIST[_ONLY]
+  // mutate server-wide state and must go through write-unlock + confirm.
+  if (
+    keyword === "SET" &&
+    /^set\s+(global|persist_only|persist)\b/i.test(stripLeadingSqlComments(sql))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function queryResultToTsv(result: QueryExecutionResult): string {

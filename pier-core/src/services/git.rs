@@ -108,6 +108,23 @@ impl FileStatus {
     }
 }
 
+/// True when an `XY` porcelain status pair denotes an unmerged
+/// (conflicted) path. Per `git status` these are exactly:
+/// `DD AU UD UA DU AA UU`. Any of them means the file needs conflict
+/// resolution, even though only `UU` has a literal `U` in both slots.
+fn is_unmerged(x: char, y: char) -> bool {
+    matches!(
+        (x, y),
+        ('D', 'D')
+            | ('A', 'U')
+            | ('U', 'D')
+            | ('U', 'A')
+            | ('D', 'U')
+            | ('A', 'A')
+            | ('U', 'U')
+    )
+}
+
 /// A file change entry from `git status`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitFileChange {
@@ -282,27 +299,56 @@ impl GitClient {
     /// Parses `git status --porcelain=v1` and returns two lists:
     /// staged (index) changes and unstaged (worktree) changes.
     pub fn status(&self) -> Result<Vec<GitFileChange>, GitError> {
+        // `-z` frames each entry with a trailing NUL and prints paths
+        // verbatim (no C-quoting). Without it, the default newline +
+        // quote format mangles any path containing a space, quote,
+        // unicode byte, or a literal ` -> `, and the textual
+        // `old -> new` split is fragile. With `-z`, a rename/copy
+        // entry is `XY <new>\0<old>\0` — the original path is its own
+        // field, which we consume but don't emit.
         let output = self
-            .git(&["status", "--porcelain=v1", "-unormal"])
+            .git(&["status", "--porcelain=v1", "-z", "-unormal"])
             .map_err(|e| GitError::Command(e.to_string()))?;
 
         let mut changes = Vec::new();
+        let mut fields = output.split('\0');
 
-        for line in output.lines() {
-            if line.len() < 3 {
+        while let Some(record) = fields.next() {
+            // Records are `XY <path>` (≥ 3 bytes). The trailing empty
+            // field after the final NUL is skipped by this guard.
+            if record.len() < 3 {
                 continue;
             }
-            let bytes = line.as_bytes();
+            let bytes = record.as_bytes();
             let index_status = bytes[0] as char;
             let worktree_status = bytes[1] as char;
-            let path = &line[3..];
+            // bytes[2] is the space; the path is everything after it.
+            let file_path = record[3..].to_string();
 
-            // Handle renames: "R  old -> new"
-            let file_path = if path.contains(" -> ") {
-                path.split(" -> ").last().unwrap_or(path).to_string()
-            } else {
-                path.to_string()
-            };
+            // Rename/copy: the original path follows as its own field.
+            // Consume it so it isn't parsed as a bogus status record.
+            if index_status == 'R'
+                || index_status == 'C'
+                || worktree_status == 'R'
+                || worktree_status == 'C'
+            {
+                let _ = fields.next();
+            }
+
+            // Unmerged (conflict) states are a two-letter combo that
+            // isn't a plain index/worktree split: DD/AU/UD/UA/DU/AA/UU.
+            // Mapping a single byte (the old behaviour) counted AA/DD
+            // as Added/Deleted and undercounted conflicts, so the UI
+            // could report a merge "clean" while files were unresolved.
+            // Emit one Conflicted entry instead.
+            if is_unmerged(index_status, worktree_status) {
+                changes.push(GitFileChange {
+                    path: file_path,
+                    status: FileStatus::Conflicted,
+                    staged: false,
+                });
+                continue;
+            }
 
             // Index (staged) change
             if index_status != ' ' && index_status != '?' {

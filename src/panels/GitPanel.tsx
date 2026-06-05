@@ -38,6 +38,7 @@ import * as cmd from "../lib/commands";
 import type { GitReflogEntry } from "../lib/commands";
 import { writeClipboardText } from "../lib/clipboard";
 import Dialog from "../components/Dialog";
+import ConfirmDialog from "../components/ConfirmDialog";
 import DiffDialog, { type DiffFileInput } from "../shell/DiffDialog";
 import "../styles/git-panel.css";
 import type {
@@ -1422,6 +1423,13 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
   // the reword. The lock keeps it to a single inflight save per hash.
   const unpushedSavingRef = useRef<string | null>(null);
   const [popover, setPopover] = useState<PopoverState>(null);
+  // Pending discard confirmation. Discard runs `git checkout -- <path>`
+  // which irreversibly overwrites working-tree edits, so per
+  // PRODUCT-SPEC §5.2 it must be confirmed. `anchor` positions the
+  // dialog near the click that triggered it.
+  const [discardTarget, setDiscardTarget] = useState<
+    { path: string; fileName: string; anchor?: { x: number; y: number } } | null
+  >(null);
   const panelStateRequestRef = useRef<Promise<void> | null>(null);
   const graphMetadataRequestRef = useRef<Promise<void> | null>(null);
 
@@ -3025,7 +3033,11 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
                                   className="git-file-row__discard"
                                   onClick={(event) => {
                                     event.stopPropagation();
-                                    void runGitAction(() => cmd.gitDiscardPaths(currentRepoPath, [file.path]));
+                                    setDiscardTarget({
+                                      path: file.path,
+                                      fileName: file.fileName,
+                                      anchor: { x: event.clientX, y: event.clientY },
+                                    });
                                   }}
                                   type="button"
                                 >
@@ -4121,7 +4133,7 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
                     onClick={() => {
                       const { file } = popover.data as ChangeFileMenuState;
                       setPopover(null);
-                      void runGitAction(() => cmd.gitDiscardPaths(currentRepoPath, [file.path]));
+                      setDiscardTarget({ path: file.path, fileName: file.fileName });
                     }}
                   >
                     {t("Discard changes")}
@@ -5281,6 +5293,25 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
         onSelectFile={(id) => {
           setCommitDiffActivePath(id);
           if (commitDiffCache[id] == null) void ensureCommitDiff(commitDiffHash, id);
+        }}
+      />
+      <ConfirmDialog
+        open={discardTarget !== null}
+        tone="destructive"
+        anchor={discardTarget?.anchor}
+        title={t("Discard changes")}
+        message={t(
+          "Discard all working-tree changes to {file}? This overwrites the file with the last committed version and cannot be undone.",
+          { file: discardTarget?.fileName ?? "" },
+        )}
+        confirmLabel={t("Discard")}
+        onCancel={() => setDiscardTarget(null)}
+        onConfirm={() => {
+          const target = discardTarget;
+          setDiscardTarget(null);
+          if (target) {
+            void runGitAction(() => cmd.gitDiscardPaths(currentRepoPath, [target.path]));
+          }
         }}
       />
     </div>

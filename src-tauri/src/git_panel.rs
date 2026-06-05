@@ -662,18 +662,51 @@ fn create_message_editor_script(message: &str) -> Result<PathBuf, String> {
     }
 }
 
+/// Format a Unix epoch (seconds) as `YYYY-MM-DD HH:MM` in UTC.
+///
+/// Dependency-free and cross-platform. The previous implementation
+/// shelled out to `date -r <epoch>`, which is BSD/macOS-only syntax:
+/// on Windows `date` is a cmd builtin (it prompts to set the clock),
+/// and on Linux `date -r` reads a *file's* mtime — so blame dates
+/// came out empty on Windows and wrong on Linux. Uses Howard
+/// Hinnant's civil-from-days algorithm.
 fn format_blame_date(timestamp: i64) -> String {
     if timestamp <= 0 {
         return String::new();
     }
-    let output = Command::new("date")
-        .args(["-r", &timestamp.to_string(), "+%Y-%m-%d %H:%M"])
-        .output();
-    match output {
-        Ok(result) if result.status.success() => {
-            String::from_utf8_lossy(&result.stdout).trim().to_string()
-        }
-        _ => String::new(),
+    let days = timestamp.div_euclid(86_400);
+    let secs = timestamp.rem_euclid(86_400);
+    let hour = secs / 3600;
+    let min = (secs % 3600) / 60;
+
+    // days since 1970-01-01 → civil (year, month, day).
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+
+    format!("{year:04}-{m:02}-{d:02} {hour:02}:{min:02}")
+}
+
+#[cfg(test)]
+mod blame_date_tests {
+    use super::format_blame_date;
+
+    #[test]
+    fn formats_known_epoch_in_utc() {
+        // 1700000000 = 2023-11-14 22:13:20 UTC
+        assert_eq!(format_blame_date(1_700_000_000), "2023-11-14 22:13");
+        // 1 = 1970-01-01 00:00 UTC (positive so not short-circuited)
+        assert_eq!(format_blame_date(1), "1970-01-01 00:00");
+        // Non-positive → empty.
+        assert_eq!(format_blame_date(0), "");
+        assert_eq!(format_blame_date(-5), "");
     }
 }
 

@@ -3729,6 +3729,17 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
                               >
                                 {t("Accept all theirs")}
                               </GitButton>
+                              <GitButton
+                                compact
+                                disabled={busy}
+                                onClick={() =>
+                                  void runGitAction(() => cmd.gitConflictAcceptAll(currentRepoPath, selectedConflictFile.path, "base"), {
+                                    conflicts: true,
+                                  })
+                                }
+                              >
+                                {t("Accept all base")}
+                              </GitButton>
                               <div className="git-commit-actions__spacer" />
                               <GitButton
                                 tone="primary"

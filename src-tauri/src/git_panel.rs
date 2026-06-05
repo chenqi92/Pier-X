@@ -1476,9 +1476,32 @@ pub fn git_push_tag(path: Option<String>, name: String) -> Result<String, String
     if tag_name.is_empty() {
         return Err(String::from("tag name cannot be empty"));
     }
-    match run_git_at(&repo_path, &["push", "origin", tag_name]) {
-        Ok(output) => Ok(output),
-        Err(_) => run_git_at(&repo_path, &["push", "--tags"]),
+    reject_flaglike_ref(tag_name, "tag name")?;
+    // Push to the configured push remote rather than assuming `origin`
+    // — a repo whose only remote is e.g. `gitea` would otherwise fail
+    // the first attempt and fall back to pushing ALL tags.
+    match default_push_remote(&repo_path) {
+        Some(remote) => match run_git_at(&repo_path, &["push", &remote, tag_name]) {
+            Ok(output) => Ok(output),
+            Err(_) => run_git_at(&repo_path, &["push", "--tags"]),
+        },
+        None => run_git_at(&repo_path, &["push", "--tags"]),
+    }
+}
+
+/// Resolve the remote to push to: `origin` if it exists, otherwise the
+/// first configured remote. `None` when the repo has no remotes.
+fn default_push_remote(repo_path: &Path) -> Option<String> {
+    let out = run_git_at(repo_path, &["remote"]).ok()?;
+    let remotes: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if remotes.iter().any(|remote| *remote == "origin") {
+        Some(String::from("origin"))
+    } else {
+        remotes.first().map(|remote| remote.to_string())
     }
 }
 
@@ -2122,8 +2145,12 @@ pub fn git_conflict_accept_all(
 ) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let relative_path = file_path.trim();
+    // `base` (common ancestor) requires diff3/zdiff3 conflict markers
+    // to have any lines to emit — same as the per-hunk base mode,
+    // which `write_resolved_conflict_file` already supports.
     let resolved = match resolution.trim() {
         "theirs" => "theirs",
+        "base" => "base",
         _ => "ours",
     };
     if relative_path.is_empty() {

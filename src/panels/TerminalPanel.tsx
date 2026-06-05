@@ -358,6 +358,22 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     { deadline: number; kind: "password" | "passphrase" } | null
   >(null);
 
+  // Suppress-only window for generic secret prompts (remote sudo,
+  // local passwd / su / login, 2FA). Armed by the backend's
+  // `terminal:secret-prompt` event; while set, the next Enter-
+  // terminated line is kept out of the history ring AND persistence.
+  // Distinct from `pendingPasswordCaptureRef` because we never route
+  // the value anywhere — these prompts must not feed the russh slot.
+  const suppressHistoryRef = useRef<{ deadline: number } | null>(null);
+
+  // Bracketed-paste tracking for the smart line mirror. `active` is
+  // true between `\e[200~` and `\e[201~`; `tainted` marks the current
+  // line as containing pasted bytes so it stays out of history (a
+  // pasted block can be a whole .env / a secret on its own line, and
+  // its embedded newlines are content, not command submissions).
+  const pasteActiveRef = useRef(false);
+  const pasteTaintedRef = useRef(false);
+
   // Sync session ID to tab store
   useEffect(() => {
     if (session && tab.terminalSessionId !== session.sessionId) {
@@ -1012,6 +1028,22 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       })
       .catch(() => {});
 
+    // Generic secret-entry prompt (sudo / passwd / su / 2FA). Arms a
+    // suppress-only window so the next typed line never reaches the
+    // history ring or persistence. We do NOT capture or route the
+    // value — these prompts are not SSH server auth.
+    let unlistenSecretPrompt: UnlistenFn | undefined;
+    void listen<{ sessionId: string }>("terminal:secret-prompt", (event) => {
+      if (disposed) return;
+      if (event.payload.sessionId !== session.sessionId) return;
+      suppressHistoryRef.current = { deadline: Date.now() + 60_000 };
+    })
+      .then((u) => {
+        if (disposed) safeUnlisten(u);
+        else unlistenSecretPrompt = u;
+      })
+      .catch(() => {});
+
     return () => {
       disposed = true;
       if (safety !== null) window.clearTimeout(safety);
@@ -1023,6 +1055,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       safeUnlisten(unlistenSshState);
       safeUnlisten(unlistenSshPrompt);
       safeUnlisten(unlistenSshPassphrasePrompt);
+      safeUnlisten(unlistenSecretPrompt);
     };
   }, [session, isActive, scrollbackOffset]);
 
@@ -1324,6 +1357,13 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     for (let i = 0; i < data.length; i++) {
       const code = data.charCodeAt(i);
       if (code === CR || code === LF) {
+        // A newline arriving inside a bracketed paste is pasted
+        // content, not a command submission — don't record it and
+        // don't reset the line buffer.
+        if (pasteActiveRef.current) {
+          if (code === CR && data.charCodeAt(i + 1) === LF) i += 1;
+          continue;
+        }
         // M5 history capture: push the just-submitted line into the
         // ring before clearing. We used to capture this on the
         // OSC 133;C edge (`awaiting_input` true → false), but remote
@@ -1331,7 +1371,29 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
         // path missed every command typed inside SSH. The byte
         // stream sees Enter regardless of where the shell lives.
         const submitted = buf.trim();
-        if (submitted) {
+        // A line assembled from a paste never enters history (secrets
+        // / config blocks are commonly pasted). One-shot per submit.
+        const pasteTainted = pasteTaintedRef.current;
+        pasteTaintedRef.current = false;
+        // Never record a line typed at a secret prompt — neither in
+        // the in-memory ring (autosuggest would resurface it) nor on
+        // disk. `pendingPasswordCaptureRef` covers the OpenSSH
+        // password / key-passphrase prompts (also routed to the russh
+        // slot); `suppressHistoryRef` covers the broad suppress-only
+        // prompts (sudo / passwd / su / 2FA). This runs before the
+        // post-write scan that disarms `pendingPasswordCaptureRef`, so
+        // both refs are still set here.
+        const now = Date.now();
+        const inPasswordWindow =
+          (pendingPasswordCaptureRef.current !== null
+            && now <= pendingPasswordCaptureRef.current.deadline)
+          || (suppressHistoryRef.current !== null
+            && now <= suppressHistoryRef.current.deadline);
+        if (suppressHistoryRef.current !== null) {
+          // One-shot: a secret prompt arms exactly one line.
+          suppressHistoryRef.current = null;
+        }
+        if (submitted && !inPasswordWindow && !pasteTainted) {
           pushHistory(submitted, {
             shell: session?.shell,
             persist: historyPersist,
@@ -1357,6 +1419,18 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
             j += 1;
           }
           const final = j < data.length ? data[j] : "";
+          const params = data.slice(i + 2, j);
+          // Bracketed-paste boundaries: `\e[200~` start / `\e[201~` end.
+          if (final === "~" && (params === "200" || params === "201")) {
+            if (params === "200") {
+              pasteActiveRef.current = true;
+              pasteTaintedRef.current = true;
+            } else {
+              pasteActiveRef.current = false;
+            }
+            i = j;
+            continue;
+          }
           if (final !== "C" && final !== "D") {
             buf = "";
           }

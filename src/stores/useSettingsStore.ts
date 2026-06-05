@@ -147,8 +147,12 @@ const DEFAULTS = {
   audioBell: false,
   terminalRowSeparators: false,
   terminalCopyOnSelect: false,
-  terminalSmartMode: true,
-  terminalHistoryPersist: true,
+  // Off by default per PRODUCT-SPEC §4.2.1: Smart Mode is opt-in and
+  // the terminal history ring is memory-only unless the user opts in
+  // to persistence. Shipping these on wrote command history (incl.
+  // secrets typed at password prompts) to disk without consent.
+  terminalSmartMode: false,
+  terminalHistoryPersist: false,
   editorWrapDefault: false,
   editorLineNumbersDefault: true,
   editorTabSize: 2,

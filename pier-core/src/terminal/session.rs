@@ -107,6 +107,15 @@ pub enum NotifyEvent {
     /// russh session uses it via `russh::keys::load_secret_key`.
     /// Conflating the two costs failed connect attempts.
     SshPassphrasePrompt = 4,
+    /// The reader thread saw a generic secret-entry prompt that is
+    /// NOT the canonical OpenSSH shape — remote `sudo`, local
+    /// `passwd` / `su`, `login`, a 2FA `Verification code:` prompt,
+    /// etc. Unlike [`SshPasswordPrompt`] this is suppress-only: the
+    /// frontend uses it solely to keep the next typed line out of the
+    /// command-history ring/persistence, and NEVER routes the value
+    /// anywhere. Being broad here is safe precisely because nothing
+    /// is captured — at worst one command line goes unrecorded.
+    SecretPrompt = 5,
 }
 
 /// Function-pointer signature for the notify callback.
@@ -414,6 +423,12 @@ impl PierTerminal {
                                     ssh_failure_kick.store(true, Ordering::Relaxed);
                                 }
                                 let prompt_kind = ssh_watcher::detect_ssh_secret_prompt(&chunk);
+                                // Broad, suppress-only detection for the
+                                // non-OpenSSH prompts (sudo/passwd/su/2FA).
+                                // Only consulted when the narrow OpenSSH
+                                // detection didn't already match.
+                                let secret_entry = prompt_kind.is_none()
+                                    && ssh_watcher::output_indicates_secret_entry(&chunk);
                                 guard.emu.process(&chunk);
                                 match prompt_kind {
                                     Some(ssh_watcher::SshSecretPromptKind::Passphrase) => {
@@ -422,6 +437,7 @@ impl PierTerminal {
                                     Some(ssh_watcher::SshSecretPromptKind::Password) => {
                                         ReadOutcome::PasswordPrompt
                                     }
+                                    None if secret_entry => ReadOutcome::SecretPrompt,
                                     None => ReadOutcome::Data,
                                 }
                             }
@@ -449,6 +465,10 @@ impl PierTerminal {
                         ReadOutcome::PassphrasePrompt => {
                             (notify)(user_data, NotifyEvent::DataReady as u32);
                             (notify)(user_data, NotifyEvent::SshPassphrasePrompt as u32);
+                        }
+                        ReadOutcome::SecretPrompt => {
+                            (notify)(user_data, NotifyEvent::DataReady as u32);
+                            (notify)(user_data, NotifyEvent::SecretPrompt as u32);
                         }
                         ReadOutcome::Idle => {
                             thread::sleep(idle);
@@ -877,6 +897,10 @@ enum ReadOutcome {
     /// Same as `Data` but the chunk contained an OpenSSH key
     /// passphrase prompt — caller should fire `SshPassphrasePrompt`.
     PassphrasePrompt,
+    /// Same as `Data` but the chunk contained a generic (non-OpenSSH)
+    /// secret-entry prompt — caller should fire `SecretPrompt` so the
+    /// frontend suppresses the next typed line from history.
+    SecretPrompt,
     Idle,
     Done,
 }

@@ -72,6 +72,7 @@ pub enum HistoryError {
 const SENSITIVE_KEYWORDS: &[&str] = &[
     "password",
     "passwd",
+    "passphrase",
     "token",
     "secret",
     "apikey",
@@ -80,6 +81,10 @@ const SENSITIVE_KEYWORDS: &[&str] = &[
     "private_key",
     "private-key",
     "credential",
+    "bearer",
+    "authorization",
+    "access_key",
+    "accesskey",
 ];
 
 /// Returns `true` when `line` contains any of [`SENSITIVE_KEYWORDS`]
@@ -117,9 +122,13 @@ fn shell_slug(shell: &str) -> String {
 /// platforms where `directories` can't determine a sensible
 /// location (rare — usually just headless CI).
 pub fn path_for(shell: &str) -> Result<PathBuf, HistoryError> {
-    let dirs = directories::ProjectDirs::from("", "", "pier-x").ok_or(HistoryError::NoDataDir)?;
-    let dir = dirs.data_dir();
-    fs::create_dir_all(dir)?;
+    // PRODUCT-SPEC §4.2.1 specifies `~/.pier-x/terminal-history-<shell>.jsonl`
+    // so a user who reads the spec can find (and delete) the file. The
+    // previous `directories::ProjectDirs` data_dir() put it under the
+    // platform app-data dir, where the documented `rm` would miss it.
+    let base = directories::BaseDirs::new().ok_or(HistoryError::NoDataDir)?;
+    let dir = base.home_dir().join(".pier-x");
+    fs::create_dir_all(&dir)?;
     Ok(dir.join(format!("terminal-history-{}.jsonl", shell_slug(shell))))
 }
 

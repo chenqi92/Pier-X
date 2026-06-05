@@ -155,6 +155,35 @@ pub fn output_indicates_ssh_password_prompt(chunk: &[u8]) -> bool {
     detect_ssh_secret_prompt(chunk).is_some()
 }
 
+/// Generic secret-entry prompt markers used ONLY to suppress the
+/// next typed line from the command-history ring / persistence.
+///
+/// Deliberately BROADER than [`SSH_PASSWORD_MARKER`]: it covers
+/// remote `sudo` (`[sudo] password for <user>:`), local `passwd` /
+/// `su` / `login`, and 2FA (`Verification code:`) prompts. This is
+/// safe to be liberal about precisely because the value is never
+/// captured or routed anywhere — a false positive only means one
+/// command line goes unrecorded, never a leaked or mis-sent secret.
+///
+/// Each marker is chosen so the leading letter's case does not
+/// matter (`assword` matches both `password` and `Password`),
+/// avoiding a full-chunk lowercase in the reader hot path.
+const SECRET_ENTRY_MARKERS: &[&[u8]] = &[
+    b"assword:",         // password: / Password: / <user>'s password:
+    b"assword for ",     // [sudo] password for <user>  /  su prompts
+    b"assphrase",        // Enter passphrase … / passphrase:
+    b"erification code", // 2FA: Verification code:
+];
+
+/// `true` when `chunk` contains any generic secret-entry prompt
+/// (see [`SECRET_ENTRY_MARKERS`]). Suppress-only — never used to
+/// capture a value, only to keep the next typed line out of history.
+pub fn output_indicates_secret_entry(chunk: &[u8]) -> bool {
+    SECRET_ENTRY_MARKERS
+        .iter()
+        .any(|marker| contains_subsequence(chunk, marker))
+}
+
 fn contains_subsequence(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() || needle.len() > haystack.len() {
         return false;

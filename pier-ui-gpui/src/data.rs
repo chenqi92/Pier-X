@@ -982,6 +982,22 @@ pub fn terminal_man(
     None
 }
 
+/// Whether `name` resolves to a runnable command (shell builtin or on PATH) on
+/// the terminal's host — drives smart-mode typo highlighting. Remote check via
+/// `command -v` over the session; local via pier-core's PATH scan.
+pub fn terminal_command_exists(session: Option<SshSession>, name: &str) -> bool {
+    match session {
+        Some(s) => {
+            let cmd = format!("command -v -- '{}'", name.replace('\'', "'\\''"));
+            matches!(s.exec_command_blocking(&cmd), Ok((0, _)))
+        }
+        None => !matches!(
+            pier_core::terminal::validate::validate_command(name),
+            pier_core::terminal::validate::CommandKind::Missing
+        ),
+    }
+}
+
 impl Default for UiState {
     fn default() -> Self {
         Self {

@@ -92,6 +92,10 @@ pub struct TerminalView {
     man: Option<ManSynopsis>,
     /// Generation counter so a stale async man lookup is dropped.
     man_gen: u64,
+    /// Smart-mode command-validity cache (name → exists on host) for typo
+    /// highlighting, with in-flight names tracked to dedupe lookups.
+    cmd_valid: std::collections::HashMap<String, bool>,
+    cmd_pending: std::collections::HashSet<String>,
 }
 
 impl TerminalView {
@@ -136,6 +140,8 @@ impl TerminalView {
             comp_gen: 0,
             man: None,
             man_gen: 0,
+            cmd_valid: std::collections::HashMap::new(),
+            cmd_pending: std::collections::HashSet::new(),
         }
     }
 
@@ -226,6 +232,8 @@ impl TerminalView {
             comp_gen: 0,
             man: None,
             man_gen: 0,
+            cmd_valid: std::collections::HashMap::new(),
+            cmd_pending: std::collections::HashSet::new(),
         }
     }
 
@@ -245,6 +253,8 @@ impl TerminalView {
                             this.snapshot = Some(snap);
                         }
                         cx.notify();
+                        // Validate the head command (cached) for typo highlighting.
+                        this.maybe_validate_head(cx);
                     }
                 })
                 .is_ok();
@@ -461,6 +471,51 @@ impl TerminalView {
         }
     }
 
+    /// Validate the current head command against the host (cached) so the syntax
+    /// overlay can flag typos. Plain command names only — paths / metachar words
+    /// are skipped. Driven from the poll loop, never from render.
+    fn maybe_validate_head(&mut self, cx: &mut Context<Self>) {
+        if !self.smart {
+            return;
+        }
+        let Some(snap) = self.snapshot.as_ref() else {
+            return;
+        };
+        let Some((line, _)) = self.smart_line(snap) else {
+            return;
+        };
+        let Some(head) = line.split_whitespace().next().map(str::to_string) else {
+            return;
+        };
+        if head.contains([
+            '/', '\\', '.', '~', ' ', '\t', '|', ';', '&', '<', '>', '`', '$', '\'', '"', '\n',
+        ]) {
+            return;
+        }
+        if self.cmd_valid.contains_key(&head) || self.cmd_pending.contains(&head) {
+            return;
+        }
+        // Bound memory across a long session.
+        if self.cmd_valid.len() > 500 {
+            self.cmd_valid.clear();
+        }
+        self.cmd_pending.insert(head.clone());
+        let session = self.session.clone();
+        let name = head.clone();
+        cx.spawn(async move |this, cx| {
+            let exists = cx
+                .background_executor()
+                .spawn(async move { data::terminal_command_exists(session, &head) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.cmd_pending.remove(&name);
+                this.cmd_valid.insert(name.clone(), exists);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// The smart-mode syntax + autosuggest overlay: a coloured copy of the input
     /// line painted over the grid from the prompt-end cell, plus the history
     /// ghost suffix. Returns `None` when there is nothing to draw.
@@ -494,7 +549,14 @@ impl TerminalView {
                 row = row.child(div().child(SharedString::from(text)));
                 continue;
             }
-            let (color, bold) = self.tok_style(kind);
+            // A command validated as not-found on the host reads as a typo.
+            let missing =
+                matches!(kind, TokKind::Command) && self.cmd_valid.get(&text) == Some(&false);
+            let (color, bold) = if missing {
+                (t.neg, false)
+            } else {
+                self.tok_style(kind)
+            };
             let mut span = div().bg(t.bg).text_color(color).child(SharedString::from(text));
             if bold {
                 span = span.font_weight(FontWeight::BOLD);

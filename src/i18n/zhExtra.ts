@@ -2848,4 +2848,6 @@ export const zhExtra: Record<string, string> = {
     "该文件含非 UTF-8 字节（显示为 U+FFFD），为只读 —— 已禁用保存以免损坏。请下载后编辑。",
   "File is not UTF-8 text and can't be duplicated in-place. Download and re-upload instead.":
     "文件不是 UTF-8 文本，无法就地复制。请改用下载后再上传。",
+  "{name} is too large for drag-drop; use the upload button instead.":
+    "{name} 太大，无法拖拽上传；请改用上传按钮。",
 };

@@ -11892,6 +11892,86 @@ fn encode_base64(input: &[u8]) -> String {
     out
 }
 
+/// Decode standard base64 (with `+`/`/` and optional `=` padding).
+/// Whitespace is ignored. Returns `Err` on an invalid character or a
+/// truncated group. Hand-rolled to match [`encode_base64`] (no crate).
+fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut out = Vec::with_capacity(input.len() / 4 * 3);
+    let mut quad = [0u8; 4];
+    let mut n = 0usize;
+    let mut pad = 0usize;
+    for &c in input.as_bytes() {
+        if c == b'\r' || c == b'\n' || c == b' ' || c == b'\t' {
+            continue;
+        }
+        if c == b'=' {
+            pad += 1;
+            quad[n] = 0;
+            n += 1;
+        } else {
+            quad[n] = val(c).ok_or_else(|| String::from("invalid base64 character"))?;
+            n += 1;
+        }
+        if n == 4 {
+            out.push((quad[0] << 2) | (quad[1] >> 4));
+            if pad < 2 {
+                out.push((quad[1] << 4) | (quad[2] >> 2));
+            }
+            if pad < 1 {
+                out.push((quad[2] << 6) | quad[3]);
+            }
+            n = 0;
+            // padding only valid in the final group; reset is fine
+            // because a `=` before the end yields the wrong length,
+            // which the caller treats as a corrupt upload.
+            pad = 0;
+        }
+    }
+    if n != 0 {
+        return Err(String::from("truncated base64 input"));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod base64_tests {
+    use super::{decode_base64, encode_base64};
+
+    #[test]
+    fn round_trips_all_padding_cases() {
+        for input in [
+            &b""[..],
+            b"f",
+            b"fo",
+            b"foo",
+            b"foob",
+            b"fooba",
+            b"foobar",
+            &[0u8, 255, 16, 32, 64, 128, 1, 2, 3],
+        ] {
+            let encoded = encode_base64(input);
+            assert_eq!(decode_base64(&encoded).unwrap(), input, "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn ignores_whitespace_and_rejects_bad_chars() {
+        assert_eq!(decode_base64("Zm9v\nYmFy").unwrap(), b"foobar");
+        assert!(decode_base64("Zm9v!").is_err());
+        assert!(decode_base64("Zm9").is_err()); // truncated group
+    }
+}
+
 /// POSIX shell single-quote escape.
 fn shell_single_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -12954,6 +13034,60 @@ fn sftp_download(
             Err(msg)
         }
     }
+}
+
+/// Max bytes accepted by [`sftp_write_bytes`]. Drag-drop uploads read
+/// the whole file into the webview and ship it base64 over IPC, so
+/// this caps the memory cost; larger files should use the path-based
+/// picker upload ([`sftp_upload`]), which streams in chunks.
+const SFTP_DROP_UPLOAD_MAX: usize = 64 * 1024 * 1024;
+
+/// Write raw bytes (base64 over IPC) to a remote file. Used by
+/// drag-drop uploads from the OS file manager, where the webview
+/// exposes file *contents* but not a local path, so the path-based
+/// [`sftp_upload`] can't be used.
+#[tauri::command]
+fn sftp_write_bytes(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    content_base64: String,
+    saved_connection_index: Option<usize>,
+) -> Result<(), String> {
+    // Cheap pre-check on the encoded length before allocating the
+    // decode buffer (base64 is ~4/3 of the raw size).
+    if content_base64.len() > SFTP_DROP_UPLOAD_MAX / 3 * 4 + 8 {
+        return Err(format!(
+            "Drag-drop upload exceeds the {} byte limit — use the upload picker for large files",
+            SFTP_DROP_UPLOAD_MAX
+        ));
+    }
+    let bytes = decode_base64(&content_base64)?;
+    if bytes.len() > SFTP_DROP_UPLOAD_MAX {
+        return Err(format!(
+            "File is {} bytes; drag-drop upload limit is {} bytes — use the upload picker",
+            bytes.len(),
+            SFTP_DROP_UPLOAD_MAX
+        ));
+    }
+    let session = get_or_open_ssh_session(
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+    )?;
+    let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
+    sftp.write_file_blocking(&path, &bytes)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -15203,6 +15337,7 @@ pub fn run() {
             sftp_create_file,
             sftp_read_text,
             sftp_write_text,
+            sftp_write_bytes,
             sftp_download,
             sftp_upload,
             sftp_upload_tree,

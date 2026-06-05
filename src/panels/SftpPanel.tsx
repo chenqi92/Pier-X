@@ -208,6 +208,23 @@ function formatModifiedTooltip(unixSeconds: number | null | undefined): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
+/** Cap for drag-drop byte uploads — the whole file is read into the
+ *  webview and shipped base64, so keep it bounded. Larger files should
+ *  use the path-based picker upload (streams in chunks). Mirrors the
+ *  backend `SFTP_DROP_UPLOAD_MAX`. */
+const DROP_UPLOAD_MAX = 64 * 1024 * 1024;
+
+/** Base64-encode bytes via `btoa`, chunked to avoid call-stack limits
+ *  on `String.fromCharCode(...largeArray)`. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 export default function SftpPanel(props: Props) {
   const ready = useDeferredMount();
   return (
@@ -826,6 +843,53 @@ function SftpPanelBody({ tab }: Props) {
     setActionBusy(false);
   }
 
+  /** True when a DOM drag carries OS files (vs. an internal payload). */
+  function hasOsFiles(dt: DataTransfer | null): boolean {
+    return !!dt && Array.from(dt.types ?? []).includes("Files");
+  }
+
+  /** Upload files dropped from the OS file manager. With
+   *  `dragDropEnabled: false` these arrive as DOM `File` objects
+   *  without a local path (so the path-based `uploadLocalFiles` can't
+   *  be used) — we read the bytes and ship them base64 via
+   *  `sftp_write_bytes`. This path is active on webviews that deliver
+   *  external drops to the DOM (macOS WKWebView, Linux WebKitGTK);
+   *  Windows WebView2 blocks external drops while the flag is off, so
+   *  it's simply inactive there (no regression). */
+  async function uploadDroppedFiles(fileList: FileList, remoteDir: string): Promise<void> {
+    if (!canUseSsh || fileList.length === 0) return;
+    setActionBusy(true);
+    setError("");
+    setNotice("");
+    let okCount = 0;
+    for (const file of Array.from(fileList)) {
+      const baseName = file.name;
+      if (!baseName) continue;
+      const remotePath = joinRemotePath(remoteDir, baseName);
+      const id = pushTransfer({ direction: "up", name: baseName, remotePath, localPath: baseName });
+      try {
+        if (file.size > DROP_UPLOAD_MAX) {
+          throw new Error(
+            t("{name} is too large for drag-drop; use the upload button instead.", { name: baseName }),
+          );
+        }
+        const buf = new Uint8Array(await file.arrayBuffer());
+        await cmd.sftpWriteBytes({ ...sshArgs, path: remotePath, contentBase64: bytesToBase64(buf) });
+        finishTransfer(id, "done");
+        okCount++;
+      } catch (e) {
+        const msg = formatError(e);
+        finishTransfer(id, "failed", msg);
+        setError(msg);
+      }
+    }
+    if (okCount > 0) {
+      setNotice(t("Uploaded {count} file(s).", { count: okCount }));
+      await browse(currentRemotePath);
+    }
+    setActionBusy(false);
+  }
+
   /** Open a native file picker (multi-select) and upload the chosen
    *  files into the current remote directory. */
   async function uploadPick() {
@@ -1002,18 +1066,18 @@ function SftpPanelBody({ tab }: Props) {
   // which is handled by the Sidebar on its side.
   function handleListDragEnter(event: ReactDragEvent<HTMLDivElement>) {
     if (!canUseSsh) return;
-    if (!hasDragPayload(event.dataTransfer, DT_LOCAL_FILE)) return;
+    if (!hasDragPayload(event.dataTransfer, DT_LOCAL_FILE) && !hasOsFiles(event.dataTransfer)) return;
     event.preventDefault();
     setDropDepth((d) => d + 1);
   }
   function handleListDragOver(event: ReactDragEvent<HTMLDivElement>) {
     if (!canUseSsh) return;
-    if (!hasDragPayload(event.dataTransfer, DT_LOCAL_FILE)) return;
+    if (!hasDragPayload(event.dataTransfer, DT_LOCAL_FILE) && !hasOsFiles(event.dataTransfer)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   }
   function handleListDragLeave(event: ReactDragEvent<HTMLDivElement>) {
-    if (!hasDragPayload(event.dataTransfer, DT_LOCAL_FILE)) return;
+    if (!hasDragPayload(event.dataTransfer, DT_LOCAL_FILE) && !hasOsFiles(event.dataTransfer)) return;
     event.preventDefault();
     setDropDepth((d) => Math.max(0, d - 1));
   }
@@ -1021,19 +1085,27 @@ function SftpPanelBody({ tab }: Props) {
     setDropDepth(0);
     if (!canUseSsh) return;
     const payload = readDragPayload(event.dataTransfer, DT_LOCAL_FILE, "local-file");
-    if (!payload) return;
-    event.preventDefault();
-    const items = (Array.isArray(payload) ? payload : [payload]).filter(
-      (p): p is LocalDragPayload => !!p && typeof p.path === "string",
-    );
-    if (items.length === 0) return;
-    const files = items.filter((p) => !p.isDir);
-    const dirs = items.filter((p) => p.isDir);
-    if (files.length > 0) {
-      void uploadLocalFiles(files.map((p) => p.path), currentRemotePath);
+    if (payload) {
+      event.preventDefault();
+      const items = (Array.isArray(payload) ? payload : [payload]).filter(
+        (p): p is LocalDragPayload => !!p && typeof p.path === "string",
+      );
+      if (items.length === 0) return;
+      const files = items.filter((p) => !p.isDir);
+      const dirs = items.filter((p) => p.isDir);
+      if (files.length > 0) {
+        void uploadLocalFiles(files.map((p) => p.path), currentRemotePath);
+      }
+      for (const dir of dirs) {
+        void uploadLocalTree(dir);
+      }
+      return;
     }
-    for (const dir of dirs) {
-      void uploadLocalTree(dir);
+    // No internal payload: an OS file-manager drop (DOM File objects).
+    const osFiles = event.dataTransfer.files;
+    if (osFiles && osFiles.length > 0) {
+      event.preventDefault();
+      void uploadDroppedFiles(osFiles, currentRemotePath);
     }
   }
 

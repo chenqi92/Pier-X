@@ -3064,6 +3064,16 @@ export const sftpUpload = (params: {
   transferId?: string | null;
 }) => invoke<void>("sftp_upload", params);
 
+/** Upload raw file bytes (base64) to a remote path. Used for OS
+ *  file-manager drag-drop, where the webview exposes file contents
+ *  but not a local path. Path-based picker uploads use {@link sftpUpload}. */
+export const sftpWriteBytes = (params: {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  path: string;
+  contentBase64: string;
+  savedConnectionIndex?: number | null;
+}) => invoke<void>("sftp_write_bytes", params);
+
 /** Payload shape of the `sftp:progress` event emitted by the
  *  upload/download commands. */
 export type SftpProgressEvent = {

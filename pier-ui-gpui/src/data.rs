@@ -881,20 +881,36 @@ fn completion_library() -> &'static pier_core::terminal::library::Library {
 /// shell's last-known `cwd` (OSC 7) for file completion and the bundled library
 /// for subcommand / option descriptions. `locale` selects the description
 /// language (e.g. "en" / "zh-CN").
+///
+/// `remote` is set for SSH terminals: the completer reads the **local** PATH /
+/// filesystem, which is the wrong host, so remote completion is restricted to
+/// host-independent sources (shell builtins + library subcommands / options).
+/// Local-filesystem and remote-command completion is a follow-up.
 pub fn terminal_complete(
     line: &str,
     cursor: usize,
     cwd: Option<&str>,
     locale: &str,
+    remote: bool,
 ) -> Vec<pier_core::terminal::completions::Completion> {
+    use pier_core::terminal::completions::CompletionKind;
     let cwd_path = cwd.map(std::path::Path::new);
-    pier_core::terminal::completions::complete_with_library(
+    let mut rows = pier_core::terminal::completions::complete_with_library(
         line,
         cursor,
         cwd_path,
         completion_library(),
         locale,
-    )
+    );
+    if remote {
+        rows.retain(|r| {
+            matches!(
+                r.kind,
+                CompletionKind::Builtin | CompletionKind::Subcommand | CompletionKind::Option
+            )
+        });
+    }
+    rows
 }
 
 impl Default for UiState {

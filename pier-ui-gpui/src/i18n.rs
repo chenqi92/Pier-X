@@ -190,6 +190,11 @@ fn en(key: &str) -> Option<&'static str> {
         "tab.new_terminal" => "New Terminal",
         "tab.new_ssh" => "New SSH",
         "term.more_results" => "+{0} more",
+        "term.man_title" => "Help",
+        "term.man_synopsis" => "SYNOPSIS",
+        "term.man_description" => "DESCRIPTION",
+        "term.man_options" => "OPTIONS",
+        "term.man_close_hint" => "Esc to close",
 
         // ── Top-bar menus / actions ────────────────────────────────────
         "menu.file" => "File",
@@ -807,6 +812,11 @@ fn zh(key: &str) -> Option<&'static str> {
         "tab.new_terminal" => "新建终端",
         "tab.new_ssh" => "新建 SSH",
         "term.more_results" => "+{0} 更多",
+        "term.man_title" => "帮助",
+        "term.man_synopsis" => "用法",
+        "term.man_description" => "描述",
+        "term.man_options" => "选项",
+        "term.man_close_hint" => "Esc 关闭",
 
         // ── Top-bar menus ──────────────────────────────────────────────
         "menu.file" => "文件",

@@ -21,6 +21,7 @@ use gpui_component::{h_flex, v_flex};
 
 use pier_core::ssh::{SshConfig, SshSession};
 use pier_core::terminal::completions::{Completion, CompletionKind};
+use pier_core::terminal::man::ManSynopsis;
 use pier_core::terminal::{Color, GridSnapshot, PierTerminal};
 
 use crate::data;
@@ -87,6 +88,10 @@ pub struct TerminalView {
     comp: Option<CompletionState>,
     /// Generation counter so a stale async completion result is dropped.
     comp_gen: u64,
+    /// Open man / `--help` popover (Ctrl+Shift+M), or `None`.
+    man: Option<ManSynopsis>,
+    /// Generation counter so a stale async man lookup is dropped.
+    man_gen: u64,
 }
 
 impl TerminalView {
@@ -129,6 +134,8 @@ impl TerminalView {
             smart,
             comp: None,
             comp_gen: 0,
+            man: None,
+            man_gen: 0,
         }
     }
 
@@ -217,6 +224,8 @@ impl TerminalView {
             smart,
             comp: None,
             comp_gen: 0,
+            man: None,
+            man_gen: 0,
         }
     }
 
@@ -654,7 +663,149 @@ impl TerminalView {
         Some(list)
     }
 
+    /// Look up the head command's man / `--help` summary (Ctrl+Shift+M) and open
+    /// the help popover. A `None` result leaves the popover closed.
+    fn trigger_man(&mut self, cx: &mut Context<Self>) {
+        let Some(snap) = self.snapshot.as_ref() else {
+            return;
+        };
+        let Some((line, _)) = self.smart_line(snap) else {
+            return;
+        };
+        let Some(cmd) = line.split_whitespace().next().map(str::to_string) else {
+            return;
+        };
+        let session = self.session.clone();
+        self.comp = None;
+        self.man_gen += 1;
+        let gen = self.man_gen;
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { data::terminal_man(session, &cmd) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.man_gen != gen {
+                    return;
+                }
+                this.man = res;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The man / `--help` help popover (Ctrl+Shift+M), pinned across the top of
+    /// the terminal area with a scrollable body.
+    fn man_popover(&self) -> Option<Div> {
+        let m = self.man.as_ref()?;
+        let t = &self.theme;
+        let pad = f32::from(t.sp3);
+        let label = |s: SharedString| {
+            div()
+                .text_size(t.fs_sm)
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(t.muted)
+                .child(s)
+        };
+        let mut body = v_flex().gap(t.sp2);
+        if !m.synopsis.is_empty() {
+            body = body.child(label(i18n::t("term.man_synopsis"))).child(
+                div()
+                    .font_family(t.mono.clone())
+                    .text_size(t.fs_sm)
+                    .text_color(t.ink)
+                    .child(SharedString::from(m.synopsis.clone())),
+            );
+        }
+        if !m.description.is_empty() {
+            body = body.child(label(i18n::t("term.man_description"))).child(
+                div()
+                    .text_size(t.fs_sm)
+                    .text_color(t.ink_2)
+                    .child(SharedString::from(m.description.clone())),
+            );
+        }
+        if !m.options.is_empty() {
+            body = body.child(label(i18n::t("term.man_options")));
+            for opt in m.options.iter().take(60) {
+                let mut row = v_flex().gap(px(1.0)).child(
+                    div()
+                        .font_family(t.mono.clone())
+                        .text_size(t.fs_sm)
+                        .text_color(t.info)
+                        .child(SharedString::from(opt.flag.clone())),
+                );
+                if !opt.summary.is_empty() {
+                    row = row.child(
+                        div()
+                            .pl(t.sp3)
+                            .text_size(t.fs_sm)
+                            .text_color(t.dim)
+                            .child(SharedString::from(opt.summary.clone())),
+                    );
+                }
+                body = body.child(row);
+            }
+        }
+        Some(
+            v_flex()
+                .absolute()
+                .top(px(pad))
+                .left(px(pad))
+                .right(px(pad))
+                .p(t.sp3)
+                .rounded(t.radius_sm)
+                .bg(t.panel)
+                .border_1()
+                .border_color(t.line_2)
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap(t.sp2)
+                        .pb(t.sp2)
+                        .child(div().flex_1().text_color(t.ink).child(i18n::t("term.man_title")))
+                        .child(
+                            div()
+                                .text_size(t.fs_sm)
+                                .text_color(t.muted)
+                                .child(SharedString::from(m.source.clone())),
+                        )
+                        .child(
+                            div()
+                                .text_size(t.fs_sm)
+                                .text_color(t.dim)
+                                .child(i18n::t("term.man_close_hint")),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("man-scroll")
+                        .max_h(px(360.0))
+                        .overflow_y_scroll()
+                        .child(body),
+                ),
+        )
+    }
+
     fn on_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        // Ctrl+Shift+M opens the man / help popover. Intercepted first because
+        // ctrl+m would otherwise map to a carriage return.
+        if self.smart
+            && ev.keystroke.modifiers.control
+            && ev.keystroke.modifiers.shift
+            && ev.keystroke.key == "m"
+        {
+            self.trigger_man(cx);
+            return;
+        }
+        // Esc dismisses the man popover.
+        if self.man.is_some() && ev.keystroke.key == "escape" {
+            self.man = None;
+            cx.notify();
+            return;
+        }
+
         // Smart mode: the open completion popover captures navigation / apply /
         // dismiss keys before anything reaches the PTY. Any other key closes it
         // and falls through to normal handling.
@@ -786,6 +937,8 @@ impl Render for TerminalView {
             .as_ref()
             .filter(|_| self.error.is_none())
             .and_then(|snap| self.completion_popover(snap));
+        // Man / --help popover (Ctrl+Shift+M).
+        let man_pop = self.man_popover();
 
         div()
             .track_focus(&self.focus)
@@ -811,6 +964,7 @@ impl Render for TerminalView {
             .child(body)
             .children(overlay)
             .children(popover)
+            .children(man_pop)
     }
 }
 

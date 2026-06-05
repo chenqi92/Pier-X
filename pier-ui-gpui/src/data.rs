@@ -938,6 +938,50 @@ pub fn terminal_complete(
     }
 }
 
+/// Man-page / `--help` summary for `cmd`, for the smart-mode help popover. With
+/// a `session` (SSH) the text is fetched from the **remote** host and parsed by
+/// pier-core; locally it uses pier-core's process-spawning lookup. Returns
+/// `None` for an invalid name or when nothing usable was found.
+pub fn terminal_man(
+    session: Option<SshSession>,
+    cmd: &str,
+) -> Option<pier_core::terminal::man::ManSynopsis> {
+    let name = cmd.trim();
+    if name.is_empty()
+        || name.contains([' ', '\t', '|', ';', '&', '<', '>', '`', '$', '\n', '\'', '"'])
+    {
+        return None;
+    }
+    let Some(s) = session else {
+        return pier_core::terminal::man::man_synopsis(name).ok();
+    };
+    let meaningful = |m: &pier_core::terminal::man::ManSynopsis| {
+        !(m.synopsis.is_empty() && m.description.is_empty() && m.options.is_empty())
+    };
+    // Remote man, overstriking stripped via `col -b`, output bounded.
+    let man_cmd =
+        format!("LANG=C LC_ALL=C man -P cat -- {name} 2>/dev/null | col -b | head -c 16000");
+    if let Ok((0, out)) = s.exec_command_blocking(&man_cmd) {
+        if !out.trim().is_empty() {
+            let parsed = pier_core::terminal::man::parse_rendered(&out, "man");
+            if meaningful(&parsed) {
+                return Some(parsed);
+            }
+        }
+    }
+    // Fallback: remote `<cmd> --help`.
+    let help_cmd = format!("{name} --help 2>&1 | head -c 16000");
+    if let Ok((_, out)) = s.exec_command_blocking(&help_cmd) {
+        if !out.trim().is_empty() {
+            let parsed = pier_core::terminal::man::parse_rendered(&out, "help");
+            if meaningful(&parsed) {
+                return Some(parsed);
+            }
+        }
+    }
+    None
+}
+
 impl Default for UiState {
     fn default() -> Self {
         Self {

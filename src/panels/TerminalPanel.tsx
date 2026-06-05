@@ -2577,7 +2577,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
             }}
           >
             {snapshot.lines.map((line, i) => {
-              const usedCols = line.segments.reduce((n, s) => n + s.text.length, 0);
+              const usedCols = line.segments.reduce((n, s) => n + s.cells, 0);
               const padCols = Math.max(0, snapshot.cols - usedCols);
               return (
                 <div className="terminal-row" key={`line-${i}`} style={{ color: termTheme.fg }}>

@@ -1195,6 +1195,7 @@ struct SegmentStyle {
 #[serde(rename_all = "camelCase")]
 struct TerminalSegment {
     text: String,
+    cells: usize,
     fg: String,
     bg: String,
     bold: bool,
@@ -2930,6 +2931,28 @@ fn resolve_segment_style(cell: &Cell, is_cursor: bool) -> SegmentStyle {
     }
 }
 
+fn push_terminal_segment(
+    segments: &mut Vec<TerminalSegment>,
+    style: SegmentStyle,
+    text: &mut String,
+    cells: &mut usize,
+) {
+    if *cells == 0 {
+        text.clear();
+        return;
+    }
+    segments.push(TerminalSegment {
+        text: std::mem::take(text),
+        cells: *cells,
+        fg: style.fg,
+        bg: style.bg,
+        bold: style.bold,
+        underline: style.underline,
+        cursor: style.cursor,
+    });
+    *cells = 0;
+}
+
 fn build_terminal_lines(
     snapshot: &pier_core::terminal::GridSnapshot,
     alive: bool,
@@ -2943,43 +2966,58 @@ fn build_terminal_lines(
             let mut segments = Vec::new();
             let mut current_style: Option<SegmentStyle> = None;
             let mut current_text = String::new();
+            let mut current_cells = 0usize;
 
             for (col_index, cell) in row.iter().enumerate() {
                 let is_cursor = alive
                     && row_index == snapshot.cursor_y as usize
                     && col_index == snapshot.cursor_x as usize;
+                if cell.ch == '\0' && !is_cursor {
+                    // Wide-character continuation cell. The emulator stores
+                    // CJK/fullwidth glyphs as the visible char plus a `\0`
+                    // placeholder in the next cell. Do not serialize that
+                    // placeholder as a real space, otherwise every Chinese
+                    // glyph renders one column too wide in the React grid.
+                    if current_style.is_some() {
+                        current_cells += 1;
+                    } else {
+                        current_style = Some(resolve_segment_style(cell, false));
+                        current_text.push(' ');
+                        current_cells = 1;
+                    }
+                    continue;
+                }
+
                 let next_style = resolve_segment_style(cell, is_cursor);
                 let next_char = if cell.ch == '\0' { ' ' } else { cell.ch };
 
                 if current_style.as_ref() == Some(&next_style) {
                     current_text.push(next_char);
+                    current_cells += 1;
                     continue;
                 }
 
                 if let Some(style) = current_style.take() {
-                    segments.push(TerminalSegment {
-                        text: std::mem::take(&mut current_text),
-                        fg: style.fg,
-                        bg: style.bg,
-                        bold: style.bold,
-                        underline: style.underline,
-                        cursor: style.cursor,
-                    });
+                    push_terminal_segment(
+                        &mut segments,
+                        style,
+                        &mut current_text,
+                        &mut current_cells,
+                    );
                 }
 
                 current_text.push(next_char);
+                current_cells = 1;
                 current_style = Some(next_style);
             }
 
             if let Some(style) = current_style.take() {
-                segments.push(TerminalSegment {
-                    text: current_text,
-                    fg: style.fg,
-                    bg: style.bg,
-                    bold: style.bold,
-                    underline: style.underline,
-                    cursor: style.cursor,
-                });
+                push_terminal_segment(
+                    &mut segments,
+                    style,
+                    &mut current_text,
+                    &mut current_cells,
+                );
             }
 
             TerminalLine { segments }
@@ -5470,21 +5508,37 @@ fn terminal_write(
 #[tauri::command]
 fn terminal_resize(
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
     session_id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let mut sessions = state
-        .terminals
-        .lock()
-        .map_err(|_| String::from("terminal state poisoned"))?;
-    let managed = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| format!("unknown terminal session: {}", session_id))?;
-    managed
-        .terminal
-        .resize(cols.max(40), rows.max(12))
-        .map_err(|error| error.to_string())
+    {
+        let mut sessions = state
+            .terminals
+            .lock()
+            .map_err(|_| String::from("terminal state poisoned"))?;
+        let managed = sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| format!("unknown terminal session: {}", session_id))?;
+        managed
+            .terminal
+            .resize(cols.max(40), rows.max(12))
+            .map_err(|error| error.to_string())?;
+    }
+
+    // Resize mutates the emulator grid but does not necessarily produce PTY
+    // output. Emit a normal data event so the frontend immediately refreshes
+    // instead of showing the old column count until the next shell byte or
+    // safety poll.
+    let _ = app.emit(
+        TERMINAL_EVENT,
+        TerminalEventPayload {
+            session_id,
+            kind: "data",
+        },
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -11969,6 +12023,43 @@ mod base64_tests {
         assert_eq!(decode_base64("Zm9v\nYmFy").unwrap(), b"foobar");
         assert!(decode_base64("Zm9v!").is_err());
         assert!(decode_base64("Zm9").is_err()); // truncated group
+    }
+}
+
+#[cfg(test)]
+mod terminal_line_tests {
+    use super::build_terminal_lines;
+    use pier_core::terminal::{Cell, GridSnapshot};
+
+    #[test]
+    fn wide_char_placeholder_counts_cells_without_visible_space() {
+        let mut cells = vec![Cell::default(); 4];
+        cells[0].ch = '中';
+        cells[1].ch = '\0';
+        cells[2].ch = 'A';
+
+        let snapshot = GridSnapshot {
+            cols: 4,
+            rows: 1,
+            cursor_x: 3,
+            cursor_y: 0,
+            cells,
+            prompt_end: None,
+            awaiting_input: false,
+            alt_screen: false,
+            bracketed_paste: false,
+        };
+
+        let lines = build_terminal_lines(&snapshot, false);
+        let rendered: String = lines[0]
+            .segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect();
+        let cell_count: usize = lines[0].segments.iter().map(|segment| segment.cells).sum();
+
+        assert_eq!(rendered, "中A ");
+        assert_eq!(cell_count, 4);
     }
 }
 

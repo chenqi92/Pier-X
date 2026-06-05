@@ -995,6 +995,8 @@ export type TerminalSessionInfo = {
 
 export type TerminalSegment = {
   text: string;
+  /** Terminal cell width. Differs from `text.length` for CJK/fullwidth glyphs. */
+  cells: number;
   fg: string;
   bg: string;
   bold: boolean;

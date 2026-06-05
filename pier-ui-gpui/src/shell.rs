@@ -2209,6 +2209,12 @@ impl Shell {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                    // Guard: a close-button click on a sibling tab can shrink the
+                    // vec before this select handler runs (event bubbling), so the
+                    // captured `idx` may be stale.
+                    if idx >= this.tabs.len() {
+                        return;
+                    }
                     this.active_tab = idx;
                     let handle = this.tabs[idx].terminal.read(cx).focus_handle(cx);
                     window.focus(&handle, cx);
@@ -2253,6 +2259,9 @@ impl Shell {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseDownEvent, _w, cx| {
+                            // Closing must not also fire the tab's select handler
+                            // (which would then index a now-shorter vec).
+                            cx.stop_propagation();
                             if idx < this.tabs.len() {
                                 this.tabs.remove(idx);
                                 if this.active_tab >= this.tabs.len() {

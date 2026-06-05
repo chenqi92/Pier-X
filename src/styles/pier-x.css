@@ -54,6 +54,20 @@
  * while a resize handle is active. ResizeHandle toggles this class on
  * <body> during mousedown → mouseup. */
 body.is-resizing .app { transition: none; }
+/* During a resize the cursor sits on the splitter while the panes
+ * reflow underneath it. A button that the reflow slides beneath the
+ * stationary cursor would pick up :hover / :active, and the highlight
+ * "sticks" (stale background box) until the next mouse move — visible
+ * e.g. on the SFTP "Browse" / toolbar buttons. Suppress pointer
+ * interaction on the panes for the duration of the drag so no spurious
+ * state is entered. Resize tracking uses document-level mousemove /
+ * mouseup listeners, so the splitter keeps working regardless. */
+body.is-resizing .sidebar,
+body.is-resizing .tabbar,
+body.is-resizing .center,
+body.is-resizing .rightzone {
+  pointer-events: none;
+}
 /* No grid-template-columns override on .is-right-collapsed — the column
  * formula already reduces to `toolstrip-w` when --rightpanel-w hits 0,
  * and keeping the same template lets the width transition interpolate
@@ -276,6 +290,19 @@ body.is-resizing .app { transition: none; }
 .sidebar-search input:focus { border-color: var(--accent); }
 .sidebar-search svg { width: 11px; height: 11px; color: var(--muted); }
 
+/* Query container wrapping the file header + list, so the columns can
+ * collapse by sidebar width (PRODUCT-SPEC §3.1). Sized as the flex
+ * child that fills the sidebar's remaining height; the list scrolls
+ * inside it. Menus are rendered outside this wrapper, so the layout
+ * containment can't affect them. */
+.sidebar-files-cols {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  container-type: inline-size;
+}
+
 .sidebar-list {
   flex: 1;
   overflow-y: auto;
@@ -284,6 +311,30 @@ body.is-resizing .app { transition: none; }
   min-height: 0;
   position: relative;
   scrollbar-gutter: stable;
+}
+
+/* Collapse columns as the sidebar narrows so the file NAME always
+ * keeps priority: drop MOD below 240px, then SIZE below 200px. The
+ * name column (minmax(0,1fr)) absorbs the freed space. */
+@container (max-width: 240px) {
+  .sidebar-header-row,
+  .file-row {
+    grid-template-columns: var(--file-row-icon-w) minmax(0, 1fr) var(--file-row-size-w);
+  }
+  .sidebar-header-row .col-mod,
+  .file-row .fmod {
+    display: none;
+  }
+}
+@container (max-width: 200px) {
+  .sidebar-header-row,
+  .file-row {
+    grid-template-columns: var(--file-row-icon-w) minmax(0, 1fr);
+  }
+  .sidebar-header-row .col-size,
+  .file-row .fsize {
+    display: none;
+  }
 }
 .sidebar-list.is-drop {
   background: color-mix(in srgb, var(--accent) 8%, transparent);

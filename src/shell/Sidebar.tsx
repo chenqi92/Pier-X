@@ -1059,6 +1059,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
             />
           </div>
 
+          <div className="sidebar-files-cols">
           <div className="sidebar-header-row">
             <span className="col-icon" aria-hidden />
             <span className="col-name">{t("NAME")}</span>
@@ -1157,6 +1158,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
                 {searchText ? t("No matching files") : t("Empty directory")}
               </div>
             )}
+          </div>
           </div>
           {localCtxMenu && (
             <ContextMenu

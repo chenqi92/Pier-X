@@ -652,6 +652,14 @@ function SftpPanelBody({ tab }: Props) {
         path: entry.path,
         maxBytes: MAX_EDITOR_BYTES,
       });
+      // A lossy read means the file isn't valid UTF-8 (binary or a
+      // non-UTF-8 encoding). Writing the U+FFFD-substituted text back
+      // would produce a corrupted copy, so route the user to the
+      // byte-exact download/re-upload path instead.
+      if (res.lossy) {
+        setError(t("File is not UTF-8 text and can't be duplicated in-place. Download and re-upload instead."));
+        return;
+      }
       const baseName = entry.name.replace(/(\.[^./]+)?$/, (ext) => ` (copy)${ext ?? ""}`);
       const targetPath = joinRemotePath(remoteDirname(entry.path), baseName);
       await cmd.sftpWriteText({ ...sshArgs, path: targetPath, content: res.content });

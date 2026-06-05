@@ -72,6 +72,7 @@ import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useThemeStore } from "../stores/useThemeStore";
+import { confirm } from "../stores/useConfirmStore";
 import { writeClipboardText } from "../lib/clipboard";
 import * as cmd from "../lib/commands";
 import type { SftpExternalEditEvent, SftpTextFile } from "../lib/commands";
@@ -214,12 +215,18 @@ export default function SftpEditorDialog({
   // the "too large to inline-edit" branch so we never even attempt
   // sftp_read_text against a multi-MB file.
   const tooLargeForInline = typeof size === "number" && size > MAX_EDITOR_BYTES;
+  // Set when a read fails the backend size cap even though we didn't
+  // know the size upfront (e.g. a Code Search hit, which carries no
+  // size). Promotes the dialog to the too-large card instead of
+  // dead-ending on a raw "editor limit is N bytes" error.
+  const [forcedTooLarge, setForcedTooLarge] = useState(false);
+  const showTooLarge = tooLargeForInline || forcedTooLarge;
   // "Card" view — replaces the inline editor / toolbar / footer with a
   // single status card. Triggered when the file is too large to inline
   // edit OR when the user has handed it off to the OS default editor
   // (in which case keeping the inline editor visible would invite
   // confusing competing-write races).
-  const cardMode = tooLargeForInline || !!externalEdit;
+  const cardMode = showTooLarge || !!externalEdit;
   const [wrap, setWrap] = useState(editorWrapDefault);
   const [showNums, setShowNums] = useState(editorLineNumbersDefault);
   const [cursor, setCursor] = useState<{ line: number; col: number; selLen: number; totalLines: number }>({ line: 1, col: 1, selLen: 0, totalLines: 0 });
@@ -247,6 +254,7 @@ export default function SftpEditorDialog({
     let alive = true;
     setError("");
     setDirty(false);
+    setForcedTooLarge(false);
     setMode("edit");
     // Too-large files skip the inline read entirely — the dialog
     // body shows the external-editor / download branch instead.
@@ -309,7 +317,27 @@ export default function SftpEditorDialog({
         });
       } catch (e) {
         if (!alive) return;
-        setError(formatError(e));
+        // The file turned out to exceed the backend read cap and we
+        // didn't know its size upfront (Code Search hits carry none).
+        // Promote to the too-large card (download / external edit)
+        // instead of dead-ending on the raw size error.
+        const msg = formatError(e);
+        if (/editor (write )?limit is/i.test(msg)) {
+          setForcedTooLarge(true);
+          setError("");
+          setMeta({
+            size: 0,
+            permissions: null,
+            modified: null,
+            lossy: false,
+            owner: "",
+            group: "",
+            eol: "",
+            encoding: "",
+          });
+        } else {
+          setError(msg);
+        }
       } finally {
         if (alive) setLoading(false);
       }
@@ -573,6 +601,14 @@ export default function SftpEditorDialog({
   saveRef.current = async () => {
     const view = viewRef.current;
     if (!view || saving) return;
+    // A lossy read already replaced non-UTF-8 bytes with U+FFFD, so
+    // the original bytes are gone from the buffer — writing it back
+    // would silently corrupt the file. Refuse; the user must download
+    // (or use an external editor) to edit such a file safely.
+    if (meta?.lossy) {
+      setError(t("File contains non-UTF-8 bytes; saving would corrupt it. Download to edit instead."));
+      return;
+    }
     let content = view.state.doc.toString();
 
     // Apply on-save transforms before either replacing the buffer or
@@ -611,9 +647,9 @@ export default function SftpEditorDialog({
     }
   };
 
-  const requestClose = () => {
+  const requestClose = async () => {
     if (dirty) {
-      const confirmed = window.confirm(t("Discard unsaved changes?"));
+      const confirmed = await confirm({ message: t("Discard unsaved changes?"), tone: "destructive" });
       if (!confirmed) return;
     }
     onClose();
@@ -996,7 +1032,8 @@ export default function SftpEditorDialog({
               <button
                 type="button"
                 className="btn is-primary is-compact"
-                disabled={!dirty || saving}
+                disabled={!dirty || saving || !!meta?.lossy}
+                title={meta?.lossy ? t("File contains non-UTF-8 bytes; saving would corrupt it. Download to edit instead.") : undefined}
                 onClick={() => void saveRef.current()}
               >
                 <Save size={10} /> {saving ? t("Saving...") : t("Save")}
@@ -1009,7 +1046,7 @@ export default function SftpEditorDialog({
         {!cardMode && meta?.lossy && (
           <div className="editor-warn">
             <AlertTriangle size={12} />
-            <span>{t("Non-UTF-8 bytes were replaced with U+FFFD. Saving will persist the replacement.")}</span>
+            <span>{t("This file contains non-UTF-8 bytes (shown as U+FFFD). It is read-only — saving is disabled to avoid corrupting it. Download to edit.")}</span>
           </div>
         )}
 
@@ -1119,7 +1156,7 @@ export default function SftpEditorDialog({
           {cardMode ? (
             <ExternalEditCard
               size={size ?? meta?.size ?? 0}
-              tooLarge={tooLargeForInline}
+              tooLarge={showTooLarge}
               limit={MAX_EDITOR_BYTES}
               externalEdit={externalEdit}
               busy={externalBusy}

@@ -63,22 +63,27 @@ export default function ChmodDialog({ open, path, initialMode, onSubmit, onClose
 
   const setTriad = (scope: "owner" | "group" | "other", key: "r" | "w" | "x", value: boolean) => {
     const next = { ...triads, [scope]: { ...triads[scope], [key]: value } };
-    const nm = triadsToMode(next);
+    // Preserve the high bits (setuid 4000 / setgid 2000 / sticky 1000)
+    // the rwx checkboxes don't model, so toggling a permission box
+    // doesn't silently clear a special bit set via the octal field.
+    const nm = (triadsToMode(next) & 0o777) | (mode & 0o7000);
     setMode(nm);
-    setOctalDraft(nm.toString(8).padStart(3, "0"));
+    setOctalDraft(nm.toString(8).padStart(4, "0"));
   };
 
   const onOctalChange = (raw: string) => {
     const cleaned = raw.replace(/[^0-7]/g, "").slice(0, 4);
     setOctalDraft(cleaned);
     if (/^[0-7]{3,4}$/.test(cleaned)) {
-      setMode(parseInt(cleaned, 8) & 0o777);
+      // Keep all 12 bits — the backend applies mode & 0o7777, so the
+      // setuid/setgid/sticky bits a 4-digit value carries must survive.
+      setMode(parseInt(cleaned, 8) & 0o7777);
     }
   };
 
   const submit = async () => {
     if (busy) return;
-    await onSubmit(mode & 0o777);
+    await onSubmit(mode & 0o7777);
   };
 
   if (!open) return null;

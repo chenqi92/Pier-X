@@ -59,6 +59,7 @@ import {
 import type { Locale } from "../stores/useSettingsStore";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useSudoStore } from "../stores/useSudoStore";
+import { confirm } from "../stores/useConfirmStore";
 import "../styles/settings-dialog.css";
 
 type Props = {
@@ -687,7 +688,7 @@ function DiagnosticsPanel() {
 
   const handleClear = useCallback(async () => {
     if (!logPath) return;
-    if (!window.confirm(t("Truncate the log file to zero bytes?"))) return;
+    if (!(await confirm({ message: t("Truncate the log file to zero bytes?"), tone: "destructive" }))) return;
     try {
       await clearLogFile();
       toast.success(t("Log cleared"));
@@ -1304,11 +1305,12 @@ function SecurityPanel() {
 
   async function forgetAll() {
     if (
-      !window.confirm(
-        t(
+      !(await confirm({
+        message: t(
           "Forget every saved sudo password? This clears the in-memory cache and deletes keychain entries for all listed hosts.",
         ),
-      )
+        tone: "destructive",
+      }))
     ) {
       return;
     }

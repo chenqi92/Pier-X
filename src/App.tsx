@@ -45,6 +45,7 @@ import ResizeHandle from "./components/ResizeHandle";
 import Stage from "./components/Stage";
 import TaskTray from "./components/TaskTray";
 import ToastStack from "./components/ToastStack";
+import ConfirmHost from "./components/ConfirmHost";
 import { withTask } from "./stores/useTaskStore";
 import type { MenuDef } from "./components/TitlebarMenu";
 import type { PaletteCommand } from "./shell/CommandPalette";
@@ -1131,6 +1132,7 @@ function App() {
           <HostKeyPromptDialog />
           <TaskTray />
           <ToastStack />
+          <ConfirmHost />
         </div>
       </Stage>
     </I18nContext.Provider>

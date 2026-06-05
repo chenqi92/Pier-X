@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
 import type { DataPreview } from "../../lib/types";
+import { confirm } from "../../stores/useConfirmStore";
 import { prettyJsonish } from "./cellFormat";
 import type { DbMutation, GridColumnMeta } from "./dbColumnRules";
 
@@ -516,11 +517,12 @@ export default function DbResultGrid({
     // (the per-row trash interaction is itself a deliberate gesture).
     const deleteCount = muts.filter((m) => m.kind === "delete").length;
     if (deleteCount > 1) {
-      const confirmed = window.confirm(
-        t("Commit will permanently delete {n} row(s). Continue?", {
+      const confirmed = await confirm({
+        message: t("Commit will permanently delete {n} row(s). Continue?", {
           n: deleteCount,
         }),
-      );
+        tone: "destructive",
+      });
       if (!confirmed) return;
     }
     try {

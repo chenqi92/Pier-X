@@ -4,6 +4,7 @@ import { useI18n } from "../../i18n/useI18n";
 import { localizeError } from "../../i18n/localizeMessage";
 import * as cmd from "../../lib/commands";
 import type { PgActivityRow } from "../../lib/commands";
+import { confirm } from "../../stores/useConfirmStore";
 
 type Props = {
   open: boolean;
@@ -120,12 +121,13 @@ export default function PostgresActivityDialog({
   const handleTerminate = async (pid: number) => {
     if (actingPid !== null) return;
     if (
-      !window.confirm(
-        t(
+      !(await confirm({
+        message: t(
           "Force-terminate backend {pid}? The connection will drop and any open transaction is rolled back.",
           { pid },
         ),
-      )
+        tone: "destructive",
+      }))
     ) {
       return;
     }

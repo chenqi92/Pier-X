@@ -40,6 +40,7 @@ import { localizeError } from "../i18n/localizeMessage";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useTabStore } from "../stores/useTabStore";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
+import { confirm } from "../stores/useConfirmStore";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import DismissibleNote from "../components/DismissibleNote";
 import {
@@ -822,7 +823,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
     const msg = entry.kind === "directory"
       ? t("Remove directory {name}? Contents will be deleted.", { name: entry.name })
       : t("Remove file {name}?", { name: entry.name });
-    if (!window.confirm(msg)) return;
+    if (!(await confirm({ message: msg, tone: "destructive" }))) return;
     try {
       await cmd.localRemove(entry.path, entry.kind === "directory");
       refreshLocalEntries();

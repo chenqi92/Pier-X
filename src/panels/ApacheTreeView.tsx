@@ -12,6 +12,7 @@ import {
 import * as cmd from "../lib/commands";
 import type { ApacheNode, ApacheParseResult } from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
+import { confirm } from "../stores/useConfirmStore";
 
 // Editable structured tree view for an Apache config. Renders
 // `<Section>` containers as collapsible cards and inline directives
@@ -349,9 +350,9 @@ function NodeActions({
   onMutate: (next: ApacheNode[]) => void | Promise<void>;
   t: (s: string) => string;
 }) {
-  const remove = () => {
+  const remove = async () => {
     if (busy) return;
-    const ok = window.confirm(t("Remove this node?"));
+    const ok = await confirm({ message: t("Remove this node?"), tone: "destructive" });
     if (!ok) return;
     onMutate(removeAt(allNodes, path));
   };

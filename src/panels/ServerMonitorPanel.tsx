@@ -30,6 +30,7 @@ import Sparkline from "../components/Sparkline";
 import StatusDot from "../components/StatusDot";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
 import { hasPendingHostKeyPrompts } from "../stores/useHostKeyPromptStore";
+import { confirm } from "../stores/useConfirmStore";
 import { logEvent } from "../lib/logger";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import "../styles/monitor-panel.css";
@@ -666,9 +667,10 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
     }
     const cmdLabel = row.command || `pid ${pidNum}`;
     const verb = force ? t("force-kill (SIGKILL)") : t("terminate (SIGTERM)");
-    const ok = window.confirm(
-      t("Really {verb} {target}?", { verb, target: cmdLabel }),
-    );
+    const ok = await confirm({
+      message: t("Really {verb} {target}?", { verb, target: cmdLabel }),
+      tone: "destructive",
+    });
     if (!ok) return;
     try {
       if (isLocal) {

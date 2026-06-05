@@ -39,6 +39,7 @@ import { softwareKeyForTab, useSoftwareStore } from "../stores/useSoftwareStore"
 import { useSoftwareSnapshot } from "../lib/softwareInstall";
 import { useSudoStore, sudoKeyFor } from "../stores/useSudoStore";
 import { useTabStore } from "../stores/useTabStore";
+import { confirm } from "../stores/useConfirmStore";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import SudoPasswordDialog from "../components/SudoPasswordDialog";
 import "../styles/docker-firewall-panel.css";
@@ -706,7 +707,7 @@ function DockerPanelBody({ tab }: Props) {
 
   async function removeImage(id: string, label?: string) {
     if (!hasSsh || actionBusy) return;
-    if (!window.confirm(t("Remove image {id}?", { id: label ?? shortId(id) }))) return;
+    if (!(await confirm({ message: t("Remove image {id}?", { id: label ?? shortId(id) }), tone: "destructive" }))) return;
     setActionBusy(true);
     setError("");
     try {
@@ -733,7 +734,7 @@ function DockerPanelBody({ tab }: Props) {
 
   async function removeVolume(name: string) {
     if (!hasSsh || actionBusy) return;
-    if (!window.confirm(t("Remove volume {name}? Any data stored in the volume will be lost.", { name }))) return;
+    if (!(await confirm({ message: t("Remove volume {name}? Any data stored in the volume will be lost.", { name }), tone: "destructive" }))) return;
     setActionBusy(true);
     setError("");
     try {
@@ -759,7 +760,7 @@ function DockerPanelBody({ tab }: Props) {
 
   async function removeNetwork(name: string) {
     if (!hasSsh || actionBusy) return;
-    if (!window.confirm(t("Remove network {name}?", { name }))) return;
+    if (!(await confirm({ message: t("Remove network {name}?", { name }), tone: "destructive" }))) return;
     setActionBusy(true);
     setError("");
     try {
@@ -870,7 +871,7 @@ function DockerPanelBody({ tab }: Props) {
 
   async function pruneImages() {
     if (actionBusy) return;
-    if (!window.confirm(t("Remove all unused images? This runs `docker image prune -a -f`."))) return;
+    if (!(await confirm({ message: t("Remove all unused images? This runs `docker image prune -a -f`."), tone: "destructive" }))) return;
     setActionBusy(true);
     setError("");
     try {

@@ -4,6 +4,7 @@ import { useI18n } from "../../i18n/useI18n";
 import { localizeError } from "../../i18n/localizeMessage";
 import * as cmd from "../../lib/commands";
 import type { MysqlProcessRow } from "../../lib/commands";
+import { confirm } from "../../stores/useConfirmStore";
 
 type Props = {
   open: boolean;
@@ -115,12 +116,13 @@ export default function MysqlProcessListDialog({
   const handleKillConnection = async (id: number) => {
     if (actingId !== null) return;
     if (
-      !window.confirm(
-        t(
+      !(await confirm({
+        message: t(
           "Force-kill connection {id}? The session will drop and any open transaction is rolled back.",
           { id },
         ),
-      )
+        tone: "destructive",
+      }))
     ) {
       return;
     }

@@ -15,6 +15,7 @@ import { matchJumpConnection, parseEgressClipboard } from "../lib/egressImport";
 import type { EgressProfile } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useEgressStore } from "../stores/useEgressStore";
+import { confirm } from "../stores/useConfirmStore";
 
 type Props = {
   open: boolean;
@@ -442,7 +443,7 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
 
   async function handleDelete() {
     if (!selectedId || busy) return;
-    if (!window.confirm(t("Delete this egress profile? Connections that referenced it will fall back to direct."))) {
+    if (!(await confirm({ message: t("Delete this egress profile? Connections that referenced it will fall back to direct."), tone: "destructive" }))) {
       return;
     }
     setBusy(true);

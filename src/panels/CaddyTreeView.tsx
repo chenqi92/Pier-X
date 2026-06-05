@@ -12,6 +12,7 @@ import {
 import * as cmd from "../lib/commands";
 import type { CaddyNode, CaddyParseResult } from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
+import { confirm } from "../stores/useConfirmStore";
 
 // Editable structured tree view for a parsed Caddyfile.
 //
@@ -345,9 +346,9 @@ function NodeActions({
   onMutate: (next: CaddyNode[]) => void | Promise<void>;
   t: (s: string) => string;
 }) {
-  const remove = () => {
+  const remove = async () => {
     if (busy) return;
-    const ok = window.confirm(t("Remove this node?"));
+    const ok = await confirm({ message: t("Remove this node?"), tone: "destructive" });
     if (!ok) return;
     onMutate(removeAt(allNodes, path));
   };

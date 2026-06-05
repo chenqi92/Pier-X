@@ -72,6 +72,7 @@ import {
 } from "../stores/useSoftwareStore";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
 import { useSudoStore } from "../stores/useSudoStore";
+import { confirm } from "../stores/useConfirmStore";
 import Dialog from "../components/Dialog";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import Popover from "../components/Popover";
@@ -5039,11 +5040,12 @@ function ComposeTemplatesDialog({
   const deleteUserTemplate = async (id: string) => {
     if (busy) return;
     if (
-      !window.confirm(
-        t("Delete user template \"{id}\"? The on-host stack is not affected.", {
+      !(await confirm({
+        message: t("Delete user template \"{id}\"? The on-host stack is not affected.", {
           id,
         }),
-      )
+        tone: "destructive",
+      }))
     ) {
       return;
     }

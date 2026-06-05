@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../../i18n/useI18n";
 import RedisTypeBadge from "./RedisTypeBadge";
 import type { RedisKeyView } from "../../lib/types";
+import { confirm } from "../../stores/useConfirmStore";
 
 /** Discriminated edit operation the panel knows how to translate
  *  into a redis command. The detail view never calls Redis directly
@@ -107,10 +108,11 @@ export default function RedisKeyDetail({
             type="button"
             className="btn is-ghost is-compact is-danger"
             disabled={actionBusy}
-            onClick={() => {
-              const ok = window.confirm(
-                t("Delete key {key}? This cannot be undone.", { key: details.key }),
-              );
+            onClick={async () => {
+              const ok = await confirm({
+                message: t("Delete key {key}? This cannot be undone.", { key: details.key }),
+                tone: "destructive",
+              });
               if (!ok) return;
               onDelete(details.key);
             }}
@@ -449,9 +451,9 @@ function HashView({
                     <button
                       type="button"
                       className="mini-button mini-button--ghost"
-                      onClick={() => {
+                      onClick={async () => {
                         if (
-                          window.confirm(t("Delete field {field}?", { field }))
+                          await confirm({ message: t("Delete field {field}?", { field }), tone: "destructive" })
                         ) {
                           void onEdit({ kind: "hash-del", field });
                         }
@@ -588,8 +590,8 @@ function ListView({
                     <button
                       type="button"
                       className="mini-button mini-button--ghost"
-                      onClick={() => {
-                        if (window.confirm(t("Remove the first occurrence of this element (LREM 1)?"))) {
+                      onClick={async () => {
+                        if (await confirm({ message: t("Remove the first occurrence of this element (LREM 1)?"), tone: "destructive" })) {
                           void onEdit({ kind: "list-rem", value, count: 1 });
                         }
                       }}
@@ -670,8 +672,8 @@ function SetView({
               <button
                 type="button"
                 className="mini-button mini-button--ghost"
-                onClick={() => {
-                  if (window.confirm(t("Remove member {member}?", { member }))) {
+                onClick={async () => {
+                  if (await confirm({ message: t("Remove member {member}?", { member }), tone: "destructive" })) {
                     void onEdit({ kind: "set-rem", member });
                   }
                 }}
@@ -812,8 +814,8 @@ function ZsetView({
                     <button
                       type="button"
                       className="mini-button mini-button--ghost"
-                      onClick={() => {
-                        if (window.confirm(t("Remove member {member}?", { member }))) {
+                      onClick={async () => {
+                        if (await confirm({ message: t("Remove member {member}?", { member }), tone: "destructive" })) {
                           void onEdit({ kind: "zset-rem", member });
                         }
                       }}

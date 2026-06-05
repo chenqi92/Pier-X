@@ -1199,6 +1199,20 @@ pub fn git_comparison_diff(
     )
 }
 
+/// Reject a ref / branch / tag / commit-ish that git would parse as
+/// an option rather than data. Valid refs never start with `-`; this
+/// is defense-in-depth for values that originate from user input or a
+/// cloned remote, preventing flag injection (e.g. a ref named
+/// `--upload-pack=…` or a commit-ish `--output=…`) into the `git`
+/// argv. Values are already passed as separate args (no shell), so
+/// this is the remaining gap, not shell injection.
+fn reject_flaglike_ref(value: &str, label: &str) -> Result<(), String> {
+    if value.trim_start().starts_with('-') {
+        return Err(format!("{label} must not start with '-'"));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn git_checkout_target(
     path: Option<String>,
@@ -1210,7 +1224,11 @@ pub fn git_checkout_target(
     if target_ref.is_empty() {
         return Err(String::from("checkout target cannot be empty"));
     }
+    reject_flaglike_ref(target_ref, "checkout target")?;
     let tracking_ref = tracking.unwrap_or_default();
+    if !tracking_ref.trim().is_empty() {
+        reject_flaglike_ref(tracking_ref.trim(), "tracking ref")?;
+    }
     if tracking_ref.trim().is_empty() {
         run_git_at(&repo_path, &["checkout", target_ref])
     } else {
@@ -1237,10 +1255,12 @@ pub fn git_create_branch_at(
     if branch_name.is_empty() {
         return Err(String::from("branch name cannot be empty"));
     }
+    reject_flaglike_ref(branch_name, "branch name")?;
     let start = start_point.unwrap_or_default();
     if start.trim().is_empty() {
         run_git_at(&repo_path, &["branch", branch_name])
     } else {
+        reject_flaglike_ref(start.trim(), "start point")?;
         run_git_at(&repo_path, &["branch", branch_name, start.trim()])
     }
 }
@@ -1314,6 +1334,7 @@ pub fn git_merge_branch(path: Option<String>, name: String) -> Result<String, St
     if branch_name.is_empty() {
         return Err(String::from("branch name cannot be empty"));
     }
+    reject_flaglike_ref(branch_name, "branch name")?;
     run_git_at(&repo_path, &["merge", branch_name])
 }
 
@@ -1418,7 +1439,11 @@ pub fn git_create_tag_at(
     if tag_name.is_empty() {
         return Err(String::from("tag name cannot be empty"));
     }
+    reject_flaglike_ref(tag_name, "tag name")?;
     let target_ref = target.unwrap_or_default();
+    if !target_ref.trim().is_empty() {
+        reject_flaglike_ref(target_ref.trim(), "tag target")?;
+    }
     let annotation = message.trim();
     if annotation.is_empty() {
         if target_ref.trim().is_empty() {
@@ -1592,6 +1617,7 @@ pub fn git_reset_to_commit(
     if commit_hash.is_empty() {
         return Err(String::from("commit hash cannot be empty"));
     }
+    reject_flaglike_ref(commit_hash, "commit hash")?;
     let reset_mode = match mode.trim() {
         "soft" => "soft",
         "hard" => "hard",
@@ -1842,6 +1868,7 @@ pub fn git_drop_commit(
     if commit_hash.is_empty() {
         return Err(String::from("commit hash cannot be empty"));
     }
+    reject_flaglike_ref(commit_hash, "commit hash")?;
     let head_hash = run_git_at(&repo_path, &["rev-parse", "HEAD"])?;
     if head_hash.trim() == commit_hash {
         return run_git_at(&repo_path, &["reset", "--hard", "HEAD~1"]);
@@ -1852,6 +1879,7 @@ pub fn git_drop_commit(
             "parent hash is required to drop a non-HEAD commit",
         ));
     }
+    reject_flaglike_ref(parent.trim(), "parent hash")?;
     run_git_at(
         &repo_path,
         &["rebase", "--onto", parent.trim(), commit_hash, "HEAD"],

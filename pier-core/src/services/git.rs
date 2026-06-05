@@ -401,7 +401,10 @@ impl GitClient {
 
     /// Get the diff for an untracked file (shows full content).
     pub fn diff_untracked(&self, path: &str) -> Result<String, GitError> {
-        self.git(&["diff", "--no-color", "--no-index", "/dev/null", path])
+        // `--` separates options from path operands so an untracked
+        // file literally named like a flag (`-R`, `--output=x`) is
+        // treated as a path, not parsed as a git option.
+        self.git(&["diff", "--no-color", "--no-index", "--", "/dev/null", path])
             .or_else(|_| {
                 // --no-index returns exit code 1 when files differ,
                 // which is normal — try reading the file directly

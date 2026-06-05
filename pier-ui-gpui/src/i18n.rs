@@ -349,6 +349,10 @@ fn en(key: &str) -> Option<&'static str> {
         "set.scrollback" => "Scrollback",
         "set.scrollback_value" => "pier-core emulator",
         "set.cursor_note" => "Cursor / scrollback / bell are not configurable in this build.",
+        "set.smart_mode" => "SMART MODE",
+        "set.smart_on" => "On",
+        "set.smart_off" => "Off",
+        "set.smart_note" => "Smart mode wraps the shell prompt with OSC 133 markers for syntax highlighting, autosuggest, and Tab completion. Takes effect on terminals opened afterwards; remote shells (bash / zsh) only.",
         "set.editor_section" => "SFTP FILE EDITOR",
         "set.editor_note" => "Wrap, line numbers, tab width and on-save trimming live here in the full app. This build has no in-app file editor to configure.",
 
@@ -954,6 +958,10 @@ fn zh(key: &str) -> Option<&'static str> {
         "set.cursor_block" => "块状",
         "set.scrollback" => "回滚缓冲",
         "set.cursor_note" => "本版本不支持配置光标 / 回滚缓冲 / 提示音。",
+        "set.smart_mode" => "智能模式",
+        "set.smart_on" => "开",
+        "set.smart_off" => "关",
+        "set.smart_note" => "智能模式用 OSC 133 标记包裹 shell 提示符,提供语法高亮、自动建议与 Tab 补全。对之后新开的终端生效;仅远端 shell(bash / zsh)。",
         "set.editor_section" => "SFTP 文件编辑器",
         "set.editor_note" => "自动换行、行号、制表符宽度和保存时裁剪在完整版应用中可配置。本版本没有内置文件编辑器可供设置。",
 

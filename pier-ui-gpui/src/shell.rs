@@ -355,6 +355,7 @@ impl Shell {
         // Restore persisted layout/state from the last session.
         let st = data::load_ui_state();
         i18n::set(Lang::from_code(&st.lang));
+        data::set_smart_mode(st.smart_mode);
         if !st.dark {
             cx.set_global(Theme::light());
         }
@@ -872,6 +873,7 @@ impl Shell {
             right_w: self.right_w.map(f32::from),
             cwd: self.cwd.display().to_string(),
             lang: i18n::current().code().to_string(),
+            smart_mode: data::smart_mode(),
         });
     }
 

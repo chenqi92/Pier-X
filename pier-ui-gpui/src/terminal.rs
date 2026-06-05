@@ -65,17 +65,28 @@ pub struct TerminalView {
     cols: u16,
     rows: u16,
     scroll_offset: usize,
+    /// Smart-mode captured at construction (`data::smart_mode()`): drives the
+    /// OSC 133 shell-integration init and gates the completion / syntax /
+    /// autosuggest overlays. Fixed for the terminal's lifetime — toggling the
+    /// setting affects terminals opened afterwards.
+    smart: bool,
 }
 
 impl TerminalView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let dirty = Arc::new(AtomicBool::new(true));
         let focus = cx.focus_handle();
+        let smart = data::smart_mode();
 
-        let (term, error) = match PierTerminal::new(
+        // Smart mode launches the shell with OSC 133 / OSC 7 integration so the
+        // emulator exposes prompt_end / awaiting_input / cwd for the overlays.
+        // On Windows this is a no-op in pier-core (no cmd.exe OSC 133) and falls
+        // back to a plain shell — the overlays simply never activate.
+        let (term, error) = match PierTerminal::new_with_smart(
             COLS,
             ROWS,
             "powershell.exe",
+            smart,
             notify_dirty,
             Arc::as_ptr(&dirty) as *mut c_void,
         ) {
@@ -98,6 +109,7 @@ impl TerminalView {
             cols: COLS,
             rows: ROWS,
             scroll_offset: 0,
+            smart,
         }
     }
 
@@ -118,6 +130,7 @@ impl TerminalView {
         let dirty = Arc::new(AtomicBool::new(true));
         let focus = cx.focus_handle();
         let label = format!("{}@{}", cfg.user, cfg.host);
+        let smart = data::smart_mode();
 
         Self::spawn_poll(cx);
 
@@ -145,6 +158,13 @@ impl TerminalView {
                             Ok(mut term) => {
                                 // Sync to whatever size the live viewport settled on.
                                 let _ = term.resize(this.cols, this.rows);
+                                // Install OSC 133 / OSC 7 integration on the remote
+                                // shell so prompt_end / awaiting_input / cwd populate
+                                // for the smart-mode overlays.
+                                if this.smart {
+                                    let _ = term
+                                        .write(&pier_core::terminal::smart::remote_init_payload());
+                                }
                                 this.term = Some(term);
                                 this.session = Some(session);
                                 this.status = None;
@@ -175,6 +195,7 @@ impl TerminalView {
             cols: COLS,
             rows: ROWS,
             scroll_offset: 0,
+            smart,
         }
     }
 

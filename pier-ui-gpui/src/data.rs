@@ -813,6 +813,25 @@ pub struct UiState {
     pub cwd: String,
     /// Interface language code ("en" / "zh"); see `crate::i18n`.
     pub lang: String,
+    /// Terminal smart-mode: OSC 133 shell integration + completion / syntax /
+    /// autosuggest overlays. Opt-in (PRODUCT-SPEC §4.2.1), off by default.
+    pub smart_mode: bool,
+}
+
+/// Process-global terminal smart-mode flag, mirroring how `i18n` holds the
+/// interface language: loaded from `UiState` at startup, flipped from Settings,
+/// and read by `TerminalView` when a shell is created.
+static SMART_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether terminal smart-mode is currently enabled.
+pub fn smart_mode() -> bool {
+    SMART_MODE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Set the process-global smart-mode flag (does not persist on its own —
+/// callers also write `UiState`).
+pub fn set_smart_mode(on: bool) {
+    SMART_MODE.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 impl Default for UiState {
@@ -826,6 +845,7 @@ impl Default for UiState {
             right_w: None,
             cwd: String::new(),
             lang: String::from("en"),
+            smart_mode: false,
         }
     }
 }
@@ -858,6 +878,7 @@ pub fn load_ui_state() -> UiState {
             "right_w" => s.right_w = v.parse().ok(),
             "cwd" => s.cwd = v.to_string(),
             "lang" => s.lang = v.to_string(),
+            "smart_mode" => s.smart_mode = v == "true",
             _ => {}
         }
     }
@@ -872,7 +893,7 @@ pub fn save_ui_state(s: &UiState) {
     }
     let opt = |o: Option<f32>| o.map(|v| v.to_string()).unwrap_or_default();
     let body = format!(
-        "active_tool={}\nright_collapsed={}\nshow_servers={}\ndark={}\nsidebar_w={}\nright_w={}\ncwd={}\nlang={}\n",
+        "active_tool={}\nright_collapsed={}\nshow_servers={}\ndark={}\nsidebar_w={}\nright_w={}\ncwd={}\nlang={}\nsmart_mode={}\n",
         s.active_tool,
         s.right_collapsed,
         s.show_servers,
@@ -881,6 +902,7 @@ pub fn save_ui_state(s: &UiState) {
         opt(s.right_w),
         s.cwd,
         s.lang,
+        s.smart_mode,
     );
     let _ = std::fs::write(&p, body);
 }

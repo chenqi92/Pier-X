@@ -201,6 +201,37 @@ impl SettingsView {
             .child(lang.label())
     }
 
+    /// An On / Off button for terminal smart-mode, mirroring [`Self::lang_btn`].
+    /// Flips the process-global flag and persists via load-modify-save; takes
+    /// effect on terminals opened afterwards.
+    fn smart_btn(&self, cx: &mut Context<Self>, want_on: bool) -> impl IntoElement {
+        let t = &self.theme;
+        let active = data::smart_mode() == want_on;
+        div()
+            .id(SharedString::from(format!("set-smart-{}", if want_on { "on" } else { "off" })))
+            .px(t.sp3)
+            .py(px(5.0))
+            .rounded(t.radius_sm)
+            .text_size(t.fs_ui)
+            .cursor_pointer()
+            .when(active, |d| d.bg(t.accent).text_color(t.accent_ink))
+            .when(!active, |d| d.bg(t.panel_2).text_color(t.ink_2))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_this, _: &MouseDownEvent, window, cx| {
+                    if data::smart_mode() != want_on {
+                        data::set_smart_mode(want_on);
+                        let mut s = data::load_ui_state();
+                        s.smart_mode = want_on;
+                        data::save_ui_state(&s);
+                        window.refresh();
+                        cx.notify();
+                    }
+                }),
+            )
+            .child(i18n::t(if want_on { "set.smart_on" } else { "set.smart_off" }))
+    }
+
     /// A `name — addr` connection row for the Connections page.
     fn conn_line(&self, name: &str, addr: &str) -> impl IntoElement {
         let t = &self.theme;
@@ -263,6 +294,16 @@ impl SettingsView {
                 .child(ui::info_row(t, i18n::t("set.cursor"), i18n::t("set.cursor_block")))
                 .child(ui::info_row(t, i18n::t("set.scrollback"), i18n::t("set.scrollback_value")))
                 .child(note(i18n::t("set.cursor_note")))
+                .child(ui::section_label(t, i18n::t("set.smart_mode")))
+                .child(
+                    h_flex()
+                        .gap(t.sp2)
+                        .px(t.sp3)
+                        .py(t.sp1)
+                        .child(self.smart_btn(cx, true))
+                        .child(self.smart_btn(cx, false)),
+                )
+                .child(note(i18n::t("set.smart_note")))
                 .into_any_element(),
             Page::Editor => v_flex()
                 .child(ui::section_label(t, i18n::t("set.editor_section")))

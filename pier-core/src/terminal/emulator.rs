@@ -354,7 +354,12 @@ fn parse_ssh_command(line: &str) -> Option<(String, String, u16)> {
     }
 
     let mut host = String::new();
-    let mut user = String::from("root");
+    // Empty = "no explicit user given". OpenSSH then uses the local
+    // login user (NOT root), and consumers of `ssh_detected_user`
+    // are documented to treat empty as "unknown, fall back" — see the
+    // field doc above. Defaulting to "root" actively mis-targeted the
+    // right-side panels / credential cache to root@host.
+    let mut user = String::new();
     let mut port: u16 = 22;
 
     // Flags that consume the next argument
@@ -954,9 +959,13 @@ fn extract_osc7_path(uri: &str) -> Option<String> {
     } else {
         return None;
     };
-    // Percent-decode. Keep the decoder dependency-free — only
-    // `%XX` hex escapes need handling for filesystem paths.
-    let mut out = String::with_capacity(path.len());
+    // Percent-decode into raw bytes, THEN interpret as UTF-8. Decoding
+    // each `%XX` (or literal byte) straight into a `char` maps bytes
+    // 0x80–0xFF to U+0080–U+00FF (Latin-1), so a UTF-8 path like
+    // `/srv/caf%C3%A9` (`café`) came out as mojibake `cafÃ©` — which
+    // then broke Tab completion / restart-`cd` for any non-ASCII dir.
+    // Collecting bytes first lets multi-byte sequences round-trip.
+    let mut decoded: Vec<u8> = Vec::with_capacity(path.len());
     let bytes = path.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -964,15 +973,15 @@ fn extract_osc7_path(uri: &str) -> Option<String> {
             let hi = hex_digit(bytes[i + 1]);
             let lo = hex_digit(bytes[i + 2]);
             if let (Some(h), Some(l)) = (hi, lo) {
-                out.push((h * 16 + l) as char);
+                decoded.push(h * 16 + l);
                 i += 3;
                 continue;
             }
         }
-        out.push(bytes[i] as char);
+        decoded.push(bytes[i]);
         i += 1;
     }
-    Some(out)
+    Some(String::from_utf8_lossy(&decoded).into_owned())
 }
 
 fn hex_digit(b: u8) -> Option<u8> {

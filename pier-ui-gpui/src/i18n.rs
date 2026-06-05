@@ -189,6 +189,7 @@ fn en(key: &str) -> Option<&'static str> {
         "tab.color" => "COLOR",
         "tab.new_terminal" => "New Terminal",
         "tab.new_ssh" => "New SSH",
+        "term.more_results" => "+{0} more",
 
         // ── Top-bar menus / actions ────────────────────────────────────
         "menu.file" => "File",
@@ -805,6 +806,7 @@ fn zh(key: &str) -> Option<&'static str> {
         "tab.color" => "颜色",
         "tab.new_terminal" => "新建终端",
         "tab.new_ssh" => "新建 SSH",
+        "term.more_results" => "+{0} 更多",
 
         // ── Top-bar menus ──────────────────────────────────────────────
         "menu.file" => "文件",

@@ -17,12 +17,14 @@ use gpui::{
     div, px, App, Context, Div, FocusHandle, Focusable, FontWeight, Hsla, KeyDownEvent, Keystroke,
     MouseButton, MouseDownEvent, ScrollDelta, ScrollWheelEvent, SharedString, Window,
 };
-use gpui_component::v_flex;
+use gpui_component::{h_flex, v_flex};
 
 use pier_core::ssh::{SshConfig, SshSession};
+use pier_core::terminal::completions::{Completion, CompletionKind};
 use pier_core::terminal::{Color, GridSnapshot, PierTerminal};
 
 use crate::data;
+use crate::i18n;
 use crate::theme::Theme;
 
 // Initial grid; replaced on first paint once the real viewport is known.
@@ -44,6 +46,17 @@ extern "C" fn notify_dirty(user_data: *mut c_void, _event: u32) {
     }
     let flag = unsafe { &*(user_data as *const AtomicBool) };
     flag.store(true, Ordering::Release);
+}
+
+/// Open Tab-completion popover state.
+struct CompletionState {
+    /// Candidates returned by `data::terminal_complete`.
+    items: Vec<Completion>,
+    /// Highlighted row.
+    sel: usize,
+    /// The word prefix the user had typed, used to compute the bytes written
+    /// when a row is applied.
+    prefix: String,
 }
 
 pub struct TerminalView {
@@ -70,6 +83,10 @@ pub struct TerminalView {
     /// autosuggest overlays. Fixed for the terminal's lifetime — toggling the
     /// setting affects terminals opened afterwards.
     smart: bool,
+    /// Open Tab-completion popover, or `None`.
+    comp: Option<CompletionState>,
+    /// Generation counter so a stale async completion result is dropped.
+    comp_gen: u64,
 }
 
 impl TerminalView {
@@ -110,6 +127,8 @@ impl TerminalView {
             rows: ROWS,
             scroll_offset: 0,
             smart,
+            comp: None,
+            comp_gen: 0,
         }
     }
 
@@ -196,6 +215,8 @@ impl TerminalView {
             rows: ROWS,
             scroll_offset: 0,
             smart,
+            comp: None,
+            comp_gen: 0,
         }
     }
 
@@ -477,7 +498,198 @@ impl TerminalView {
         Some(row)
     }
 
+    /// Run Tab-completion for the current word: compute the line / cursor / word
+    /// prefix from the grid, then complete on the background executor. One match
+    /// applies immediately; several open the popover; none is a no-op.
+    fn trigger_completion(&mut self, cx: &mut Context<Self>) {
+        let Some(snap) = self.snapshot.as_ref() else {
+            return;
+        };
+        let Some((line, (pr, pc))) = self.smart_line(snap) else {
+            return;
+        };
+        let cursor_char = if snap.cursor_y == pr && snap.cursor_x as usize >= pc as usize {
+            (snap.cursor_x as usize - pc as usize).min(line.chars().count())
+        } else {
+            line.chars().count()
+        };
+        let cursor_bytes = line
+            .char_indices()
+            .nth(cursor_char)
+            .map(|(b, _)| b)
+            .unwrap_or(line.len());
+        let word_start = word_start_of(&line, cursor_bytes);
+        let prefix = line[word_start..cursor_bytes].to_string();
+        let cwd = self.term.as_ref().and_then(|t| t.current_cwd());
+        let locale = if i18n::current().code() == "zh" {
+            "zh-CN"
+        } else {
+            "en"
+        };
+        self.comp_gen += 1;
+        let gen = self.comp_gen;
+        cx.spawn(async move |this, cx| {
+            let items = cx
+                .background_executor()
+                .spawn(async move {
+                    data::terminal_complete(&line, cursor_bytes, cwd.as_deref(), locale)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.comp_gen != gen {
+                    return;
+                }
+                if items.is_empty() {
+                    this.comp = None;
+                } else if items.len() == 1 {
+                    let bytes = completion_bytes(&prefix, &items[0].value);
+                    if let Some(term) = &this.term {
+                        let _ = term.write(&bytes);
+                    }
+                    this.comp = None;
+                    this.dirty.store(true, Ordering::Release);
+                } else {
+                    this.comp = Some(CompletionState {
+                        items,
+                        sel: 0,
+                        prefix,
+                    });
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Apply the highlighted completion row: write the word-diff to the PTY and
+    /// close the popover.
+    fn apply_completion(&mut self, cx: &mut Context<Self>) {
+        let Some(comp) = self.comp.take() else {
+            return;
+        };
+        if let Some(item) = comp.items.get(comp.sel) {
+            let bytes = completion_bytes(&comp.prefix, &item.value);
+            if let Some(term) = &self.term {
+                let _ = term.write(&bytes);
+            }
+            self.dirty.store(true, Ordering::Release);
+        }
+        cx.notify();
+    }
+
+    /// The Tab-completion popover, anchored just below the prompt line.
+    fn completion_popover(&self, snap: &GridSnapshot) -> Option<Div> {
+        let comp = self.comp.as_ref()?;
+        let (_, (pr, pc)) = self.smart_line(snap)?;
+        let t = &self.theme;
+        let fs = f32::from(t.fs_body);
+        let line_h = (fs * LINE_RATIO).round();
+        let char_w = fs * CHAR_RATIO;
+        let pad = f32::from(t.sp3);
+        const MAX_ROWS: usize = 12;
+        let mut list = v_flex()
+            .absolute()
+            .top(px(pad + ((pr as f32) + 1.0) * line_h))
+            .left(px(pad + (pc as f32) * char_w))
+            .min_w(px(220.0))
+            .max_w(px(560.0))
+            .py(px(2.0))
+            .rounded(t.radius_sm)
+            .bg(t.panel)
+            .border_1()
+            .border_color(t.line_2);
+        for (i, item) in comp.items.iter().take(MAX_ROWS).enumerate() {
+            let selected = i == comp.sel;
+            let mut row = h_flex()
+                .items_center()
+                .gap(t.sp2)
+                .px(t.sp2)
+                .py(px(2.0))
+                .when(selected, |d| d.bg(t.accent_dim))
+                .child(
+                    div()
+                        .w(px(48.0))
+                        .flex_none()
+                        .text_size(t.fs_sm)
+                        .text_color(t.muted)
+                        .child(completion_kind_label(item.kind)),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .font_family(t.mono.clone())
+                        .text_size(t.fs_sm)
+                        .text_color(if selected { t.ink } else { t.ink_2 })
+                        .child(SharedString::from(item.display.clone())),
+                );
+            if let Some(desc) = item.description.clone().or_else(|| item.hint.clone()) {
+                row = row.child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .overflow_hidden()
+                        .text_size(t.fs_sm)
+                        .text_color(t.dim)
+                        .child(SharedString::from(desc)),
+                );
+            }
+            list = list.child(row);
+        }
+        if comp.items.len() > MAX_ROWS {
+            list = list.child(
+                div()
+                    .px(t.sp2)
+                    .py(px(2.0))
+                    .text_size(t.fs_sm)
+                    .text_color(t.dim)
+                    .child(i18n::tf(
+                        "term.more_results",
+                        &[&(comp.items.len() - MAX_ROWS).to_string()],
+                    )),
+            );
+        }
+        Some(list)
+    }
+
     fn on_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        // Smart mode: the open completion popover captures navigation / apply /
+        // dismiss keys before anything reaches the PTY. Any other key closes it
+        // and falls through to normal handling.
+        if self.comp.is_some() {
+            match ev.keystroke.key.as_str() {
+                "down" | "tab" => {
+                    if let Some(c) = &mut self.comp {
+                        c.sel = (c.sel + 1) % c.items.len();
+                    }
+                    cx.notify();
+                    return;
+                }
+                "up" => {
+                    if let Some(c) = &mut self.comp {
+                        c.sel = (c.sel + c.items.len() - 1) % c.items.len();
+                    }
+                    cx.notify();
+                    return;
+                }
+                "enter" | "right" => {
+                    self.apply_completion(cx);
+                    return;
+                }
+                "escape" => {
+                    self.comp = None;
+                    cx.notify();
+                    return;
+                }
+                _ => self.comp = None,
+            }
+        }
+
+        // Smart mode: Tab triggers completion instead of writing a literal tab.
+        if self.smart && self.comp.is_none() && ev.keystroke.key == "tab" {
+            self.trigger_completion(cx);
+            return;
+        }
+
         // Smart mode: accept the history ghost with Right / End when the cursor
         // is at the end of the line — fish-style. Writes the suffix to the PTY
         // and consumes the key so it isn't also sent as a cursor move.
@@ -565,6 +777,12 @@ impl Render for TerminalView {
             .as_ref()
             .filter(|_| self.error.is_none())
             .and_then(|snap| self.smart_overlay(snap));
+        // Tab-completion popover, anchored below the prompt line.
+        let popover = self
+            .snapshot
+            .as_ref()
+            .filter(|_| self.error.is_none())
+            .and_then(|snap| self.completion_popover(snap));
 
         div()
             .track_focus(&self.focus)
@@ -589,6 +807,7 @@ impl Render for TerminalView {
             .text_color(t.ink)
             .child(body)
             .children(overlay)
+            .children(popover)
     }
 }
 
@@ -674,6 +893,49 @@ fn keystroke_to_bytes(ks: &Keystroke) -> Vec<u8> {
         return ks.key.as_bytes().to_vec();
     }
     Vec::new()
+}
+
+/// Short technical tag shown at the left of a completion row (kept literal like
+/// the engine labels, not localized).
+fn completion_kind_label(kind: CompletionKind) -> &'static str {
+    match kind {
+        CompletionKind::Builtin => "builtin",
+        CompletionKind::Binary => "bin",
+        CompletionKind::File => "file",
+        CompletionKind::Directory => "dir",
+        CompletionKind::Subcommand => "cmd",
+        CompletionKind::Option => "opt",
+    }
+}
+
+/// Byte offset where the word under `cursor` starts — walks back over non-
+/// delimiter bytes. Mirrors `completions::find_word_start`.
+fn word_start_of(line: &str, cursor: usize) -> usize {
+    let bytes = line.as_bytes();
+    let mut i = cursor.min(line.len());
+    while i > 0 {
+        if matches!(
+            bytes[i - 1],
+            b' ' | b'\t' | b'|' | b'&' | b';' | b'>' | b'<' | b'\n'
+        ) {
+            break;
+        }
+        i -= 1;
+    }
+    i
+}
+
+/// Bytes to write to the PTY to turn the typed `prefix` into `value`. When the
+/// value extends the prefix, only the tail is sent; otherwise the prefix is
+/// erased with backspaces and the full value written.
+fn completion_bytes(prefix: &str, value: &str) -> Vec<u8> {
+    if let Some(tail) = value.strip_prefix(prefix) {
+        tail.as_bytes().to_vec()
+    } else {
+        let mut out = vec![0x7f; prefix.chars().count()];
+        out.extend_from_slice(value.as_bytes());
+        out
+    }
 }
 
 /// Shell-input token flavour for the smart-mode syntax overlay. A subset of

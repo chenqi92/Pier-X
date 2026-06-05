@@ -869,6 +869,34 @@ pub fn history_suggest(prefix: &str) -> Option<String> {
         .map(|c| c[prefix.len()..].to_string())
 }
 
+/// Process-global bundled command library (subcommand / option descriptions),
+/// built once — `Library::bundled` parses the embedded packs.
+fn completion_library() -> &'static pier_core::terminal::library::Library {
+    static LIB: std::sync::OnceLock<pier_core::terminal::library::Library> =
+        std::sync::OnceLock::new();
+    LIB.get_or_init(pier_core::terminal::library::Library::bundled)
+}
+
+/// Tab-completion candidates for `line` at byte offset `cursor`, using the
+/// shell's last-known `cwd` (OSC 7) for file completion and the bundled library
+/// for subcommand / option descriptions. `locale` selects the description
+/// language (e.g. "en" / "zh-CN").
+pub fn terminal_complete(
+    line: &str,
+    cursor: usize,
+    cwd: Option<&str>,
+    locale: &str,
+) -> Vec<pier_core::terminal::completions::Completion> {
+    let cwd_path = cwd.map(std::path::Path::new);
+    pier_core::terminal::completions::complete_with_library(
+        line,
+        cursor,
+        cwd_path,
+        completion_library(),
+        locale,
+    )
+}
+
 impl Default for UiState {
     fn default() -> Self {
         Self {

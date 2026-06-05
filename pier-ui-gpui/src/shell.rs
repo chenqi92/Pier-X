@@ -359,6 +359,17 @@ impl Shell {
         if !st.dark {
             cx.set_global(Theme::light());
         }
+        // Keep gpui-component's theme (TitleBar control-icon colours) in sync
+        // with the restored app theme.
+        gpui_component::Theme::change(
+            if st.dark {
+                gpui_component::ThemeMode::Dark
+            } else {
+                gpui_component::ThemeMode::Light
+            },
+            None,
+            cx,
+        );
         let cwd = if !st.cwd.is_empty() && std::path::Path::new(&st.cwd).is_dir() {
             PathBuf::from(&st.cwd)
         } else {
@@ -890,6 +901,15 @@ impl Shell {
             Cmd::ToggleTheme => {
                 let dark = cx.global::<Theme>().dark;
                 cx.set_global(if dark { Theme::light() } else { Theme::dark() });
+                gpui_component::Theme::change(
+                    if dark {
+                        gpui_component::ThemeMode::Light
+                    } else {
+                        gpui_component::ThemeMode::Dark
+                    },
+                    Some(window),
+                    cx,
+                );
                 window.refresh();
                 self.persist(cx);
                 return;
@@ -1324,6 +1344,41 @@ impl Shell {
             .child(icon(name, px(15.0), t.ink_2))
     }
 
+    /// A title-bar EN / 中 toggle that flips the interface language and persists
+    /// it (also available in Settings → General).
+    fn lang_btn(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let label = if i18n::current() == Lang::Zh { "中" } else { "EN" };
+        div()
+            .id("lang-toggle")
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(px(26.0))
+            .min_w(px(26.0))
+            .px(t.sp1)
+            .rounded(t.radius_sm)
+            .cursor_pointer()
+            .text_size(t.fs_ui)
+            .text_color(t.ink_2)
+            .hover(|s| s.bg(t.hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    let next = if i18n::current() == Lang::Zh {
+                        Lang::En
+                    } else {
+                        Lang::Zh
+                    };
+                    i18n::set(next);
+                    this.persist(cx);
+                    window.refresh();
+                    cx.notify();
+                }),
+            )
+            .child(label)
+    }
+
     /// A top-bar menu label plus its drop-down (deferred so it paints on top).
     fn menu_btn(&self, cx: &mut Context<Self>, idx: usize) -> impl IntoElement {
         let t = &self.theme;
@@ -1439,6 +1494,7 @@ impl Shell {
                     .child(self.action_btn(cx, "square-terminal", Cmd::OpenBroadcast))
                     .child(self.action_btn(cx, "network", Cmd::OpenPortForward))
                     .child(self.action_btn(cx, "plus", Cmd::NewTerminal))
+                    .child(self.lang_btn(cx))
                     .child(self.action_btn(cx, theme_icon, Cmd::ToggleTheme))
                     .child(self.action_btn(cx, "settings", Cmd::OpenSettings)),
             )
@@ -3006,7 +3062,11 @@ impl Shell {
                         }),
                     ),
             )
-            .child(card)
+            // `occlude` stops clicks inside the dialog from falling through to
+            // the scrim's CloseOverlay — otherwise any click in the card (e.g. a
+            // Settings nav item) would dismiss the overlay. Outside clicks still
+            // hit the scrim and close it.
+            .child(div().occlude().child(card))
     }
 
     // ── Welcome view (shown when no tab is open) ─────────────────

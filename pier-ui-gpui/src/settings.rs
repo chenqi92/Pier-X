@@ -156,6 +156,16 @@ impl SettingsView {
                 cx.listener(move |_this, _: &MouseDownEvent, window, cx| {
                     if cx.global::<Theme>().dark != want_dark {
                         cx.set_global(if want_dark { Theme::dark() } else { Theme::light() });
+                        // Keep gpui-component's theme (TitleBar icon colours) in sync.
+                        gpui_component::Theme::change(
+                            if want_dark {
+                                gpui_component::ThemeMode::Dark
+                            } else {
+                                gpui_component::ThemeMode::Light
+                            },
+                            Some(window),
+                            cx,
+                        );
                         // Persist so the choice survives a restart, mirroring the
                         // shell's ToggleTheme. Load-modify-save keeps the other
                         // UiState fields (layout/cwd) the SettingsView doesn't hold.

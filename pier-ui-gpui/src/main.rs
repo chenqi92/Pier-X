@@ -42,6 +42,10 @@ fn main() {
             KeyBinding::new("ctrl-,", CmdSettings, None),
         ]);
         cx.set_global(Theme::dark());
+        // Sync gpui-component's own theme (drives the TitleBar window-control
+        // icon colours) to match; without this the min/max/close icons render in
+        // the light-default foreground and vanish on the dark title bar.
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
 
         cx.spawn(async move |cx| {
             let bounds = Bounds {

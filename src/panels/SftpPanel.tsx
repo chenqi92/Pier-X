@@ -2026,7 +2026,7 @@ function SftpRemoteCopyDialog({
   ) => void | Promise<void>;
 }) {
   const { t } = useI18n();
-  const { connections } = useConnectionStore();
+  const connections = useConnectionStore((s) => s.connections);
   // Default destination path is the same path on the target host —
   // matches "scp src target:src" muscle memory. User can edit before
   // confirming.

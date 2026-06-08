@@ -49,7 +49,8 @@ export default function TopBar({
   menus,
 }: Props) {
   const { t } = useI18n();
-  const { resolvedDark, mode } = useThemeStore();
+  const resolvedDark = useThemeStore((s) => s.resolvedDark);
+  const mode = useThemeStore((s) => s.mode);
   const dragCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => () => dragCleanupRef.current?.(), []);

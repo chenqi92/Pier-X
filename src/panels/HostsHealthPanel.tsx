@@ -4,7 +4,7 @@
 // surface — credential-free, no SSH handshake; click-through into a
 // real terminal tab for the deep dive.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ChevronDown,
@@ -63,7 +63,7 @@ const LATENCY_HISTORY_CAP = 30;
  *  history — small enough that we don't bother garbage-collecting. */
 const LATENCY_HISTORY_KEY = "pier-x:hosts-latency-history";
 
-export default function HostsHealthPanel({
+function HostsHealthPanel({
   isActive,
   onConnectSaved,
   onEditConnection,
@@ -1484,3 +1484,5 @@ function formatChecked(
   const hours = Math.floor(minutes / 60);
   return t("Checked {n}h ago", { n: hours });
 }
+
+export default memo(HostsHealthPanel);

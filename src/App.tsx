@@ -199,7 +199,10 @@ function App() {
     }
   });
   const [fallbackRightTool, setFallbackRightTool] = useState<RightTool>("markdown");
-  const { tabs, activeTabId, addTab, closeTab } = useTabStore();
+  const tabs = useTabStore((s) => s.tabs);
+  const activeTabId = useTabStore((s) => s.activeTabId);
+  const addTab = useTabStore((s) => s.addTab);
+  const closeTab = useTabStore((s) => s.closeTab);
   const connections = useConnectionStore((s) => s.connections);
   const profiles = useTerminalProfilesStore((s) => s.profiles);
   const locale = useSettingsStore((s) => s.locale);

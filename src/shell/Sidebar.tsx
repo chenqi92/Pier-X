@@ -466,7 +466,9 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
   const [searchText, setSearchText] = useState("");
   const [folderVisits, setFolderVisits] = useState<FolderVisitRecord[]>(readFolderVisitRecords);
   const pendingVisitRef = useRef<string | null>(null);
-  const { connections, refresh: refreshConnections, remove } = useConnectionStore();
+  const connections = useConnectionStore((s) => s.connections);
+  const refreshConnections = useConnectionStore((s) => s.refresh);
+  const remove = useConnectionStore((s) => s.remove);
   const [serverSearch, setServerSearch] = useState("");
 
   // Transient error notice. Backend commands for connection / group

@@ -105,7 +105,7 @@ export default function WelcomeView({
   workspaceRoot,
 }: Props) {
   const { t, locale } = useI18n();
-  const { connections } = useConnectionStore();
+  const connections = useConnectionStore((s) => s.connections);
   const recents = useRecentConnectionsStore((s) => s.recents);
   const profiles = useTerminalProfilesStore((s) => s.profiles);
   const [now, setNow] = useState(() => new Date());

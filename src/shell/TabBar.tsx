@@ -29,17 +29,15 @@ const HOLD_INTERVAL = 16;
 
 export default function TabBar({ onNewTab }: Props) {
   const { t } = useI18n();
-  const {
-    tabs,
-    activeTabId,
-    setActiveTab,
-    closeTab,
-    closeOtherTabs,
-    closeTabsToLeft,
-    closeTabsToRight,
-    setTabColor,
-    moveTab,
-  } = useTabStore();
+  const tabs = useTabStore((s) => s.tabs);
+  const activeTabId = useTabStore((s) => s.activeTabId);
+  const setActiveTab = useTabStore((s) => s.setActiveTab);
+  const closeTab = useTabStore((s) => s.closeTab);
+  const closeOtherTabs = useTabStore((s) => s.closeOtherTabs);
+  const closeTabsToLeft = useTabStore((s) => s.closeTabsToLeft);
+  const closeTabsToRight = useTabStore((s) => s.closeTabsToRight);
+  const setTabColor = useTabStore((s) => s.setTabColor);
+  const moveTab = useTabStore((s) => s.moveTab);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);

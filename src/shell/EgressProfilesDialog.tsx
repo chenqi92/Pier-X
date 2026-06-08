@@ -185,7 +185,8 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
     vpnStop,
     refreshVpnStatus,
   } = useEgressStore();
-  const { connections, refresh: refreshConnections } = useConnectionStore();
+  const connections = useConnectionStore((s) => s.connections);
+  const refreshConnections = useConnectionStore((s) => s.refresh);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(() => emptyDraft());
   const [error, setError] = useState("");

@@ -68,7 +68,9 @@ function toDraft(connection?: SavedSshConnection | null): ConnectionDraft {
 export default function NewConnectionDialog({ open, onClose, onConnect, onConnectSaved, onSaved, initialConnection }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
-  const { save, update, connections } = useConnectionStore();
+  const save = useConnectionStore((s) => s.save);
+  const update = useConnectionStore((s) => s.update);
+  const connections = useConnectionStore((s) => s.connections);
   const { profiles: egressProfiles, refresh: refreshEgress } = useEgressStore();
   const isEditing = !!initialConnection;
   const initialDraft = useMemo(() => toDraft(initialConnection), [initialConnection]);

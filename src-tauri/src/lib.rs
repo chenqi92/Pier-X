@@ -5847,14 +5847,23 @@ fn terminal_completions_remote(
 
 #[tauri::command]
 fn terminal_close(state: tauri::State<'_, AppState>, session_id: String) -> Result<(), String> {
-    let mut sessions = state
-        .terminals
-        .lock()
-        .map_err(|_| String::from("terminal state poisoned"))?;
-    sessions
-        .remove(&session_id)
-        .map(|_| ())
-        .ok_or_else(|| format!("unknown terminal session: {}", session_id))
+    // Take the session out under the lock, then release the lock BEFORE
+    // dropping it. Dropping a ManagedTerminal joins its reader thread, and
+    // that reader now locks `terminals` inside the notify callback (to build
+    // the pushed snapshot). Dropping while we still hold the lock would
+    // deadlock: the reader would block on the lock we're holding, so it
+    // never exits and the join never returns.
+    let removed = {
+        let mut sessions = state
+            .terminals
+            .lock()
+            .map_err(|_| String::from("terminal state poisoned"))?;
+        sessions.remove(&session_id)
+    };
+    match removed {
+        Some(_session) => Ok(()),
+        None => Err(format!("unknown terminal session: {}", session_id)),
+    }
 }
 
 // ── PostgreSQL ──────────────────────────────────────────────────────
@@ -15607,9 +15616,15 @@ pub fn run() {
                     if let Ok(mut m) = state.log_streams.lock() {
                         m.clear();
                     }
-                    if let Ok(mut m) = state.terminals.lock() {
-                        m.clear();
-                    }
+                    // Move the terminals out under the lock, then drop them
+                    // after releasing it: each drop joins a reader thread that
+                    // locks `terminals` in its notify callback, so clearing in
+                    // place (dropping under the lock) would deadlock the join.
+                    let drained_terminals = match state.terminals.lock() {
+                        Ok(mut m) => std::mem::take(&mut *m),
+                        Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+                    };
+                    drop(drained_terminals);
                 }
             }
         });

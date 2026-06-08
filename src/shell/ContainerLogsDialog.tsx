@@ -1,7 +1,8 @@
 import { AlignJustify, ArrowDown, ExternalLink, Pause, Play, Scroll, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import IconButton from "../components/IconButton";
+import VirtualList from "../components/VirtualList";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import * as cmd from "../lib/commands";
 import { quoteCommandArg } from "../lib/commands";
@@ -30,6 +31,25 @@ type Line = {
 };
 
 const MAX_LINES = 2000;
+
+// Fixed row height (px) for the virtualized non-wrap log view. The row is
+// forced to this height so VirtualList's windowing math stays exact; if log
+// lines ever look cramped or clipped, bump this to match the rendered
+// .dlg-logs-line height.
+const LOG_LINE_H = 18;
+
+function renderLogLine(l: Line, style?: CSSProperties) {
+  return (
+    <div
+      key={l.idx}
+      className={"dlg-logs-line" + (l.kind === "stderr" ? " is-err" : "")}
+      style={style}
+    >
+      <span className="dlg-logs-n">{l.idx}</span>
+      <span className="dlg-logs-msg">{l.text}</span>
+    </div>
+  );
+}
 
 export default function ContainerLogsDialog({ open, tab, containerId, containerName, onClose, onOpenInLogPanel }: Props) {
   const { t } = useI18n();
@@ -241,32 +261,47 @@ export default function ContainerLogsDialog({ open, tab, containerId, containerN
             <X size={12} />
           </IconButton>
         </div>
-        <div
-          className={"dlg-logs-body mono" + (wrap ? " wrap" : "")}
-          ref={outputRef}
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            const atBottom =
-              el.scrollHeight - el.clientHeight - el.scrollTop < 4;
-            if (atBottom !== follow) setFollow(atBottom);
-          }}
-        >
-          {!hasSsh && (
-            <div className="lg-note">{t("SSH connection required for log streaming.")}</div>
-          )}
-          {lines.length === 0 && !error && hasSsh && (
-            <div className="lg-note">{busy ? t("Connecting…") : t("Waiting for output…")}</div>
-          )}
-          {lines.map((l) => (
-            <div
-              key={l.idx}
-              className={"dlg-logs-line" + (l.kind === "stderr" ? " is-err" : "")}
-            >
-              <span className="dlg-logs-n">{l.idx}</span>
-              <span className="dlg-logs-msg">{l.text}</span>
-            </div>
-          ))}
-        </div>
+        {wrap || lines.length === 0 ? (
+          <div
+            className={"dlg-logs-body mono" + (wrap ? " wrap" : "")}
+            ref={outputRef}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              const atBottom =
+                el.scrollHeight - el.clientHeight - el.scrollTop < 4;
+              if (atBottom !== follow) setFollow(atBottom);
+            }}
+          >
+            {!hasSsh && (
+              <div className="lg-note">{t("SSH connection required for log streaming.")}</div>
+            )}
+            {lines.length === 0 && !error && hasSsh && (
+              <div className="lg-note">{busy ? t("Connecting…") : t("Waiting for output…")}</div>
+            )}
+            {lines.map((l) => renderLogLine(l))}
+          </div>
+        ) : (
+          // Non-wrap mode: lines are single-line (white-space: pre) and so
+          // uniform height — window them, so a busy container's 2000-line
+          // tail mounts ~viewport rows instead of all 2000. Wrap mode keeps
+          // the plain render above (wrapped lines are variable-height and
+          // can't be fixed-row virtualized). outputRef + onScroll keep the
+          // existing follow-tail / at-bottom behavior working.
+          <VirtualList
+            className="dlg-logs-body mono"
+            scrollRef={outputRef}
+            items={lines}
+            rowHeight={LOG_LINE_H}
+            overscan={12}
+            renderRow={(l) => renderLogLine(l, { height: LOG_LINE_H, boxSizing: "border-box" })}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              const atBottom =
+                el.scrollHeight - el.clientHeight - el.scrollTop < 4;
+              if (atBottom !== follow) setFollow(atBottom);
+            }}
+          />
+        )}
         <div className="dlg-foot">
           <span className="mono text-muted" style={{ fontSize: "var(--size-micro)" }}>
             {streaming ? t("● streaming") : t("○ paused")}

@@ -35,6 +35,10 @@ type Props<T> = {
   onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>) => void;
   /** Optional ref to the scroll container for imperative use (scrollTo, etc.). */
   scrollRef?: Ref<HTMLDivElement>;
+  /** Forwarded scroll handler — fires on every scroll, before the internal
+   *  rAF-throttled windowing update, so callers can track scroll position
+   *  (e.g. follow-tail / at-bottom detection). */
+  onScroll?: (event: ReactUIEvent<HTMLDivElement>) => void;
 };
 
 /**
@@ -64,6 +68,7 @@ export default function VirtualList<T>({
   onDrop,
   onContextMenu,
   scrollRef,
+  onScroll,
 }: Props<T>) {
   const innerRef = useRef<HTMLDivElement>(null);
   const pendingScrollTopRef = useRef(0);
@@ -93,6 +98,7 @@ export default function VirtualList<T>({
   }, []);
 
   const handleScroll = (event: ReactUIEvent<HTMLDivElement>) => {
+    onScroll?.(event);
     pendingScrollTopRef.current = event.currentTarget.scrollTop;
     if (scrollRafRef.current !== null) return;
     scrollRafRef.current = window.requestAnimationFrame(() => {

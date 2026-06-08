@@ -853,6 +853,9 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     let dirty = false;
     let safety: number | null = null;
     let rafHandle: number | null = null;
+    // Snapshot carried on the most recent terminal:event payload this
+    // frame; applied (instead of pulling) when the rAF coalescer fires.
+    let pendingPush: TerminalSnapshot | null = null;
 
     // The safety timer fires only after 1500ms of quiet — any
     // event-driven refresh re-arms it, so we no longer get the
@@ -876,7 +879,18 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       if (rafHandle !== null) return;
       rafHandle = window.requestAnimationFrame(() => {
         rafHandle = null;
-        refresh();
+        // A snapshot that rode in on a terminal:event payload wins — apply
+        // it directly and skip the terminal_snapshot round-trip. Pull only
+        // when no snapshot arrived this frame (history view, resize events,
+        // or a frame the backend attach-throttle skipped).
+        const pushed = pendingPush;
+        pendingPush = null;
+        if (pushed) {
+          applySnapshot(pushed);
+          if (!channelExited && !disposed) armSafety();
+        } else {
+          refresh();
+        }
       });
     };
 
@@ -888,6 +902,32 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     // app is already doing. The Restart button (which clears
     // `session`) is the supported recovery path.
     let channelExited = false;
+
+    // Shared post-processing for a fresh snapshot, whether it arrived on a
+    // pushed terminal:event payload or via a terminal_snapshot pull.
+    const applySnapshot = (next: TerminalSnapshot) => {
+      if (disposed) return;
+      if (scrollbackOffset > next.scrollbackLen) {
+        setScrollbackOffset(next.scrollbackLen);
+      }
+      const shellUser = inferPromptUser(next) || next.currentUser.trim();
+      if (shellUser && shellUser !== lastShellUserRef.current) {
+        lastShellUserRef.current = shellUser;
+        updateTab(tab.id, { currentShellUser: shellUser });
+      }
+      // Persist last-seen cwd onto the tab record so the rehydrate path
+      // can prepend a `cd …` startup command on restart.
+      const nextCwd = next.currentCwd;
+      if (nextCwd && nextCwd !== lastCwdSampledRef.current) {
+        lastCwdSampledRef.current = nextCwd;
+        updateTab(tab.id, { lastCwd: nextCwd });
+      }
+      setSnapshot(next);
+      setError("");
+      if (!next.alive) {
+        channelExited = true;
+      }
+    };
 
     const refresh = () => {
       if (disposed) return;
@@ -903,33 +943,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       cmd
         .terminalSnapshot(session.sessionId, scrollbackOffset)
         .then((next) => {
-          if (disposed) return;
-          if (scrollbackOffset > next.scrollbackLen) {
-            setScrollbackOffset(next.scrollbackLen);
-          }
-          const shellUser = inferPromptUser(next) || next.currentUser.trim();
-          if (shellUser && shellUser !== lastShellUserRef.current) {
-            lastShellUserRef.current = shellUser;
-            updateTab(tab.id, { currentShellUser: shellUser });
-          }
-          // Persist last-seen cwd onto the tab record so the rehydrate
-          // path can prepend a `cd …` startup command on restart.
-          // Replaces the prior 4 s `terminalCurrentCwd` poll.
-          const nextCwd = next.currentCwd;
-          if (nextCwd && nextCwd !== lastCwdSampledRef.current) {
-            lastCwdSampledRef.current = nextCwd;
-            updateTab(tab.id, { lastCwd: nextCwd });
-          }
-          // Direct setSnapshot — terminal feedback MUST paint on the
-          // next frame. Wrapping in startTransition let React defer
-          // the update when anything else was in-flight, which
-          // compounded with the old backend throttle to make casual
-          // typing feel seconds-delayed.
-          setSnapshot(next);
-          setError("");
-          if (!next.alive) {
-            channelExited = true;
-          }
+          applySnapshot(next);
         })
         .catch((e) => {
           if (!disposed) setError(formatError(e));
@@ -965,10 +979,23 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     // Listen for backend-pushed events. Each TerminalPanel subscribes;
     // the payload carries `sessionId` so we filter other tabs out.
     let unlisten: UnlistenFn | undefined;
-    type TerminalEventPayload = { sessionId: string; kind: "data" | "exit" };
+    type TerminalEventPayload = {
+      sessionId: string;
+      kind: "data" | "exit";
+      snapshot?: TerminalSnapshot | null;
+    };
     void listen<TerminalEventPayload>("terminal:event", (event) => {
       if (disposed) return;
       if (event.payload.sessionId !== session.sessionId) return;
+      // The backend attaches the live (offset 0) snapshot to data events
+      // so we paint without a follow-up terminal_snapshot pull. While
+      // scrolled into history (offset > 0) we ignore the push and pull the
+      // offset view instead. The rAF coalescer applies the freshest push,
+      // or pulls when none arrived this frame.
+      const pushed = event.payload.snapshot;
+      if (pushed && scrollbackOffset === 0) {
+        pendingPush = pushed;
+      }
       scheduleRefresh();
     })
       .then((u) => {

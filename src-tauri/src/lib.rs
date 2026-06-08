@@ -297,6 +297,14 @@ const HANDSHAKE_NEGATIVE_CACHE: Duration = Duration::from_secs(3);
 /// replaces the old 80ms polling loop.
 const TERMINAL_EVENT: &str = "terminal:event";
 
+/// Minimum spacing between live snapshots attached to `terminal:event`
+/// payloads, per session (~one animation frame). The event still fires on
+/// every PTY notification; only the costly snapshot build + JSON
+/// serialization is rate-limited, so a `docker logs -f` flood doesn't
+/// serialize a full grid per chunk. Withheld frames carry no snapshot and
+/// the frontend falls back to its rAF-coalesced pull.
+const SNAPSHOT_PUSH_MIN_MS: u64 = 16;
+
 /// Event emitted when the SSH-child watcher observes a change in the
 /// set of `ssh` clients running under a local terminal. Payload carries
 /// the innermost live target or `null` to signal "no ssh is currently
@@ -336,6 +344,11 @@ struct TerminalEventPayload {
     /// "data" → snapshot dirty, fetch a new one.
     /// "exit" → child process ended; no more data events will fire.
     kind: &'static str,
+    /// Live (offset 0) snapshot attached to "data" events so the frontend
+    /// paints without a follow-up `terminal_snapshot` pull. `None` for
+    /// "exit", for the resize-triggered emit, and for data events the
+    /// per-session attach throttle withheld (the frontend then pulls).
+    snapshot: Option<TerminalSnapshot>,
 }
 
 #[derive(Serialize, Clone)]
@@ -366,6 +379,10 @@ struct TerminalSshTargetView {
 struct NotifyContext {
     app: tauri::AppHandle,
     session_id: String,
+    /// Last time a live snapshot was attached to a `terminal:event` for
+    /// this session. Throttles snapshot build/serialization to ~one per
+    /// frame under a flood; the event itself is never throttled.
+    last_snapshot_at: std::sync::Mutex<std::time::Instant>,
 }
 
 struct ManagedTerminal {
@@ -1191,7 +1208,7 @@ struct SegmentStyle {
     cursor: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct TerminalSegment {
     text: String,
@@ -1203,13 +1220,13 @@ struct TerminalSegment {
     cursor: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct TerminalLine {
     segments: Vec<TerminalSegment>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct TerminalSnapshot {
     cols: u16,
@@ -1350,22 +1367,52 @@ extern "C" fn tauri_terminal_notify(user_data: *mut c_void, event: u32) {
         return;
     }
 
-    // Every data/exit notification is emitted as it arrives. The
-    // frontend's refresh loop is rate-limited by an `inflight` +
-    // `dirty` pair, so a storm of notifications coalesces into
-    // back-to-back snapshot fetches rather than piling up render
-    // work — which is exactly what a previous millisecond-level
-    // throttle was trying to achieve. The throttle was dropped
-    // because it had no trailing emit: a quick burst of keystrokes
-    // followed by a pause left the last characters invisible until
-    // the frontend's 1.5s safety timer finally swept, producing
-    // the "seconds of lag" users were seeing on casual typing.
+    // Every data/exit notification is emitted as it arrives so the
+    // frontend never misses a trailing update — a previous ms-level
+    // throttle was dropped precisely because it lacked a trailing emit,
+    // leaving the last keystrokes invisible until the 1.5s safety sweep.
+    //
+    // Data events additionally carry the live (offset 0) snapshot so the
+    // frontend paints without a second `terminal_snapshot` round-trip —
+    // the hop that made casual typing feel laggy. Only the snapshot
+    // *attachment* is throttled (~one frame per session): under a flood we
+    // skip building/serializing the grid on most chunks and let the event
+    // alone drive the frontend's rAF-coalesced pull.
     let is_exit = event == NotifyEvent::Exited as u32;
+    let snapshot = if is_exit {
+        None
+    } else {
+        let attach = {
+            let mut last = ctx
+                .last_snapshot_at
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if last.elapsed() >= std::time::Duration::from_millis(SNAPSHOT_PUSH_MIN_MS) {
+                *last = std::time::Instant::now();
+                true
+            } else {
+                false
+            }
+        };
+        if attach {
+            let state: tauri::State<'_, AppState> = ctx.app.state();
+            let sessions = match state.terminals.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            sessions
+                .get(&ctx.session_id)
+                .map(|managed| build_terminal_snapshot(managed, 0))
+        } else {
+            None
+        }
+    };
     let _ = ctx.app.emit(
         TERMINAL_EVENT,
         TerminalEventPayload {
             session_id: ctx.session_id.clone(),
             kind: if is_exit { "exit" } else { "data" },
+            snapshot,
         },
     );
 }
@@ -1385,6 +1432,7 @@ fn allocate_notify_context(
     let ctx = Box::new(NotifyContext {
         app,
         session_id: session_id.clone(),
+        last_snapshot_at: std::sync::Mutex::new(std::time::Instant::now()),
     });
     (session_id, ctx)
 }
@@ -5536,9 +5584,35 @@ fn terminal_resize(
         TerminalEventPayload {
             session_id,
             kind: "data",
+            snapshot: None,
         },
     );
     Ok(())
+}
+
+/// Build a `TerminalSnapshot` for the given scrollback offset. Shared by
+/// the `terminal_snapshot` pull command and the push path in
+/// `tauri_terminal_notify`. Caller must hold the terminals lock.
+/// NOTE: consumes the one-shot `bell_pending` flag.
+fn build_terminal_snapshot(managed: &ManagedTerminal, scrollback_offset: usize) -> TerminalSnapshot {
+    let alive = managed.terminal.is_alive();
+    let snapshot = managed.terminal.snapshot_view(scrollback_offset);
+    TerminalSnapshot {
+        cols: snapshot.cols,
+        rows: snapshot.rows,
+        alive,
+        scrollback_len: managed.terminal.scrollback_len(),
+        bell_pending: managed.terminal.take_bell_pending(),
+        lines: build_terminal_lines(&snapshot, alive),
+        prompt_end: snapshot.prompt_end.map(|(r, c)| [r, c]),
+        cursor_x: snapshot.cursor_x,
+        cursor_y: snapshot.cursor_y,
+        awaiting_input: snapshot.awaiting_input,
+        alt_screen: snapshot.alt_screen,
+        bracketed_paste: snapshot.bracketed_paste,
+        current_user: managed.terminal.current_user().unwrap_or_default(),
+        current_cwd: managed.terminal.current_cwd(),
+    }
 }
 
 #[tauri::command]
@@ -5554,28 +5628,7 @@ fn terminal_snapshot(
     let managed = sessions
         .get(&session_id)
         .ok_or_else(|| format!("unknown terminal session: {}", session_id))?;
-
-    let alive = managed.terminal.is_alive();
-    let snapshot = managed
-        .terminal
-        .snapshot_view(scrollback_offset.unwrap_or(0));
-
-    Ok(TerminalSnapshot {
-        cols: snapshot.cols,
-        rows: snapshot.rows,
-        alive,
-        scrollback_len: managed.terminal.scrollback_len(),
-        bell_pending: managed.terminal.take_bell_pending(),
-        lines: build_terminal_lines(&snapshot, alive),
-        prompt_end: snapshot.prompt_end.map(|(r, c)| [r, c]),
-        cursor_x: snapshot.cursor_x,
-        cursor_y: snapshot.cursor_y,
-        awaiting_input: snapshot.awaiting_input,
-        alt_screen: snapshot.alt_screen,
-        bracketed_paste: snapshot.bracketed_paste,
-        current_user: managed.terminal.current_user().unwrap_or_default(),
-        current_cwd: managed.terminal.current_cwd(),
-    })
+    Ok(build_terminal_snapshot(managed, scrollback_offset.unwrap_or(0)))
 }
 
 #[tauri::command]

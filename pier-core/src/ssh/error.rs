@@ -65,9 +65,15 @@ pub enum SshError {
     #[error("ssh connect timeout after {0:?}")]
     Timeout(std::time::Duration),
 
-    /// Configuration was missing required fields
-    /// ([`super::SshConfig::is_valid`] returned false).
-    #[error("invalid ssh config: {0}")]
+    /// A remote operation failed, carrying a human-readable message.
+    /// Despite the name (historically this only flagged
+    /// [`super::SshConfig::is_valid`] failures) it is now the general
+    /// error carrier across the service layer — docker / web_server /
+    /// package_manager command failures all funnel through here. Its
+    /// Display is the bare message so the UI shows the real cause (e.g.
+    /// "docker ps exited 1: Cannot connect to the Docker daemon…")
+    /// rather than mislabeling every failure as an SSH config problem.
+    #[error("{0}")]
     InvalidConfig(String),
 
     /// Any other I/O error (reading a key file, talking to the

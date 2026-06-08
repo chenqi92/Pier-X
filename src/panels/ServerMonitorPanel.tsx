@@ -759,6 +759,9 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
     let lastFullAt = Date.now();
     let lastTickAt = Date.now();
     const tick = window.setInterval(() => {
+      // Window hidden / minimized: skip the probe — no point fetching
+      // metrics for a panel the user can't see; resumes on the next tick.
+      if (document.visibilityState === "hidden") return;
       // Re-read busy from the latest closure via a state check —
       // intentionally letting the JS engine grab the freshest value
       // since `busy` isn't in the deps (we don't want the interval

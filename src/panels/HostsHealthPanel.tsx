@@ -598,6 +598,8 @@ function HostsHealthPanel({
     if (allIndices.length === 0) return;
     void probe(allIndices);
     const id = window.setInterval(() => {
+      // Skip auto-probes while the window is hidden / minimized.
+      if (document.visibilityState === "hidden") return;
       // Use the live ref — `allIndices` from the closure could be
       // stale if the user added/removed a host between refreshes.
       void probe(indicesRef.current);

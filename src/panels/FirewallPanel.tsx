@@ -607,6 +607,8 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
   useEffect(() => {
     if (!isActive || activeTab !== "traffic" || !canProbe) return;
     const id = window.setInterval(() => {
+      // No traffic polling while the window is hidden / minimized.
+      if (document.visibilityState === "hidden") return;
       if (busyRef.current) return;
       // Don't pile probes onto the SSH gate while a host-key prompt
       // is blocking the connect.

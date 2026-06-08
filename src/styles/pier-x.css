@@ -999,7 +999,6 @@ body.is-panel-animating .rightzone {
    * nearest positioned ancestor (e.g. .right-tool-slot) and clipped. */
   position: fixed; inset: 0; z-index: 1000;
   background: var(--overlay-scrim);
-  backdrop-filter: blur(2px);
   display: flex; align-items: flex-start; justify-content: center;
   padding-top: 90px;
 }
@@ -1073,7 +1072,6 @@ body.is-panel-animating .rightzone {
 .dlg-overlay {
   position: fixed; inset: 0; z-index: 1000;
   background: var(--overlay-scrim);
-  backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center;
 }
 .dlg {

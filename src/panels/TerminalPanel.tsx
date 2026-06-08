@@ -515,9 +515,26 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     };
 
     recalculate();
-    const observer = new ResizeObserver(recalculate);
+    // Collapse ResizeObserver bursts — the per-frame width changes during a
+    // sidebar / right-panel open-close slide or a live drag-resize — into a
+    // single trailing recalculate once motion settles. Without this, every
+    // animation frame ran getComputedStyle + recomputed cols + setState + a
+    // PTY resize, which is the real source of the toggle/drag jank. The
+    // direct recalculate() above keeps mount / tab-switch / font changes
+    // responsive (this effect re-runs on those via its deps).
+    let resizeDebounce: number | null = null;
+    const observer = new ResizeObserver(() => {
+      if (resizeDebounce !== null) window.clearTimeout(resizeDebounce);
+      resizeDebounce = window.setTimeout(() => {
+        resizeDebounce = null;
+        recalculate();
+      }, 100);
+    });
     observer.observe(viewport);
-    return () => observer.disconnect();
+    return () => {
+      if (resizeDebounce !== null) window.clearTimeout(resizeDebounce);
+      observer.disconnect();
+    };
   }, [isActive, terminalFontSize, monoFont]);
 
   // ── Create session ──────────────────────────────────────────

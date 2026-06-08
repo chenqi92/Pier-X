@@ -2244,7 +2244,6 @@ button,
   position: fixed;
   inset: 0;
   background: var(--overlay-scrim);
-  backdrop-filter: blur(2px);
   display: flex;
   align-items: flex-start;
   justify-content: center;

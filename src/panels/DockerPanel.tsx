@@ -1455,13 +1455,18 @@ function DockerPanelBody({ tab }: Props) {
             {pullLog && (
               <div className="lg-note mono" style={{ fontSize: "var(--size-micro)" }}>{pullLog}</div>
             )}
-            <div className="dk-card-list">
-              {filteredImages.length === 0 ? (
-                !tabLoaded("images") || tabBusy("images")
+            {filteredImages.length === 0 ? (
+              <div className="dk-card-list">
+                {!tabLoaded("images") || tabBusy("images")
                   ? <DkSkeleton rows={3} />
-                  : <div className="dk-empty">{t("No images found.")}</div>
-              ) : (
-                filteredImages.map((img) => {
+                  : <div className="dk-empty">{t("No images found.")}</div>}
+              </div>
+            ) : (
+              <VirtualList
+                className="dk-card-list"
+                items={filteredImages}
+                rowHeight={DK_CARD_ROW_H}
+                renderRow={(img) => {
                   // Docker returns one row per tag, so a single sha256
                   // id can appear multiple times (e.g. nginx:latest +
                   // nginx:1.27 share an id). Key and select on the
@@ -1472,6 +1477,7 @@ function DockerPanelBody({ tab }: Props) {
                     <div
                       key={rowKey}
                       className={"dk-card" + (isSel ? " selected" : "")}
+                      style={{ height: DK_CARD_H, marginBottom: DK_CARD_GAP, boxSizing: "border-box" }}
                       onClick={() => setSelectedImage(rowKey)}
                     >
                       <span className="dk-card-ic">
@@ -1517,9 +1523,9 @@ function DockerPanelBody({ tab }: Props) {
                       </div>
                     </div>
                   );
-                })
-              )}
-            </div>
+                }}
+              />
+            )}
           </div>
         )}
 

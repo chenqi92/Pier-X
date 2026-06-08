@@ -42,7 +42,17 @@ import { useTabStore } from "../stores/useTabStore";
 import { confirm } from "../stores/useConfirmStore";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import SudoPasswordDialog from "../components/SudoPasswordDialog";
+import VirtualList from "../components/VirtualList";
 import "../styles/docker-firewall-panel.css";
+
+/** Virtualized Docker card metrics. Cards are single-line (title + sub are
+ *  both nowrap + ellipsis) so they're uniform height — windowing keeps the
+ *  DOM bounded when a host has hundreds/thousands of containers or images.
+ *  DK_CARD_H is the fixed card box (border-box); DK_CARD_ROW_H adds the
+ *  inter-card gap that used to be the list's flex `gap`. */
+const DK_CARD_H = 50;
+const DK_CARD_GAP = 6;
+const DK_CARD_ROW_H = DK_CARD_H + DK_CARD_GAP;
 
 /** Heuristic: does this error string look like the daemon refused us
  *  for lack of privilege? Mirrors `pier_core::sudo::is_permission_denied`
@@ -1226,13 +1236,18 @@ function DockerPanelBody({ tab }: Props) {
                 {t("{count} total", { count: state?.containers.length ?? 0 })}
               </span>
             </div>
-            <div className="dk-card-list">
-              {filteredContainers.length === 0 ? (
-                busy && !tabLoaded("containers")
+            {filteredContainers.length === 0 ? (
+              <div className="dk-card-list">
+                {busy && !tabLoaded("containers")
                   ? <DkSkeleton rows={3} />
-                  : <div className="dk-empty">{t("No containers found.")}</div>
-              ) : (
-                filteredContainers.map((c) => {
+                  : <div className="dk-empty">{t("No containers found.")}</div>}
+              </div>
+            ) : (
+              <VirtualList
+                className="dk-card-list"
+                items={filteredContainers}
+                rowHeight={DK_CARD_ROW_H}
+                renderRow={(c) => {
                   const ds = dotState(c.state, c.running);
                   const iconTone = ds === "running" ? "is-pos" : ds === "restarting" ? "is-warn" : "is-muted";
                   const isSel = c.id === selectedContainer;
@@ -1240,6 +1255,7 @@ function DockerPanelBody({ tab }: Props) {
                     <div
                       key={c.id}
                       className={"dk-card" + (isSel ? " selected" : "")}
+                      style={{ height: DK_CARD_H, marginBottom: DK_CARD_GAP, boxSizing: "border-box" }}
                       onClick={() => setSelectedContainer(c.id)}
                     >
                       <span className={"dk-card-ic " + iconTone}>
@@ -1293,9 +1309,9 @@ function DockerPanelBody({ tab }: Props) {
                       </div>
                     </div>
                   );
-                })
-              )}
-            </div>
+                }}
+              />
+            )}
 
             {selectedCtr && (
               <div className="dk-insp">

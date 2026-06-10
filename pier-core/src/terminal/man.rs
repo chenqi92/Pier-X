@@ -112,6 +112,15 @@ pub fn man_synopsis(cmd: &str) -> Result<ManSynopsis, ManError> {
     Ok(result)
 }
 
+/// Parse already-rendered man / `--help` text into a [`ManSynopsis`]. Exposed
+/// for callers that fetch the text themselves (e.g. from a remote SSH host)
+/// rather than spawning a local process. `source` is the `"man"` / `"help"`
+/// hint shown in the popover. The text should already have groff overstriking
+/// stripped (pipe remote `man` output through `col -b`).
+pub fn parse_rendered(text: &str, source: &str) -> ManSynopsis {
+    parse_sections(text, source)
+}
+
 const TIMEOUT: Duration = Duration::from_millis(1000);
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const CACHE_CAPACITY: usize = 100;

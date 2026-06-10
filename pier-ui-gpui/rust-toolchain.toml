@@ -1,0 +1,5 @@
+# gpui's transitive deps require a recent rustc (smol_str 1.89, oo7 1.92, …).
+# Pin the spike to stable so it's explicit and isolated from the rest of the
+# repo's toolchain expectations.
+[toolchain]
+channel = "stable"

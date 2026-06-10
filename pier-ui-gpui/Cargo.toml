@@ -1,0 +1,68 @@
+# Isolated workspace (see root Cargo.toml `exclude`). Keeps the heavy gpui git
+# dependency tree out of the main app's lockfile/build during the spike.
+[package]
+name = "pier-ui-gpui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Bare (default-branch) specs so they unify with gpui-component's own unpinned
+# gpui dependency into a single source — the actual rev is forced below via
+# [patch]. (Pinning a rev here instead creates a SECOND gpui source, leaving
+# gpui-component on floating `main` which breaks: its flex_*() calls predate
+# zed's signature change.)
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "9ad30e631e15f9bbba049717767bf4cd98e4f179" }
+# The terminal engine (emulator, PTY, GridSnapshot) lives here and is already
+# UI-agnostic — GPUI calls it directly, no Tauri layer.
+pier-core = { path = "../pier-core" }
+# Embed the SVG icon set into the binary (see src/assets.rs).
+rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }
+anyhow = "1"
+# CancellationToken for the SFTP transfer queue's per-item cancel. Already in
+# the lock transitively via pier-core; declared here so the panel can name it.
+tokio-util = { version = "0.7", default-features = false }
+# Cross-thread host-key prompt plumbing (T4-HOSTKEY): an mpsc hands a
+# HostKeyPromptRequest from the background connect task to the shell overlay,
+# and a oneshot blocks that connect task on the user's decision. Already in the
+# lock transitively via gpui; declared here so data.rs / shell.rs can name the
+# channels and StreamExt.
+futures = "0.3"
+
+# Force EVERY reference to the zed repo (ours + gpui-component's transitive
+# one) onto the rev that gpui-component @9ad30e6 locks in its own Cargo.lock.
+# gpui is pre-1.0 and `main` floats; without this cargo grabs the latest zed
+# gpui whose flex_*() signatures changed and gpui-component won't compile.
+# Bump this rev together with the gpui-component rev above.
+# Redirect EVERY reference to the zed repo (ours + gpui-component's transitive,
+# unpinned one) onto a local checkout of zed pinned at 4bee412 — the rev
+# gpui-component @9ad30e6 locks in its own Cargo.lock. Modern cargo rejects a
+# same-URL git patch ("patches must point to a different source"), so the patch
+# value must be a genuinely different source: a local path. The checkout lives
+# in .vendor/zed (see scripts/vendor-zed or the fetch in build notes). Bump the
+# checkout's rev together with the gpui-component rev above.
+[patch."https://github.com/zed-industries/zed"]
+gpui = { path = ".vendor/zed/crates/gpui" }
+gpui_platform = { path = ".vendor/zed/crates/gpui_platform" }
+gpui_macros = { path = ".vendor/zed/crates/gpui_macros" }
+
+# gpui-component patches this; mirror it so transitive resolution matches.
+[patch.crates-io]
+psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
+
+# gpui is unusably slow in an unoptimized debug build; gpui-component's own
+# workspace bumps these to opt-level 3. Mirror it.
+[profile.dev.package.gpui]
+opt-level = 3
+[profile.dev.package.gpui_platform]
+opt-level = 3
+[profile.dev.package.gpui_macros]
+opt-level = 3
+
+[workspace]
+# .vendor/zed is its own (zed) workspace; without excluding it, cargo treats
+# the patched crates/gpui as a member of THIS workspace and fails to inherit
+# `edition` etc. from zed's [workspace.package].
+exclude = [".vendor"]

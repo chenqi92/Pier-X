@@ -4139,7 +4139,7 @@ dependencies = [
 
 [[package]]
 name = "pier-core"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -4185,7 +4185,7 @@ dependencies = [
 
 [[package]]
 name = "pierx"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "pier-core",
  "serde",

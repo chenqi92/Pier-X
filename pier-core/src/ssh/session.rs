@@ -53,7 +53,13 @@ pub const CANCELLED_EXIT_CODE: i32 = -2;
 /// `russh::client::Handle` is internally reference-counted, so
 /// cloning yields a second pointer to the same connection.
 ///
-/// Drop the last clone to close the connection.
+/// Dropping the last clone closes the connection only once every
+/// channel opened from it is gone too: each live `russh` channel
+/// holds its own sender clone into the transport task, so open
+/// PTYs / execs keep the transport alive after the last
+/// `SshSession` drops. Cache eviction in the Tauri layer relies on
+/// this — evicting a session never yanks the connection out from
+/// under sibling tabs' channels.
 #[derive(Clone)]
 pub struct SshSession {
     handle: Arc<Handle<ClientHandler>>,

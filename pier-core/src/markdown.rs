@@ -34,7 +34,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use pulldown_cmark::{html, Options, Parser};
+use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag};
 
 /// Max file size we'll load for preview. 16 MB is well above
 /// any sane README and protects the UI from pasting a DB
@@ -62,17 +62,98 @@ fn gfm_options() -> Options {
 /// Render CommonMark + GFM-ish markdown to HTML. Never panics,
 /// always returns a string (empty input → empty output).
 ///
-/// Raw HTML embedded in the source is passed through as markup
-/// so authors can use `<details>`, `<kbd>`, `<br/>` and similar
-/// tags expected in a typical README. The preview only loads
-/// files from the user's own filesystem inside a Tauri webview,
-/// not arbitrary remote content, so the passthrough matches the
-/// behavior of GitHub / VS Code markdown preview.
+/// Raw HTML is emitted as escaped text, and link-like tags have
+/// their URL targets filtered before the shell receives the HTML.
 pub fn render_html(source: &str) -> String {
-    let parser = Parser::new_ext(source, gfm_options());
+    let parser = Parser::new_ext(source, gfm_options()).map(sanitize_event);
     let mut out = String::with_capacity(source.len() + source.len() / 4);
     html::push_html(&mut out, parser);
     out
+}
+
+fn sanitize_event(event: Event<'_>) -> Event<'_> {
+    match event {
+        Event::Html(raw) | Event::InlineHtml(raw) => {
+            // HTML comments (`<!-- TOC -->`) stay invisible rather
+            // than rendering as escaped literal text; everything
+            // else is still escaped to its source form.
+            let trimmed = raw.trim();
+            if trimmed.starts_with("<!--") && trimmed.ends_with("-->") {
+                Event::Text(CowStr::from(""))
+            } else {
+                Event::Text(raw)
+            }
+        }
+        Event::Start(Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Link {
+            link_type,
+            dest_url: safe_url(dest_url),
+            title,
+            id,
+        }),
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Image {
+            link_type,
+            dest_url: safe_url(dest_url),
+            title,
+            id,
+        }),
+        other => other,
+    }
+}
+
+fn safe_url(url: CowStr<'_>) -> CowStr<'_> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() || has_disallowed_scheme(trimmed) {
+        return CowStr::from("#");
+    }
+    if trimmed == url.as_ref() {
+        url
+    } else {
+        CowStr::from(trimmed.to_string())
+    }
+}
+
+fn has_disallowed_scheme(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || url.starts_with('#')
+        || url.starts_with('/')
+        || url.starts_with("./")
+        || url.starts_with("../")
+    {
+        return false;
+    }
+    has_scheme(url)
+}
+
+fn has_scheme(url: &str) -> bool {
+    let mut chars = url.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+    for c in chars {
+        if c == ':' {
+            return true;
+        }
+        if !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+            return false;
+        }
+    }
+    false
 }
 
 /// Load a file from disk as UTF-8, returning `Err` on missing,
@@ -177,12 +258,44 @@ mod tests {
     }
 
     #[test]
-    fn passes_raw_html_through() {
-        // Raw HTML embedded in markdown is emitted as markup so
-        // common README idioms like <details>/<kbd>/<br/> render.
+    fn escapes_raw_html() {
         let html = render_html("<details><summary>more</summary>\n\ntext\n\n</details>");
-        assert!(html.contains("<details>"));
-        assert!(html.contains("<summary>more</summary>"));
+        assert!(!html.contains("<details>"));
+        assert!(!html.contains("<summary>more</summary>"));
+        assert!(html.contains("&lt;details&gt;"));
+        assert!(html.contains("&lt;summary&gt;more&lt;/summary&gt;"));
+    }
+
+    #[test]
+    fn escapes_inline_html() {
+        let html = render_html("hello <script>alert(1)</script>");
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+    }
+
+    #[test]
+    fn drops_html_block_comments() {
+        let html = render_html("before\n\n<!-- TOC -->\n\nafter");
+        assert!(!html.contains("TOC"));
+        assert!(html.contains("before"));
+        assert!(html.contains("after"));
+    }
+
+    #[test]
+    fn drops_inline_html_comments() {
+        let html = render_html("hello <!-- note --> world");
+        assert!(!html.contains("note"));
+        assert!(html.contains("hello"));
+        assert!(html.contains("world"));
+    }
+
+    #[test]
+    fn rejects_scriptable_link_urls() {
+        let html = render_html("[bad](javascript:alert(1)) ![x](data:image/svg+xml;base64,abc)");
+        assert!(!html.contains("javascript:"));
+        assert!(!html.contains("data:image"));
+        assert!(html.contains("href=\"#\""));
+        assert!(html.contains("src=\"#\""));
     }
 
     #[test]

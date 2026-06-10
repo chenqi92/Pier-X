@@ -191,14 +191,33 @@ async fn channel_loop(
 
 impl Pty for SshChannelPty {
     fn read(&mut self) -> Result<Vec<u8>, TerminalError> {
+        use tokio::sync::mpsc::error::TryRecvError;
         // Coalesce whatever's been queued since the last call
         // into one Vec so the emulator feeds it in a single
         // `process` call (which is slightly more efficient than
         // one call per chunk).
         let mut out = Vec::new();
         let mut guard = self.data_rx.lock().unwrap_or_else(|p| p.into_inner());
-        while let Ok(chunk) = guard.try_recv() {
-            out.extend_from_slice(&chunk);
+        loop {
+            match guard.try_recv() {
+                Ok(chunk) => out.extend_from_slice(&chunk),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    // The channel task exited (server closed the
+                    // channel / session died). Deliver any tail
+                    // bytes first; the next read reports EOF so the
+                    // reader thread fires Exited instead of polling
+                    // a dead channel forever with the tab stuck on
+                    // "running".
+                    if out.is_empty() {
+                        return Err(TerminalError::Io(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "ssh channel closed",
+                        )));
+                    }
+                    break;
+                }
+            }
         }
         Ok(out)
     }

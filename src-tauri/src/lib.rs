@@ -104,8 +104,9 @@ struct AppState {
     ///     failure into N × `connect_timeout_secs` of blocked IPC
     ///     worker threads.
     ///
-    /// Entries are never removed; memory cost is one guard per
-    /// unique target ever seen during this run (negligible).
+    /// `ssh_sessions_retain` prunes guards whose target has no
+    /// remaining tab (skipping any guard a thread still holds), so
+    /// the map tracks live targets instead of every target ever seen.
     session_init_guards: Mutex<HashMap<String, Arc<HandshakeGuard>>>,
     /// Per-target `/proc/net/dev` baselines used by
     /// `server_monitor_probe` to compute network throughput between
@@ -2032,6 +2033,17 @@ fn ssh_sessions_retain(state: tauri::State<'_, AppState>, active: Vec<String>) {
     // Key shape is `auth_mode:user@host:port`; the suffix after the
     // first `:` is the addressing we match on.
     let suffix_of = |key: &str| key.splitn(2, ':').nth(1).unwrap_or(key).to_string();
+    // Drop handshake guards for targets with no remaining tab. This
+    // runs before the sftp_sessions early-return because failed
+    // handshakes create guards without ever populating the session
+    // cache. Only guards held solely by the map are removed
+    // (`strong_count == 1`): a guard some thread is mid-handshake
+    // through keeps its entry, preserving the singleflight invariant.
+    if let Ok(mut guards) = state.session_init_guards.lock() {
+        guards.retain(|key, guard| {
+            keep.contains(&suffix_of(key)) || Arc::strong_count(guard) > 1
+        });
+    }
     let to_evict: Vec<String> = match state.sftp_sessions.lock() {
         Ok(cache) => cache
             .keys()
@@ -2124,9 +2136,19 @@ where
         match op(&session) {
             Ok(v) => return Ok(v),
             Err(e) if attempt == 0 => {
+                // The retry masks the first attempt's error — log it so a
+                // persistently failing target leaves a trace of the
+                // original cause instead of just costing two handshakes.
+                pier_core::logging::write_event(
+                    "WARN",
+                    "ssh.cache",
+                    &format!(
+                        "first attempt failed for {}@{}:{}, retrying with a fresh session: {}",
+                        user, host, port, e
+                    ),
+                );
                 evict_ssh_session(state, host, port, user, auth_mode);
                 attempt += 1;
-                let _ = e;
                 continue;
             }
             Err(e) => return Err(e),
@@ -2318,7 +2340,7 @@ fn map_sqlite_preview(
         Some(DataPreview {
             columns: result.columns,
             rows: result.rows,
-            truncated: false,
+            truncated: result.truncated,
         })
     }
 }
@@ -2332,7 +2354,7 @@ fn map_sqlite_query_result(
         Ok(QueryExecutionResult {
             columns: result.columns,
             rows: result.rows,
-            truncated: false,
+            truncated: result.truncated,
             affected_rows: result.affected_rows.max(0) as u64,
             last_insert_id: None,
             elapsed_ms: result.elapsed_ms,
@@ -2834,7 +2856,16 @@ fn create_ssh_terminal_from_config(
             ("password", String::new(), String::new())
         }
     };
-    let session = get_or_open_ssh_session(
+    // Opening the shell channel on a cached session fails when the
+    // connection died since it was cached (laptop sleep, server-side
+    // idle timeout). run_with_session_retry evicts the dead entry and
+    // reconnects once — same recovery the SFTP/panel commands get —
+    // so reopening a tab onto a stale cache entry self-heals instead
+    // of surfacing "ssh channel task has exited". Eviction is safe for
+    // sibling tabs: their open channels each hold a transport sender
+    // clone, so the connection outlives the cache entry (see the
+    // SshSession doc comment).
+    let pty = run_with_session_retry(
         &state,
         &config.host,
         config.port,
@@ -2843,15 +2874,15 @@ fn create_ssh_terminal_from_config(
         &password,
         &key_path,
         saved_index,
+        |session| {
+            session
+                .open_shell_channel_blocking(resolved_cols, resolved_rows)
+                .map_err(|error| error.to_string())
+        },
     )?;
-    let session = SshSession::clone(&*session);
 
     let (session_id, mut notify_ctx) = allocate_notify_context(&state, app);
     let user_data = &mut *notify_ctx as *mut NotifyContext as *mut c_void;
-
-    let pty = session
-        .open_shell_channel_blocking(resolved_cols, resolved_rows)
-        .map_err(|error| error.to_string())?;
     let terminal = PierTerminal::with_pty(
         Box::new(pty),
         resolved_cols,
@@ -3570,9 +3601,11 @@ fn git_branch_list(path: Option<String>) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 fn git_checkout_branch(path: Option<String>, name: String) -> Result<String, String> {
+    let name = name.trim();
+    reject_flaglike_ref(name, "branch name")?;
     let client = open_git_client(path)?;
     client
-        .checkout_branch(name.trim())
+        .checkout_branch(name)
         .map_err(|error| error.to_string())
 }
 
@@ -3640,25 +3673,31 @@ fn git_stash_push(path: Option<String>, message: String) -> Result<String, Strin
 
 #[tauri::command]
 fn git_stash_apply(path: Option<String>, index: String) -> Result<String, String> {
+    let index = index.trim();
+    reject_flaglike_ref(index, "stash index")?;
     let client = open_git_client(path)?;
     client
-        .stash_apply(index.trim())
+        .stash_apply(index)
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn git_stash_pop(path: Option<String>, index: String) -> Result<String, String> {
+    let index = index.trim();
+    reject_flaglike_ref(index, "stash index")?;
     let client = open_git_client(path)?;
     client
-        .stash_pop(index.trim())
+        .stash_pop(index)
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn git_stash_drop(path: Option<String>, index: String) -> Result<String, String> {
+    let index = index.trim();
+    reject_flaglike_ref(index, "stash index")?;
     let client = open_git_client(path)?;
     client
-        .stash_drop(index.trim())
+        .stash_drop(index)
         .map_err(|error| error.to_string())
 }
 
@@ -3668,9 +3707,11 @@ fn git_stash_reword(
     index: String,
     message: String,
 ) -> Result<String, String> {
+    let index = index.trim();
+    reject_flaglike_ref(index, "stash index")?;
     let client = open_git_client(path)?;
     client
-        .stash_reword(index.trim(), message.trim())
+        .stash_reword(index, message.trim())
         .map_err(|error| error.to_string())
 }
 
@@ -4850,7 +4891,24 @@ fn map_stash_entry(entry: StashEntry) -> GitStashEntry {
 }
 
 #[tauri::command]
-fn mysql_browse(
+async fn mysql_browse(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    table: Option<String>,
+    offset: Option<u64>,
+    limit: Option<u64>,
+) -> Result<MysqlBrowserState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        mysql_browse_blocking(host, port, user, password, database, table, offset, limit)
+    })
+    .await
+    .map_err(|e| format!("mysql_browse join: {e}"))?
+}
+
+fn mysql_browse_blocking(
     host: String,
     port: u16,
     user: String,
@@ -5054,85 +5112,89 @@ fn mysql_browse(
 }
 
 #[tauri::command]
-fn sqlite_browse(path: String, table: Option<String>) -> Result<SqliteBrowserState, String> {
-    let resolved_path = path.trim();
-    if resolved_path.is_empty() {
-        return Err(String::from("SQLite database path must not be empty."));
-    }
+async fn sqlite_browse(path: String, table: Option<String>) -> Result<SqliteBrowserState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved_path = path.trim();
+        if resolved_path.is_empty() {
+            return Err(String::from("SQLite database path must not be empty."));
+        }
 
-    let client = SqliteClient::open(resolved_path).map_err(|error| error.to_string())?;
-    let tables = client.list_tables().map_err(|error| error.to_string())?;
-    let table_name = choose_active_item(table, &tables);
-    let columns = if table_name.is_empty() {
-        Vec::new()
-    } else {
-        client
-            .table_columns(&table_name)
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .map(|column| SqliteColumnView {
-                name: column.name,
-                col_type: column.col_type,
-                not_null: column.not_null,
-                primary_key: column.primary_key,
-            })
-            .collect()
-    };
-    // Indexes / triggers are best-effort: we never want a corrupt
-    // sqlite_master row or a permission flip on the temp dir to
-    // tank the entire browse — the column grid is the load-bearing
-    // surface.
-    let indexes = if table_name.is_empty() {
-        Vec::new()
-    } else {
-        client
-            .table_indexes(&table_name)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|i| SqliteIndexView {
-                name: i.name,
-                unique: i.unique,
-                origin: i.origin,
-                columns: i.columns,
-            })
-            .collect()
-    };
-    let triggers = if table_name.is_empty() {
-        Vec::new()
-    } else {
-        client
-            .table_triggers(&table_name)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|t| SqliteTriggerView {
-                name: t.name,
-                event: t.event,
-                sql: t.sql,
-            })
-            .collect()
-    };
-    let preview = if table_name.is_empty() {
-        None
-    } else {
-        let escaped = table_name.replace('"', "\"\"");
-        map_sqlite_preview(client.execute(&format!("SELECT * FROM \"{escaped}\" LIMIT 24;")))
-    };
-    let file_size = client.file_size();
+        let client = SqliteClient::open(resolved_path).map_err(|error| error.to_string())?;
+        let tables = client.list_tables().map_err(|error| error.to_string())?;
+        let table_name = choose_active_item(table, &tables);
+        let columns = if table_name.is_empty() {
+            Vec::new()
+        } else {
+            client
+                .table_columns(&table_name)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .map(|column| SqliteColumnView {
+                    name: column.name,
+                    col_type: column.col_type,
+                    not_null: column.not_null,
+                    primary_key: column.primary_key,
+                })
+                .collect()
+        };
+        // Indexes / triggers are best-effort: we never want a corrupt
+        // sqlite_master row or a permission flip on the temp dir to
+        // tank the entire browse — the column grid is the load-bearing
+        // surface.
+        let indexes = if table_name.is_empty() {
+            Vec::new()
+        } else {
+            client
+                .table_indexes(&table_name)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|i| SqliteIndexView {
+                    name: i.name,
+                    unique: i.unique,
+                    origin: i.origin,
+                    columns: i.columns,
+                })
+                .collect()
+        };
+        let triggers = if table_name.is_empty() {
+            Vec::new()
+        } else {
+            client
+                .table_triggers(&table_name)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|t| SqliteTriggerView {
+                    name: t.name,
+                    event: t.event,
+                    sql: t.sql,
+                })
+                .collect()
+        };
+        let preview = if table_name.is_empty() {
+            None
+        } else {
+            let escaped = table_name.replace('"', "\"\"");
+            map_sqlite_preview(client.execute(&format!("SELECT * FROM \"{escaped}\" LIMIT 24;")))
+        };
+        let file_size = client.file_size();
 
-    Ok(SqliteBrowserState {
-        path: resolved_path.to_string(),
-        table_name,
-        tables,
-        columns,
-        preview,
-        indexes,
-        triggers,
-        file_size,
+        Ok(SqliteBrowserState {
+            path: resolved_path.to_string(),
+            table_name,
+            tables,
+            columns,
+            preview,
+            indexes,
+            triggers,
+            file_size,
+        })
     })
+    .await
+    .map_err(|e| format!("sqlite_browse join: {e}"))?
 }
 
 #[tauri::command]
-fn redis_browse(
+async fn redis_browse(
     host: String,
     port: u16,
     db: i64,
@@ -5143,83 +5205,87 @@ fn redis_browse(
     username: Option<String>,
     password: Option<String>,
 ) -> Result<RedisBrowserState, String> {
-    let resolved_host = host.trim();
-    if resolved_host.is_empty() {
-        return Err(String::from("Redis host must not be empty."));
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved_host = host.trim();
+        if resolved_host.is_empty() {
+            return Err(String::from("Redis host must not be empty."));
+        }
 
-    let client = RedisClient::connect_blocking(RedisConfig {
-        host: resolved_host.to_string(),
-        port: normalize_redis_port(port),
-        db,
-        username: username.filter(|s| !s.is_empty()),
-        password: password.filter(|s| !s.is_empty()),
-    })
-    .map_err(|error| error.to_string())?;
-    let pong = client.ping_blocking().map_err(|error| error.to_string())?;
-    let pattern = pattern
-        .unwrap_or_else(|| String::from("*"))
-        .trim()
-        .to_string();
-    let effective_pattern = if pattern.is_empty() {
-        String::from("*")
-    } else {
-        pattern
-    };
-    let cursor_in = cursor.unwrap_or_else(|| String::from("0"));
-    let effective_limit = limit.unwrap_or(120).clamp(1, 500);
-    let page = client
-        .scan_keys_paged_blocking(&effective_pattern, &cursor_in, effective_limit)
-        .map_err(|error| error.to_string())?;
-    let key_names: Vec<String> = page.keys.iter().map(|e| e.key.clone()).collect();
-    let key_name = choose_active_item(key, &key_names);
-    let details = if key_name.is_empty() {
-        None
-    } else {
-        client
-            .inspect_blocking(&key_name)
-            .ok()
-            .map(map_redis_details)
-    };
-    let server_info = client.info_blocking("server").unwrap_or_default();
-    let memory_info = client.info_blocking("memory").unwrap_or_default();
-
-    let entries: Vec<RedisKeyEntry> = page
-        .keys
-        .into_iter()
-        .map(|e| RedisKeyEntry {
-            key: e.key,
-            kind: e.kind,
-            ttl_seconds: e.ttl_seconds,
+        let client = RedisClient::connect_blocking(RedisConfig {
+            host: resolved_host.to_string(),
+            port: normalize_redis_port(port),
+            db,
+            username: username.filter(|s| !s.is_empty()),
+            password: password.filter(|s| !s.is_empty()),
         })
-        .collect();
+        .map_err(|error| error.to_string())?;
+        let pong = client.ping_blocking().map_err(|error| error.to_string())?;
+        let pattern = pattern
+            .unwrap_or_else(|| String::from("*"))
+            .trim()
+            .to_string();
+        let effective_pattern = if pattern.is_empty() {
+            String::from("*")
+        } else {
+            pattern
+        };
+        let cursor_in = cursor.unwrap_or_else(|| String::from("0"));
+        let effective_limit = limit.unwrap_or(120).clamp(1, 500);
+        let page = client
+            .scan_keys_paged_blocking(&effective_pattern, &cursor_in, effective_limit)
+            .map_err(|error| error.to_string())?;
+        let key_names: Vec<String> = page.keys.iter().map(|e| e.key.clone()).collect();
+        let key_name = choose_active_item(key, &key_names);
+        let details = if key_name.is_empty() {
+            None
+        } else {
+            client
+                .inspect_blocking(&key_name)
+                .ok()
+                .map(map_redis_details)
+        };
+        let server_info = client.info_blocking("server").unwrap_or_default();
+        let memory_info = client.info_blocking("memory").unwrap_or_default();
 
-    Ok(RedisBrowserState {
-        pong,
-        pattern: effective_pattern,
-        limit: effective_limit,
-        // Caller can compare `next_cursor != "0"` to decide
-        // whether more keys exist — drives the "Load more" UI.
-        truncated: page.next_cursor != "0",
-        key_name,
-        keys: entries,
-        next_cursor: page.next_cursor,
-        rtt_ms: page.rtt_ms,
-        server_version: server_info
-            .get("redis_version")
-            .or_else(|| server_info.get("valkey_version"))
-            .cloned()
-            .unwrap_or_default(),
-        used_memory: memory_info
-            .get("used_memory_human")
-            .cloned()
-            .unwrap_or_default(),
-        details,
+        let entries: Vec<RedisKeyEntry> = page
+            .keys
+            .into_iter()
+            .map(|e| RedisKeyEntry {
+                key: e.key,
+                kind: e.kind,
+                ttl_seconds: e.ttl_seconds,
+            })
+            .collect();
+
+        Ok(RedisBrowserState {
+            pong,
+            pattern: effective_pattern,
+            limit: effective_limit,
+            // Caller can compare `next_cursor != "0"` to decide
+            // whether more keys exist — drives the "Load more" UI.
+            truncated: page.next_cursor != "0",
+            key_name,
+            keys: entries,
+            next_cursor: page.next_cursor,
+            rtt_ms: page.rtt_ms,
+            server_version: server_info
+                .get("redis_version")
+                .or_else(|| server_info.get("valkey_version"))
+                .cloned()
+                .unwrap_or_default(),
+            used_memory: memory_info
+                .get("used_memory_human")
+                .cloned()
+                .unwrap_or_default(),
+            details,
+        })
     })
+    .await
+    .map_err(|e| format!("redis_browse join: {e}"))?
 }
 
 #[tauri::command]
-fn redis_execute(
+async fn redis_execute(
     host: String,
     port: u16,
     db: i64,
@@ -5227,29 +5293,33 @@ fn redis_execute(
     username: Option<String>,
     password: Option<String>,
 ) -> Result<RedisCommandResultView, String> {
-    let resolved_host = host.trim();
-    if resolved_host.is_empty() {
-        return Err(String::from("Redis host must not be empty."));
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved_host = host.trim();
+        if resolved_host.is_empty() {
+            return Err(String::from("Redis host must not be empty."));
+        }
 
-    let args = tokenize_command_line(command.trim())?;
-    let client = RedisClient::connect_blocking(RedisConfig {
-        host: resolved_host.to_string(),
-        port: normalize_redis_port(port),
-        db,
-        username: username.filter(|s| !s.is_empty()),
-        password: password.filter(|s| !s.is_empty()),
-    })
-    .map_err(|error| error.to_string())?;
-    let result = client
-        .execute_command_blocking(&args)
+        let args = tokenize_command_line(command.trim())?;
+        let client = RedisClient::connect_blocking(RedisConfig {
+            host: resolved_host.to_string(),
+            port: normalize_redis_port(port),
+            db,
+            username: username.filter(|s| !s.is_empty()),
+            password: password.filter(|s| !s.is_empty()),
+        })
         .map_err(|error| error.to_string())?;
+        let result = client
+            .execute_command_blocking(&args)
+            .map_err(|error| error.to_string())?;
 
-    Ok(RedisCommandResultView {
-        summary: result.summary,
-        lines: result.lines,
-        elapsed_ms: result.elapsed_ms,
+        Ok(RedisCommandResultView {
+            summary: result.summary,
+            lines: result.lines,
+            elapsed_ms: result.elapsed_ms,
+        })
     })
+    .await
+    .map_err(|e| format!("redis_execute join: {e}"))?
 }
 
 /// Confirm-guarded RENAME. Backed by `RENAMENX` so the call
@@ -5258,7 +5328,7 @@ fn redis_execute(
 /// ("a key with that name already exists") and lets the user
 /// decide whether to retry against an empty target.
 #[tauri::command]
-fn redis_rename_key(
+async fn redis_rename_key(
     host: String,
     port: u16,
     db: i64,
@@ -5267,29 +5337,33 @@ fn redis_rename_key(
     username: Option<String>,
     password: Option<String>,
 ) -> Result<bool, String> {
-    let resolved_host = host.trim();
-    if resolved_host.is_empty() {
-        return Err(String::from("Redis host must not be empty."));
-    }
-    let from_key = from.trim();
-    let to_key = to.trim();
-    if from_key.is_empty() || to_key.is_empty() {
-        return Err(String::from("Both source and destination keys are required."));
-    }
-    if from_key == to_key {
-        return Err(String::from("Source and destination keys must differ."));
-    }
-    let client = RedisClient::connect_blocking(RedisConfig {
-        host: resolved_host.to_string(),
-        port: normalize_redis_port(port),
-        db,
-        username: username.filter(|s| !s.is_empty()),
-        password: password.filter(|s| !s.is_empty()),
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved_host = host.trim();
+        if resolved_host.is_empty() {
+            return Err(String::from("Redis host must not be empty."));
+        }
+        let from_key = from.trim();
+        let to_key = to.trim();
+        if from_key.is_empty() || to_key.is_empty() {
+            return Err(String::from("Both source and destination keys are required."));
+        }
+        if from_key == to_key {
+            return Err(String::from("Source and destination keys must differ."));
+        }
+        let client = RedisClient::connect_blocking(RedisConfig {
+            host: resolved_host.to_string(),
+            port: normalize_redis_port(port),
+            db,
+            username: username.filter(|s| !s.is_empty()),
+            password: password.filter(|s| !s.is_empty()),
+        })
+        .map_err(|error| error.to_string())?;
+        client
+            .rename_nx_blocking(from_key, to_key)
+            .map_err(|error| error.to_string())
     })
-    .map_err(|error| error.to_string())?;
-    client
-        .rename_nx_blocking(from_key, to_key)
-        .map_err(|error| error.to_string())
+    .await
+    .map_err(|e| format!("redis_rename_key join: {e}"))?
 }
 
 /// Confirm-guarded DEL. Returns `true` when the key existed
@@ -5298,7 +5372,7 @@ fn redis_rename_key(
 /// the UI walks one key per confirm to keep destructive blast
 /// radius small.
 #[tauri::command]
-fn redis_delete_key(
+async fn redis_delete_key(
     host: String,
     port: u16,
     db: i64,
@@ -5306,29 +5380,33 @@ fn redis_delete_key(
     username: Option<String>,
     password: Option<String>,
 ) -> Result<bool, String> {
-    let resolved_host = host.trim();
-    if resolved_host.is_empty() {
-        return Err(String::from("Redis host must not be empty."));
-    }
-    let key_name = key.trim();
-    if key_name.is_empty() {
-        return Err(String::from("Key name must not be empty."));
-    }
-    let client = RedisClient::connect_blocking(RedisConfig {
-        host: resolved_host.to_string(),
-        port: normalize_redis_port(port),
-        db,
-        username: username.filter(|s| !s.is_empty()),
-        password: password.filter(|s| !s.is_empty()),
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved_host = host.trim();
+        if resolved_host.is_empty() {
+            return Err(String::from("Redis host must not be empty."));
+        }
+        let key_name = key.trim();
+        if key_name.is_empty() {
+            return Err(String::from("Key name must not be empty."));
+        }
+        let client = RedisClient::connect_blocking(RedisConfig {
+            host: resolved_host.to_string(),
+            port: normalize_redis_port(port),
+            db,
+            username: username.filter(|s| !s.is_empty()),
+            password: password.filter(|s| !s.is_empty()),
+        })
+        .map_err(|error| error.to_string())?;
+        client
+            .del_blocking(key_name)
+            .map_err(|error| error.to_string())
     })
-    .map_err(|error| error.to_string())?;
-    client
-        .del_blocking(key_name)
-        .map_err(|error| error.to_string())
+    .await
+    .map_err(|e| format!("redis_delete_key join: {e}"))?
 }
 
 #[tauri::command]
-fn mysql_execute(
+async fn mysql_execute(
     host: String,
     port: u16,
     user: String,
@@ -5336,57 +5414,65 @@ fn mysql_execute(
     database: Option<String>,
     sql: String,
 ) -> Result<QueryExecutionResult, String> {
-    let resolved_host = host.trim();
-    let resolved_user = user.trim();
-    let resolved_sql = sql.trim();
-    if resolved_host.is_empty() || resolved_user.is_empty() {
-        return Err(String::from("MySQL host and user must not be empty."));
-    }
-    if resolved_sql.is_empty() {
-        return Err(String::from("SQL must not be empty."));
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved_host = host.trim();
+        let resolved_user = user.trim();
+        let resolved_sql = sql.trim();
+        if resolved_host.is_empty() || resolved_user.is_empty() {
+            return Err(String::from("MySQL host and user must not be empty."));
+        }
+        if resolved_sql.is_empty() {
+            return Err(String::from("SQL must not be empty."));
+        }
 
-    let client = MysqlClient::connect_blocking(MysqlConfig {
-        host: resolved_host.to_string(),
-        port: normalize_mysql_port(port),
-        user: resolved_user.to_string(),
-        password,
-        database: database.filter(|value| !value.trim().is_empty()),
+        let client = MysqlClient::connect_blocking(MysqlConfig {
+            host: resolved_host.to_string(),
+            port: normalize_mysql_port(port),
+            user: resolved_user.to_string(),
+            password,
+            database: database.filter(|value| !value.trim().is_empty()),
+        })
+        .map_err(|error| error.to_string())?;
+
+        client
+            .execute_blocking(resolved_sql)
+            .map(map_mysql_query_result)
+            .map_err(|error| error.to_string())
     })
-    .map_err(|error| error.to_string())?;
-
-    client
-        .execute_blocking(resolved_sql)
-        .map(map_mysql_query_result)
-        .map_err(|error| error.to_string())
+    .await
+    .map_err(|e| format!("mysql_execute join: {e}"))?
 }
 
 /// Snapshot of `information_schema.processlist`. Each call opens a
 /// fresh connection so the panel can refresh without holding spare
 /// backend slots — same model as the PG activity command.
 #[tauri::command]
-fn mysql_list_processes(
+async fn mysql_list_processes(
     host: String,
     port: u16,
     user: String,
     password: String,
     database: Option<String>,
 ) -> Result<Vec<MysqlProcessRow>, String> {
-    let client = MysqlClient::connect_blocking(MysqlConfig {
-        host: host.trim().to_string(),
-        port: normalize_mysql_port(port),
-        user: user.trim().to_string(),
-        password,
-        database: database.filter(|v| !v.trim().is_empty()),
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = MysqlClient::connect_blocking(MysqlConfig {
+            host: host.trim().to_string(),
+            port: normalize_mysql_port(port),
+            user: user.trim().to_string(),
+            password,
+            database: database.filter(|v| !v.trim().is_empty()),
+        })
+        .map_err(|e| e.to_string())?;
+        client.list_processes_blocking().map_err(|e| e.to_string())
     })
-    .map_err(|e| e.to_string())?;
-    client.list_processes_blocking().map_err(|e| e.to_string())
+    .await
+    .map_err(|e| format!("mysql_list_processes join: {e}"))?
 }
 
 /// `KILL QUERY <id>` over a fresh connection. Interrupts the running
 /// statement on the target session without dropping the connection.
 #[tauri::command]
-fn mysql_kill_query(
+async fn mysql_kill_query(
     host: String,
     port: u16,
     user: String,
@@ -5394,21 +5480,25 @@ fn mysql_kill_query(
     database: Option<String>,
     id: u64,
 ) -> Result<(), String> {
-    let client = MysqlClient::connect_blocking(MysqlConfig {
-        host: host.trim().to_string(),
-        port: normalize_mysql_port(port),
-        user: user.trim().to_string(),
-        password,
-        database: database.filter(|v| !v.trim().is_empty()),
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = MysqlClient::connect_blocking(MysqlConfig {
+            host: host.trim().to_string(),
+            port: normalize_mysql_port(port),
+            user: user.trim().to_string(),
+            password,
+            database: database.filter(|v| !v.trim().is_empty()),
+        })
+        .map_err(|e| e.to_string())?;
+        client.kill_query_blocking(id).map_err(|e| e.to_string())
     })
-    .map_err(|e| e.to_string())?;
-    client.kill_query_blocking(id).map_err(|e| e.to_string())
+    .await
+    .map_err(|e| format!("mysql_kill_query join: {e}"))?
 }
 
 /// `KILL <id>` (drop the entire session). Heavier hammer than
 /// [`mysql_kill_query`] — requires explicit confirmation in the UI.
 #[tauri::command]
-fn mysql_kill_connection(
+async fn mysql_kill_connection(
     host: String,
     port: u16,
     user: String,
@@ -5416,32 +5506,40 @@ fn mysql_kill_connection(
     database: Option<String>,
     id: u64,
 ) -> Result<(), String> {
-    let client = MysqlClient::connect_blocking(MysqlConfig {
-        host: host.trim().to_string(),
-        port: normalize_mysql_port(port),
-        user: user.trim().to_string(),
-        password,
-        database: database.filter(|v| !v.trim().is_empty()),
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = MysqlClient::connect_blocking(MysqlConfig {
+            host: host.trim().to_string(),
+            port: normalize_mysql_port(port),
+            user: user.trim().to_string(),
+            password,
+            database: database.filter(|v| !v.trim().is_empty()),
+        })
+        .map_err(|e| e.to_string())?;
+        client
+            .kill_connection_blocking(id)
+            .map_err(|e| e.to_string())
     })
-    .map_err(|e| e.to_string())?;
-    client
-        .kill_connection_blocking(id)
-        .map_err(|e| e.to_string())
+    .await
+    .map_err(|e| format!("mysql_kill_connection join: {e}"))?
 }
 
 #[tauri::command]
-fn sqlite_execute(path: String, sql: String) -> Result<QueryExecutionResult, String> {
-    let resolved_path = path.trim();
-    let resolved_sql = sql.trim();
-    if resolved_path.is_empty() {
-        return Err(String::from("SQLite database path must not be empty."));
-    }
-    if resolved_sql.is_empty() {
-        return Err(String::from("SQL must not be empty."));
-    }
+async fn sqlite_execute(path: String, sql: String) -> Result<QueryExecutionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved_path = path.trim();
+        let resolved_sql = sql.trim();
+        if resolved_path.is_empty() {
+            return Err(String::from("SQLite database path must not be empty."));
+        }
+        if resolved_sql.is_empty() {
+            return Err(String::from("SQL must not be empty."));
+        }
 
-    let client = SqliteClient::open(resolved_path).map_err(|error| error.to_string())?;
-    map_sqlite_query_result(client.execute(resolved_sql))
+        let client = SqliteClient::open(resolved_path).map_err(|error| error.to_string())?;
+        map_sqlite_query_result(client.execute(resolved_sql))
+    })
+    .await
+    .map_err(|e| format!("sqlite_execute join: {e}"))?
 }
 
 /// Run a multi-statement SQL script against the SQLite file.
@@ -5452,25 +5550,32 @@ fn sqlite_execute(path: String, sql: String) -> Result<QueryExecutionResult, Str
 /// command resolves to `Err(message)` — matching `sqlite_execute`
 /// so the panel's error UI doesn't need a third state.
 #[tauri::command]
-fn sqlite_execute_script(path: String, sql: String) -> Result<Vec<QueryExecutionResult>, String> {
-    let resolved_path = path.trim();
-    let resolved_sql = sql.trim();
-    if resolved_path.is_empty() {
-        return Err(String::from("SQLite database path must not be empty."));
-    }
-    if resolved_sql.is_empty() {
-        return Err(String::from("SQL must not be empty."));
-    }
-    let client = SqliteClient::open(resolved_path).map_err(|error| error.to_string())?;
-    let results = client.execute_script(resolved_sql);
-    let mut out = Vec::with_capacity(results.len());
-    for r in results {
-        match map_sqlite_query_result(r) {
-            Ok(view) => out.push(view),
-            Err(message) => return Err(message),
+async fn sqlite_execute_script(
+    path: String,
+    sql: String,
+) -> Result<Vec<QueryExecutionResult>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved_path = path.trim();
+        let resolved_sql = sql.trim();
+        if resolved_path.is_empty() {
+            return Err(String::from("SQLite database path must not be empty."));
         }
-    }
-    Ok(out)
+        if resolved_sql.is_empty() {
+            return Err(String::from("SQL must not be empty."));
+        }
+        let client = SqliteClient::open(resolved_path).map_err(|error| error.to_string())?;
+        let results = client.execute_script(resolved_sql);
+        let mut out = Vec::with_capacity(results.len());
+        for r in results {
+            match map_sqlite_query_result(r) {
+                Ok(view) => out.push(view),
+                Err(message) => return Err(message),
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("sqlite_execute_script join: {e}"))?
 }
 
 #[tauri::command]
@@ -5869,7 +5974,23 @@ fn terminal_close(state: tauri::State<'_, AppState>, session_id: String) -> Resu
 // ── PostgreSQL ──────────────────────────────────────────────────────
 
 #[tauri::command]
-fn postgres_browse(
+async fn postgres_browse(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    schema: Option<String>,
+    table: Option<String>,
+) -> Result<PostgresBrowserState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        postgres_browse_blocking(host, port, user, password, database, schema, table)
+    })
+    .await
+    .map_err(|e| format!("postgres_browse join: {e}"))?
+}
+
+fn postgres_browse_blocking(
     host: String,
     port: u16,
     user: String,
@@ -6073,7 +6194,7 @@ fn postgres_browse(
 }
 
 #[tauri::command]
-fn postgres_execute(
+async fn postgres_execute(
     host: String,
     port: u16,
     user: String,
@@ -6081,17 +6202,21 @@ fn postgres_execute(
     database: Option<String>,
     sql: String,
 ) -> Result<QueryExecutionResult, String> {
-    let client = PostgresClient::connect_blocking(PostgresConfig {
-        host: host.trim().to_string(),
-        port: normalize_postgres_port(port),
-        user: user.trim().to_string(),
-        password,
-        database: database.filter(|v| !v.trim().is_empty()),
-    })
-    .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = PostgresClient::connect_blocking(PostgresConfig {
+            host: host.trim().to_string(),
+            port: normalize_postgres_port(port),
+            user: user.trim().to_string(),
+            password,
+            database: database.filter(|v| !v.trim().is_empty()),
+        })
+        .map_err(|e| e.to_string())?;
 
-    let result = client.execute_blocking(&sql).map_err(|e| e.to_string())?;
-    Ok(map_postgres_query_result(result))
+        let result = client.execute_blocking(&sql).map_err(|e| e.to_string())?;
+        Ok(map_postgres_query_result(result))
+    })
+    .await
+    .map_err(|e| format!("postgres_execute join: {e}"))?
 }
 
 /// Snapshot of `pg_stat_activity`. Each call opens a fresh connection
@@ -6099,22 +6224,26 @@ fn postgres_execute(
 /// between polls. Errors propagate as strings the panel surfaces in a
 /// status note.
 #[tauri::command]
-fn postgres_list_activity(
+async fn postgres_list_activity(
     host: String,
     port: u16,
     user: String,
     password: String,
     database: Option<String>,
 ) -> Result<Vec<PgActivityRow>, String> {
-    let client = PostgresClient::connect_blocking(PostgresConfig {
-        host: host.trim().to_string(),
-        port: normalize_postgres_port(port),
-        user: user.trim().to_string(),
-        password,
-        database: database.filter(|v| !v.trim().is_empty()),
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = PostgresClient::connect_blocking(PostgresConfig {
+            host: host.trim().to_string(),
+            port: normalize_postgres_port(port),
+            user: user.trim().to_string(),
+            password,
+            database: database.filter(|v| !v.trim().is_empty()),
+        })
+        .map_err(|e| e.to_string())?;
+        client.list_activity_blocking().map_err(|e| e.to_string())
     })
-    .map_err(|e| e.to_string())?;
-    client.list_activity_blocking().map_err(|e| e.to_string())
+    .await
+    .map_err(|e| format!("postgres_list_activity join: {e}"))?
 }
 
 /// `pg_cancel_backend(pid)` over a fresh connection. Returns the
@@ -6122,7 +6251,7 @@ fn postgres_list_activity(
 /// (PG won't tell us whether the query actually stopped, only that
 /// the SIGINT was queued). Caller refreshes after to see the effect.
 #[tauri::command]
-fn postgres_cancel_query(
+async fn postgres_cancel_query(
     host: String,
     port: u16,
     user: String,
@@ -6130,21 +6259,25 @@ fn postgres_cancel_query(
     database: Option<String>,
     pid: i32,
 ) -> Result<bool, String> {
-    let client = PostgresClient::connect_blocking(PostgresConfig {
-        host: host.trim().to_string(),
-        port: normalize_postgres_port(port),
-        user: user.trim().to_string(),
-        password,
-        database: database.filter(|v| !v.trim().is_empty()),
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = PostgresClient::connect_blocking(PostgresConfig {
+            host: host.trim().to_string(),
+            port: normalize_postgres_port(port),
+            user: user.trim().to_string(),
+            password,
+            database: database.filter(|v| !v.trim().is_empty()),
+        })
+        .map_err(|e| e.to_string())?;
+        client.cancel_query_blocking(pid).map_err(|e| e.to_string())
     })
-    .map_err(|e| e.to_string())?;
-    client.cancel_query_blocking(pid).map_err(|e| e.to_string())
+    .await
+    .map_err(|e| format!("postgres_cancel_query join: {e}"))?
 }
 
 /// `pg_terminate_backend(pid)`. Heavier hammer than cancel — drops the
 /// whole backend connection. Frontend should confirm before invoking.
 #[tauri::command]
-fn postgres_terminate_backend(
+async fn postgres_terminate_backend(
     host: String,
     port: u16,
     user: String,
@@ -6152,17 +6285,21 @@ fn postgres_terminate_backend(
     database: Option<String>,
     pid: i32,
 ) -> Result<bool, String> {
-    let client = PostgresClient::connect_blocking(PostgresConfig {
-        host: host.trim().to_string(),
-        port: normalize_postgres_port(port),
-        user: user.trim().to_string(),
-        password,
-        database: database.filter(|v| !v.trim().is_empty()),
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = PostgresClient::connect_blocking(PostgresConfig {
+            host: host.trim().to_string(),
+            port: normalize_postgres_port(port),
+            user: user.trim().to_string(),
+            password,
+            database: database.filter(|v| !v.trim().is_empty()),
+        })
+        .map_err(|e| e.to_string())?;
+        client
+            .terminate_backend_blocking(pid)
+            .map_err(|e| e.to_string())
     })
-    .map_err(|e| e.to_string())?;
-    client
-        .terminate_backend_blocking(pid)
-        .map_err(|e| e.to_string())
+    .await
+    .map_err(|e| format!("postgres_terminate_backend join: {e}"))?
 }
 
 /// Dedicated DB connectivity probe. Opens the kind-specific client,
@@ -6178,7 +6315,7 @@ struct DbTestConnectionResult {
 }
 
 #[tauri::command]
-fn db_test_connection(
+async fn db_test_connection(
     kind: String,
     host: String,
     port: u16,
@@ -6186,92 +6323,96 @@ fn db_test_connection(
     password: String,
     database: Option<String>,
 ) -> Result<DbTestConnectionResult, String> {
-    let host_trim = host.trim();
-    if host_trim.is_empty() {
-        return Err(String::from("Host must not be empty."));
-    }
-    let start = std::time::Instant::now();
+    tauri::async_runtime::spawn_blocking(move || {
+        let host_trim = host.trim();
+        if host_trim.is_empty() {
+            return Err(String::from("Host must not be empty."));
+        }
+        let start = std::time::Instant::now();
 
-    match kind.as_str() {
-        "mysql" => {
-            let user_trim = user.trim();
-            if user_trim.is_empty() {
-                return Err(String::from("MySQL user must not be empty."));
+        match kind.as_str() {
+            "mysql" => {
+                let user_trim = user.trim();
+                if user_trim.is_empty() {
+                    return Err(String::from("MySQL user must not be empty."));
+                }
+                let client = MysqlClient::connect_blocking(MysqlConfig {
+                    host: host_trim.to_string(),
+                    port: normalize_mysql_port(port),
+                    user: user_trim.to_string(),
+                    password,
+                    database: database.filter(|v| !v.trim().is_empty()),
+                })
+                .map_err(|e| e.to_string())?;
+                let version = client
+                    .execute_blocking("SELECT VERSION()")
+                    .ok()
+                    .and_then(|r| r.rows.into_iter().next())
+                    .and_then(|row| row.into_iter().next())
+                    .flatten()
+                    .unwrap_or_default();
+                Ok(DbTestConnectionResult {
+                    ok: true,
+                    elapsed_ms: start.elapsed().as_millis() as u64,
+                    server_version: version,
+                })
             }
-            let client = MysqlClient::connect_blocking(MysqlConfig {
-                host: host_trim.to_string(),
-                port: normalize_mysql_port(port),
-                user: user_trim.to_string(),
-                password,
-                database: database.filter(|v| !v.trim().is_empty()),
-            })
-            .map_err(|e| e.to_string())?;
-            let version = client
-                .execute_blocking("SELECT VERSION()")
-                .ok()
-                .and_then(|r| r.rows.into_iter().next())
-                .and_then(|row| row.into_iter().next())
-                .flatten()
-                .unwrap_or_default();
-            Ok(DbTestConnectionResult {
-                ok: true,
-                elapsed_ms: start.elapsed().as_millis() as u64,
-                server_version: version,
-            })
-        }
-        "postgres" => {
-            let user_trim = user.trim();
-            if user_trim.is_empty() {
-                return Err(String::from("PostgreSQL user must not be empty."));
+            "postgres" => {
+                let user_trim = user.trim();
+                if user_trim.is_empty() {
+                    return Err(String::from("PostgreSQL user must not be empty."));
+                }
+                let client = PostgresClient::connect_blocking(PostgresConfig {
+                    host: host_trim.to_string(),
+                    port: normalize_postgres_port(port),
+                    user: user_trim.to_string(),
+                    password,
+                    database: database.filter(|v| !v.trim().is_empty()),
+                })
+                .map_err(|e| e.to_string())?;
+                let version = client
+                    .execute_blocking("SELECT version()")
+                    .ok()
+                    .and_then(|r| r.rows.into_iter().next())
+                    .and_then(|row| row.into_iter().next())
+                    .flatten()
+                    .unwrap_or_default();
+                Ok(DbTestConnectionResult {
+                    ok: true,
+                    elapsed_ms: start.elapsed().as_millis() as u64,
+                    server_version: version,
+                })
             }
-            let client = PostgresClient::connect_blocking(PostgresConfig {
-                host: host_trim.to_string(),
-                port: normalize_postgres_port(port),
-                user: user_trim.to_string(),
-                password,
-                database: database.filter(|v| !v.trim().is_empty()),
-            })
-            .map_err(|e| e.to_string())?;
-            let version = client
-                .execute_blocking("SELECT version()")
-                .ok()
-                .and_then(|r| r.rows.into_iter().next())
-                .and_then(|row| row.into_iter().next())
-                .flatten()
-                .unwrap_or_default();
-            Ok(DbTestConnectionResult {
-                ok: true,
-                elapsed_ms: start.elapsed().as_millis() as u64,
-                server_version: version,
-            })
+            "redis" => {
+                let client = RedisClient::connect_blocking(RedisConfig {
+                    host: host_trim.to_string(),
+                    port: normalize_redis_port(port),
+                    db: 0,
+                    username: {
+                        let u = user.trim();
+                        if u.is_empty() { None } else { Some(u.to_string()) }
+                    },
+                    password: if password.is_empty() { None } else { Some(password) },
+                })
+                .map_err(|e| e.to_string())?;
+                client.ping_blocking().map_err(|e| e.to_string())?;
+                let server_info = client.info_blocking("server").unwrap_or_default();
+                let version = server_info
+                    .get("redis_version")
+                    .or_else(|| server_info.get("valkey_version"))
+                    .cloned()
+                    .unwrap_or_default();
+                Ok(DbTestConnectionResult {
+                    ok: true,
+                    elapsed_ms: start.elapsed().as_millis() as u64,
+                    server_version: version,
+                })
+            }
+            _ => Err(format!("Unsupported kind: {kind}")),
         }
-        "redis" => {
-            let client = RedisClient::connect_blocking(RedisConfig {
-                host: host_trim.to_string(),
-                port: normalize_redis_port(port),
-                db: 0,
-                username: {
-                    let u = user.trim();
-                    if u.is_empty() { None } else { Some(u.to_string()) }
-                },
-                password: if password.is_empty() { None } else { Some(password) },
-            })
-            .map_err(|e| e.to_string())?;
-            client.ping_blocking().map_err(|e| e.to_string())?;
-            let server_info = client.info_blocking("server").unwrap_or_default();
-            let version = server_info
-                .get("redis_version")
-                .or_else(|| server_info.get("valkey_version"))
-                .cloned()
-                .unwrap_or_default();
-            Ok(DbTestConnectionResult {
-                ok: true,
-                elapsed_ms: start.elapsed().as_millis() as u64,
-                server_version: version,
-            })
-        }
-        _ => Err(format!("Unsupported kind: {kind}")),
-    }
+    })
+    .await
+    .map_err(|e| format!("db_test_connection join: {e}"))?
 }
 
 /// Summary view of a single file inside `~/.ssh/`. Returned by
@@ -14821,17 +14962,82 @@ async fn local_docker_volume_usage() -> Result<Vec<DockerVolumeUsageView>, Strin
     .map_err(|e| format!("docker system df join: {}", e))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LocalDockerActionSpec {
+    cli_action: &'static str,
+    success_message: &'static str,
+}
+
+fn local_docker_action_spec(action: &str) -> Result<LocalDockerActionSpec, String> {
+    match action {
+        "start" => Ok(LocalDockerActionSpec {
+            cli_action: "start",
+            success_message: "started",
+        }),
+        "stop" => Ok(LocalDockerActionSpec {
+            cli_action: "stop",
+            success_message: "stopped",
+        }),
+        "restart" => Ok(LocalDockerActionSpec {
+            cli_action: "restart",
+            success_message: "restarted",
+        }),
+        "remove" => Ok(LocalDockerActionSpec {
+            cli_action: "rm",
+            success_message: "removed",
+        }),
+        _ => Err(format!("unknown docker action: {action}")),
+    }
+}
+
+#[cfg(test)]
+mod local_docker_action_tests {
+    use super::{local_docker_action_spec, LocalDockerActionSpec};
+
+    #[test]
+    fn maps_ui_actions_to_docker_cli_verbs() {
+        assert_eq!(
+            local_docker_action_spec("remove").unwrap(),
+            LocalDockerActionSpec {
+                cli_action: "rm",
+                success_message: "removed",
+            }
+        );
+        assert_eq!(
+            local_docker_action_spec("restart").unwrap(),
+            LocalDockerActionSpec {
+                cli_action: "restart",
+                success_message: "restarted",
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_ui_actions() {
+        assert!(local_docker_action_spec("exec").is_err());
+    }
+}
+
 #[tauri::command]
 async fn local_docker_action(container_id: String, action: String) -> Result<String, String> {
-    let output = std::process::Command::new("docker")
-        .args([&action, &container_id])
-        .output()
-        .map_err(|e| format!("docker {} failed: {}", action, e))?;
-    if output.status.success() {
-        Ok(action.clone())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    if !docker::is_safe_id(&container_id) {
+        return Err(format!("refusing unsafe docker id {container_id:?}"));
     }
+    let spec = local_docker_action_spec(&action)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = std::process::Command::new("docker")
+            .args([spec.cli_action, &container_id])
+            .output()
+            .map_err(|e| format!("docker {} failed: {}", spec.cli_action, e))?;
+        if output.status.success() {
+            Ok(spec.success_message.to_string())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("docker {} join: {}", spec.cli_action, e))?
 }
 
 // `include_disks` mirrors `server_monitor_probe`: `false` skips the

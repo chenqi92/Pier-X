@@ -1076,7 +1076,32 @@ pub(super) async fn collect_remote_tree(
     while let Some((remote_dir, local_dir)) = stack.pop() {
         let entries = sftp.list_dir(&remote_dir).await?;
         for entry in entries {
+            // The server controls `entry.name`. A name with a path
+            // separator or `..` would make `join` escape `local_root`
+            // and write outside the chosen destination.
+            if !is_safe_remote_name(&entry.name) {
+                return Err(SshError::InvalidConfig(format!(
+                    "refusing unsafe remote entry name {:?} in {remote_dir}",
+                    entry.name
+                )));
+            }
             let target_local = local_dir.join(&entry.name);
+            // Symlinks: stat() resolves the link server-side. A link
+            // to a regular file downloads its target's content (trees
+            // like sites-enabled/ or .wants/ depend on that); a link
+            // to a directory is skipped rather than recursed — it can
+            // point outside the requested root or back into it — and
+            // a dangling link is skipped instead of aborting the
+            // whole transfer.
+            if entry.is_link {
+                if let Ok(meta) = sftp.stat(&entry.path).await {
+                    if !meta.is_dir {
+                        *total = total.saturating_add(meta.size);
+                        files.push((entry.path, target_local, meta.size));
+                    }
+                }
+                continue;
+            }
             if entry.is_dir {
                 stack.push((entry.path.clone(), target_local));
             } else {
@@ -1086,6 +1111,25 @@ pub(super) async fn collect_remote_tree(
         }
     }
     Ok(())
+}
+
+/// True when a server-supplied directory-entry name is a single
+/// normal path component — no separators, no `.` / `..`, no NUL.
+/// `\` and `:` are only separator / drive-re-rooting hazards under
+/// Windows path semantics (both are legal Unix filename bytes), and
+/// the `join` + local write happen on the client, so those two are
+/// rejected only on Windows builds.
+fn is_safe_remote_name(name: &str) -> bool {
+    if name.is_empty() || name == "." || name == ".." {
+        return false;
+    }
+    if name.contains(['/', '\0']) {
+        return false;
+    }
+    if cfg!(windows) && name.contains(['\\', ':']) {
+        return false;
+    }
+    true
 }
 
 /// Pick the most useful owner / group display string from the
@@ -1133,6 +1177,20 @@ mod tests {
         let json = serde_json::to_string(&entry).expect("serialize");
         let back: RemoteFileEntry = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(entry, back);
+    }
+
+    #[test]
+    fn is_safe_remote_name_rejects_traversal_components() {
+        assert!(is_safe_remote_name("app.log"));
+        assert!(is_safe_remote_name("notes 2026.md"));
+        assert!(is_safe_remote_name("..hidden")); // leading dots are fine
+        for evil in ["", ".", "..", "a/b", "a\0b"] {
+            assert!(!is_safe_remote_name(evil), "{evil:?} must be rejected");
+        }
+        // `\` / `:` are separator and drive hazards only under Windows
+        // path semantics; they're ordinary filename bytes on Unix.
+        assert_eq!(is_safe_remote_name("a\\b"), !cfg!(windows));
+        assert_eq!(is_safe_remote_name("C:evil"), !cfg!(windows));
     }
 
     #[test]

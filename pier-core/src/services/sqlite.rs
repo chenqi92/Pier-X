@@ -8,13 +8,20 @@
 //! keeps the build dependency-free and matches how the user's own
 //! sqlite3 is configured (extensions, etc.).
 
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
 use crate::process_util::configure_background_command;
+
+/// Hard cap on how many rows a single local SQLite query returns.
+pub const MAX_ROWS: usize = 10_000;
+
+/// Hard cap on the displayed length of each cell value.
+pub const MAX_CELL_BYTES: usize = 4096;
 
 /// Errors surfaced by the SQLite client.
 #[allow(missing_docs)]
@@ -32,9 +39,16 @@ pub enum SqliteError {
 pub struct SqliteQueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
+    pub truncated: bool,
     pub affected_rows: i64,
     pub elapsed_ms: u64,
     pub error: Option<String>,
+}
+
+struct SqliteQueryOutput {
+    header: Option<String>,
+    rows: Vec<String>,
+    truncated: bool,
 }
 
 /// SQLite client bound to a database file.
@@ -202,18 +216,18 @@ impl SqliteClient {
     /// Execute an arbitrary SQL statement.
     pub fn execute(&self, sql: &str) -> SqliteQueryResult {
         let start = Instant::now();
-        let result = self.sqlite(&["-header", "-separator", "\x1f", sql]);
+        let result = self.sqlite_query_capped(sql);
         let elapsed = start.elapsed().as_millis() as u64;
 
         match result {
             Ok(output) => {
-                let mut lines = output.lines();
-                let header = match lines.next() {
+                let header = match output.header.as_deref() {
                     Some(h) if !h.is_empty() => h,
                     _ => {
                         return SqliteQueryResult {
                             columns: vec![],
                             rows: vec![],
+                            truncated: false,
                             affected_rows: 0,
                             elapsed_ms: elapsed,
                             error: None,
@@ -222,16 +236,17 @@ impl SqliteClient {
                 };
                 let columns: Vec<String> = header.split('\x1f').map(|s| s.to_string()).collect();
                 let mut rows = Vec::new();
-                for line in lines {
+                for line in output.rows {
                     if line.is_empty() {
                         continue;
                     }
-                    let row: Vec<String> = line.split('\x1f').map(|s| s.to_string()).collect();
+                    let row: Vec<String> = line.split('\x1f').map(cap_cell).collect();
                     rows.push(row);
                 }
                 SqliteQueryResult {
                     columns,
                     rows,
+                    truncated: output.truncated,
                     affected_rows: 0,
                     elapsed_ms: elapsed,
                     error: None,
@@ -240,6 +255,7 @@ impl SqliteClient {
             Err(e) => SqliteQueryResult {
                 columns: vec![],
                 rows: vec![],
+                truncated: false,
                 affected_rows: 0,
                 elapsed_ms: elapsed,
                 error: Some(e.to_string()),
@@ -262,6 +278,153 @@ impl SqliteClient {
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
+
+    fn sqlite_query_capped(&self, sql: &str) -> Result<SqliteQueryOutput, SqliteError> {
+        let mut cmd = Command::new("sqlite3");
+        cmd.arg(self.db_path.to_str().unwrap_or(""));
+        cmd.args(["-header", "-separator", "\x1f", sql]);
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        configure_background_command(&mut cmd);
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| SqliteError::Command(format!("sqlite3: {e}")))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| SqliteError::Command(String::from("sqlite3 stdout unavailable")))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| SqliteError::Command(String::from("sqlite3 stderr unavailable")))?;
+        // Drain stderr on a side thread — if the child fills the
+        // stderr pipe while we're still reading stdout, both sides
+        // deadlock waiting on each other.
+        let stderr_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr.read_to_end(&mut buf);
+            buf
+        });
+        let mut reader = BufReader::new(stdout);
+        let mut header: Option<String> = None;
+        let mut rows: Vec<String> = Vec::new();
+        let mut truncated = false;
+        // Killing sqlite3 mid-statement aborts the implicit
+        // transaction, so only read-only statements may stop early;
+        // DML (e.g. `UPDATE … RETURNING`) must drain to completion
+        // or the write rolls back.
+        let read_only = is_read_only_sql(sql);
+        let mut killed = false;
+        let mut buf: Vec<u8> = Vec::new();
+
+        loop {
+            buf.clear();
+            let read = match reader.read_until(b'\n', &mut buf) {
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stderr_thread.join();
+                    return Err(SqliteError::Command(format!("sqlite3 read: {e}")));
+                }
+            };
+            if read == 0 {
+                break;
+            }
+            while matches!(buf.last(), Some(&(b'\n' | b'\r'))) {
+                buf.pop();
+            }
+            // BLOB cells can carry arbitrary bytes — decode lossily
+            // instead of failing the whole query on invalid UTF-8.
+            let line = String::from_utf8_lossy(&buf);
+            if header.is_none() {
+                if !line.is_empty() {
+                    header = Some(line.into_owned());
+                }
+                continue;
+            }
+            if line.is_empty() {
+                continue;
+            }
+            if rows.len() >= MAX_ROWS {
+                truncated = true;
+                if read_only {
+                    killed = true;
+                    let _ = child.kill();
+                    break;
+                }
+                continue;
+            }
+            rows.push(line.into_owned());
+        }
+
+        let status = child
+            .wait()
+            .map_err(|e| SqliteError::Command(format!("sqlite3 wait: {e}")))?;
+        let stderr_buf = stderr_thread.join().unwrap_or_default();
+        if !killed && !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr_buf);
+            return Err(SqliteError::Command(stderr.trim().to_string()));
+        }
+
+        Ok(SqliteQueryOutput {
+            header,
+            rows,
+            truncated,
+        })
+    }
+}
+
+fn cap_cell(value: &str) -> String {
+    if value.len() <= MAX_CELL_BYTES {
+        return value.to_string();
+    }
+    let mut end = MAX_CELL_BYTES;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = value[..end].to_string();
+    out.push('…');
+    out
+}
+
+/// Skip leading whitespace and SQL comments (`-- …` line and
+/// `/* … */` block) so the first real keyword can be inspected.
+fn skip_leading_sql_comments(sql: &str) -> &str {
+    let mut rest = sql.trim_start();
+    loop {
+        if let Some(after) = rest.strip_prefix("--") {
+            rest = match after.find('\n') {
+                Some(i) => after[i + 1..].trim_start(),
+                None => "",
+            };
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            rest = match after.find("*/") {
+                Some(i) => after[i + 2..].trim_start(),
+                None => "",
+            };
+        } else {
+            return rest;
+        }
+    }
+}
+
+/// True when the statement's first keyword is SELECT / WITH /
+/// VALUES. Only such statements may be cut short by killing the
+/// child at the row cap — killing sqlite3 inside DML (e.g.
+/// `UPDATE … RETURNING`) aborts the implicit transaction and
+/// rolls the write back.
+fn is_read_only_sql(sql: &str) -> bool {
+    let body = skip_leading_sql_comments(sql);
+    let token: String = body
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    matches!(
+        token.to_ascii_uppercase().as_str(),
+        "SELECT" | "WITH" | "VALUES"
+    )
 }
 
 /// Column metadata from PRAGMA table_info.
@@ -447,6 +610,26 @@ mod tests {
         let stmts = split_sql_statements("SELECT 'it''s ok'; SELECT 2;");
         assert_eq!(stmts.len(), 2);
         assert_eq!(stmts[0], "SELECT 'it''s ok'");
+    }
+
+    #[test]
+    fn read_only_sql_gates_on_first_keyword() {
+        assert!(is_read_only_sql("SELECT * FROM t"));
+        assert!(is_read_only_sql("  select 1"));
+        assert!(is_read_only_sql("WITH x AS (SELECT 1) SELECT * FROM x"));
+        assert!(is_read_only_sql("VALUES(1),(2)"));
+        assert!(!is_read_only_sql("UPDATE t SET a = 1 RETURNING *"));
+        assert!(!is_read_only_sql("DELETE FROM t RETURNING *"));
+        assert!(!is_read_only_sql("INSERT INTO t VALUES (1)"));
+        assert!(!is_read_only_sql("selections"));
+    }
+
+    #[test]
+    fn read_only_sql_skips_leading_comments() {
+        assert!(is_read_only_sql("-- note\nSELECT 1"));
+        assert!(is_read_only_sql("/* note */ SELECT 1"));
+        assert!(!is_read_only_sql("/* note */ UPDATE t SET a = 1"));
+        assert!(!is_read_only_sql("-- only a comment"));
     }
 
     #[test]

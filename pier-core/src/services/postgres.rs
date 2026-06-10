@@ -38,7 +38,9 @@
 use std::collections::BTreeSet;
 use std::time::Instant;
 
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
+use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client, NoTls, Row};
 
 /// Same cap as MySQL — 10k rows per query result.
@@ -323,23 +325,26 @@ impl PostgresClient {
             .map(|c| c.name().to_string())
             .collect();
 
-        let pg_rows: Vec<Row> = self.client.query(&stmt, &[]).await?;
-
         let mut rows: Vec<ResultRow> = Vec::new();
         let mut truncated = false;
-        for (i, pg_row) in pg_rows.iter().enumerate() {
-            if i >= MAX_ROWS {
+        let params: [&(dyn ToSql + Sync); 0] = [];
+        let stream = self.client.query_raw(&stmt, params).await?;
+        tokio::pin!(stream);
+        while let Some(pg_row) = stream.try_next().await? {
+            if rows.len() >= MAX_ROWS {
                 truncated = true;
                 break;
             }
-            rows.push(row_to_cells(pg_row));
+            rows.push(row_to_cells(&pg_row));
         }
+
+        let affected_rows = rows.len() as u64;
 
         Ok(QueryResult {
             columns,
             rows,
             truncated,
-            affected_rows: pg_rows.len() as u64,
+            affected_rows,
             last_insert_id: None,
             elapsed_ms: start.elapsed().as_millis() as u64,
         })

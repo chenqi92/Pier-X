@@ -33,9 +33,10 @@
 //!
 //! ## Cancellation
 //!
-//! Workers check the cancel token between files. A long in-flight
-//! file won't abort mid-stream — that needs threading the token
-//! into the chunk loop, deferred for now.
+//! Workers check the cancel token between files, and the token is
+//! also threaded into each per-file transfer, which checks it
+//! between 64 KiB chunks — so a long in-flight file aborts
+//! mid-stream with [`SshError::Cancelled`].
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};

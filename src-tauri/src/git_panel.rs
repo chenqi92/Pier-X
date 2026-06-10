@@ -945,7 +945,15 @@ pub fn git_graph_metadata(path: Option<String>) -> Result<GitGraphMetadata, Stri
 }
 
 #[tauri::command]
-pub fn git_graph_history(params: GitGraphHistoryParams) -> Result<Vec<GitGraphRowView>, String> {
+pub async fn git_graph_history(
+    params: GitGraphHistoryParams,
+) -> Result<Vec<GitGraphRowView>, String> {
+    tauri::async_runtime::spawn_blocking(move || git_graph_history_blocking(params))
+        .await
+        .map_err(|e| format!("git_graph_history join: {e}"))?
+}
+
+fn git_graph_history_blocking(params: GitGraphHistoryParams) -> Result<Vec<GitGraphRowView>, String> {
     let client = open_git_client(params.path.clone())?;
     let repo_path = client.repo_path().display().to_string();
     let current_branch = client
@@ -1206,7 +1214,7 @@ pub fn git_comparison_diff(
 /// `--upload-pack=…` or a commit-ish `--output=…`) into the `git`
 /// argv. Values are already passed as separate args (no shell), so
 /// this is the remaining gap, not shell injection.
-fn reject_flaglike_ref(value: &str, label: &str) -> Result<(), String> {
+pub(crate) fn reject_flaglike_ref(value: &str, label: &str) -> Result<(), String> {
     if value.trim_start().starts_with('-') {
         return Err(format!("{label} must not start with '-'"));
     }

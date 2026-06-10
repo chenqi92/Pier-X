@@ -311,7 +311,8 @@ async fn run_select_rows(
 
 async fn run_query(session: &SshSession, db_path: &str, sql: &str) -> Result<RemoteQueryResult> {
     let started = std::time::Instant::now();
-    let cmd = build_sqlite_json_command(db_path, sql);
+    let bounded_sql = bounded_read_sql(sql);
+    let cmd = build_sqlite_json_command(db_path, &bounded_sql);
     let (exit, stdout) = session.exec_command(&cmd).await?;
     let elapsed_ms = started.elapsed().as_millis() as u64;
 
@@ -355,7 +356,7 @@ async fn run_query(session: &SshSession, db_path: &str, sql: &str) -> Result<Rem
     // We therefore re-parse to grab the ordered column list.
     let columns = extract_column_order(&stdout).unwrap_or_default();
 
-    let truncated = rows.len() >= MAX_ROWS;
+    let truncated = rows.len() > MAX_ROWS;
     let capped_rows = rows.into_iter().take(MAX_ROWS).collect::<Vec<_>>();
     let grid: Vec<Vec<String>> = capped_rows
         .iter()
@@ -400,6 +401,25 @@ fn build_sqlite_json_command(db_path: &str, sql: &str) -> String {
     let path_q = shell_single_quote(db_path);
     let sql_q = shell_single_quote(sql);
     format!("sqlite3 -json -bail -cmd '.timeout 5000' -- {path_q} {sql_q}")
+}
+
+fn bounded_read_sql(sql: &str) -> String {
+    let trimmed = sql.trim();
+    let body = trimmed.trim_end_matches(';').trim();
+    if body.is_empty() || body.contains(';') {
+        return sql.to_string();
+    }
+    let lower = body.to_ascii_lowercase();
+    if lower.starts_with("select ") || lower.starts_with("with ") {
+        // Newline before the closing paren — a query ending in a
+        // `--` line comment would otherwise swallow the wrapper.
+        format!(
+            "SELECT * FROM ({body}\n) AS pier_x_limited_result LIMIT {}",
+            MAX_ROWS + 1
+        )
+    } else {
+        sql.to_string()
+    }
 }
 
 /// POSIX-safe single-quote escape for shell interpolation.
@@ -841,6 +861,30 @@ mod tests {
             cmd,
             "sqlite3 -json -bail -cmd '.timeout 5000' -- '/srv/app.db' 'SELECT 1'",
         );
+    }
+
+    #[test]
+    fn bounded_read_sql_wraps_select_with_row_cap() {
+        assert_eq!(
+            bounded_read_sql("SELECT * FROM t;"),
+            format!(
+                "SELECT * FROM (SELECT * FROM t\n) AS pier_x_limited_result LIMIT {}",
+                MAX_ROWS + 1
+            ),
+        );
+    }
+
+    #[test]
+    fn bounded_read_sql_survives_trailing_line_comment() {
+        // The closing paren must land on its own line so a trailing
+        // `--` comment in the user's SQL can't swallow it.
+        let wrapped = bounded_read_sql("SELECT * FROM t -- all rows");
+        assert!(wrapped.contains("-- all rows\n)"));
+    }
+
+    #[test]
+    fn bounded_read_sql_leaves_writes_alone() {
+        assert_eq!(bounded_read_sql("UPDATE t SET a=1"), "UPDATE t SET a=1");
     }
 
     #[test]

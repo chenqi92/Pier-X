@@ -33,9 +33,9 @@
 //!
 //! ## Not yet
 //!
-//! * Streaming result sets. M5d reads the whole result into
-//!   memory; we cap at [`MAX_ROWS`] to keep the UI alive on
-//!   a `SELECT *` against a huge table.
+//! * Server-side cancellation for long reads. M5d streams up to
+//!   [`MAX_ROWS`] + 1 rows, then drops the connection when the
+//!   result is larger than the UI budget.
 //! * Prepared statements / parameter binding. The UI runs
 //!   whatever the user types in the SQL editor, as-is.
 //! * Schema introspection beyond `SHOW DATABASES` / `SHOW
@@ -354,25 +354,25 @@ impl MysqlClient {
                 .collect();
         }
 
-        // `for_each` is the idiomatic mysql_async row loop —
-        // it streams rows out of the tokio task without
-        // materializing the full set inside the driver.
-        let mut count: usize = 0;
-        result
-            .for_each(|row: Row| {
-                if count >= MAX_ROWS {
-                    truncated = true;
-                    return;
-                }
-                rows_out.push(row_to_cells(&row));
-                count += 1;
-            })
-            .await?;
+        while let Some(row) = result.next().await? {
+            if rows_out.len() >= MAX_ROWS {
+                truncated = true;
+                break;
+            }
+            rows_out.push(row_to_cells(&row));
+        }
 
         let affected_rows = result.affected_rows();
         let last_insert_id = result.last_insert_id();
         drop(result);
-        drop(conn);
+        if truncated {
+            // Do not drain the rest of an oversized result set just
+            // to keep a pooled connection reusable. Closing it is
+            // cheaper than reading millions of rows after the UI cap.
+            let _ = conn.disconnect().await;
+        } else {
+            drop(conn);
+        }
 
         Ok(QueryResult {
             columns: columns_out,

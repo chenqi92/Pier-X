@@ -166,6 +166,15 @@ function pathAncestors(path: string) {
 
 function buildRepoPathTree(paths: string[]) {
   const root: RepoPathTreeNode[] = [];
+  const childIndexes = new WeakMap<RepoPathTreeNode[], Map<string, RepoPathTreeNode>>();
+  const indexFor = (children: RepoPathTreeNode[]) => {
+    let index = childIndexes.get(children);
+    if (!index) {
+      index = new Map(children.map((child) => [child.name, child]));
+      childIndexes.set(children, index);
+    }
+    return index;
+  };
 
   for (const rawPath of paths) {
     const parts = String(rawPath || "")
@@ -179,7 +188,8 @@ function buildRepoPathTree(paths: string[]) {
     parts.forEach((part, index) => {
       currentPath = currentPath ? `${currentPath}/${part}` : part;
       const isLeaf = index === parts.length - 1;
-      let node = currentChildren.find((candidate) => candidate.name === part);
+      const currentIndex = indexFor(currentChildren);
+      let node = currentIndex.get(part);
 
       if (!node) {
         node = {
@@ -190,6 +200,7 @@ function buildRepoPathTree(paths: string[]) {
           children: [],
         };
         currentChildren.push(node);
+        currentIndex.set(part, node);
       } else if (!isLeaf) {
         node.kind = "directory";
       }
@@ -641,6 +652,7 @@ function GitGraphLane({ row, isHead, width }: { row: GitGraphRowView; isHead: bo
 // converge segments that mark the transition. 500 keeps almost all real-world
 // histories in a single page.
 const HISTORY_PAGE_SIZE = 500;
+const HISTORY_MAX_ROWS = 5000;
 
 // Column resizer for the history table. Drives a CSS variable on the
 // surface element so the header, all rows, and the resizer guide stay
@@ -1297,6 +1309,10 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [historyHasMore, setHistoryHasMore] = useState(false);
+  // True when the last load filled the HISTORY_MAX_ROWS window — the
+  // repo may have more commits beyond the cap, so the footer must not
+  // claim "End of history".
+  const [historyCapped, setHistoryCapped] = useState(false);
   const historyListRef = useRef<HTMLDivElement | null>(null);
   const [historySearchText, setHistorySearchText] = useState("");
   const [historyBranchFilter, setHistoryBranchFilter] = useState("");
@@ -1724,6 +1740,10 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
 
   async function loadGraphRows(reset = true) {
     if (!gitReady) return;
+    if (!reset && graphRows.length >= HISTORY_MAX_ROWS) {
+      setHistoryHasMore(false);
+      return;
+    }
     if (reset) {
       setHistoryLoading(true);
       setHistoryHasMore(false);
@@ -1739,9 +1759,10 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
       // first-parent edge through an off-main branch — and produces
       // inconsistent lane assignments at page boundaries because each page
       // saw a different commit set.
-      const desiredCount = reset
-        ? HISTORY_PAGE_SIZE
-        : graphRows.length + HISTORY_PAGE_SIZE;
+      const desiredCount = Math.min(
+        reset ? HISTORY_PAGE_SIZE : graphRows.length + HISTORY_PAGE_SIZE,
+        HISTORY_MAX_ROWS,
+      );
       const previousCount = reset ? 0 : graphRows.length;
       const rows = await cmd.gitGraphHistory({
         path: currentRepoPath,
@@ -1758,9 +1779,14 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
         showLongEdges: historyShowLongEdges,
       });
       setGraphRows(rows);
+      setHistoryCapped(rows.length >= HISTORY_MAX_ROWS);
       // hasMore = true while git keeps producing new commits. If a loadMore
       // didn't actually grow the row count, we've hit the bottom of the log.
-      setHistoryHasMore(rows.length >= desiredCount && rows.length > previousCount);
+      setHistoryHasMore(
+        desiredCount < HISTORY_MAX_ROWS &&
+          rows.length >= desiredCount &&
+          rows.length > previousCount,
+      );
     } catch (error) {
       showBanner(false, extractErrorMessage(error, t));
       if (reset) setGraphRows([]);
@@ -3256,7 +3282,11 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
                         historyLoadingMore ? (
                           <div className="git-history-list__loading-more mono">{t("Loading more…")}</div>
                         ) : !historyHasMore && graphRows.length > 0 ? (
-                          <div className="git-history-list__end mono">{t("End of history")}</div>
+                          <div className="git-history-list__end mono">
+                            {historyCapped
+                              ? t("Showing first {n} commits", { n: graphRows.length })
+                              : t("End of history")}
+                          </div>
                         ) : null
                       }
                     />

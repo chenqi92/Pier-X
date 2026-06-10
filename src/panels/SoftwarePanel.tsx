@@ -80,7 +80,7 @@ import StatusDot from "../components/StatusDot";
 import SudoPasswordDialog from "../components/SudoPasswordDialog";
 import "../styles/software-panel.css";
 
-type Props = { tab: TabState | null };
+type Props = { tab: TabState | null; isActive?: boolean };
 
 /** Stable order for the app-store sections — anything not in this
  *  list (or with an empty `category` field) lands in "Other" at the
@@ -179,7 +179,7 @@ export default function SoftwarePanel(props: Props) {
   );
 }
 
-function SoftwarePanelBody({ tab }: Props) {
+function SoftwarePanelBody({ tab, isActive = true }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
 
@@ -1502,7 +1502,12 @@ function SoftwarePanelBody({ tab }: Props) {
    *  that are due. We mark `lastRunAt` BEFORE firing so a slow
    *  install doesn't trigger a second concurrent run on the next
    *  tick (`bundleRunning` would also gate it, but the timestamp
-   *  bump is what prevents re-fire after the run finishes). */
+   *  bump is what prevents re-fire after the run finishes).
+   *
+   *  Deliberately NOT gated on `isActive`: RightSidebar keeps panels
+   *  mounted while hidden, and scheduled installs (e.g. 02:00 daily)
+   *  must keep firing when the user is on another tool — runBundle
+   *  needs no visible UI and reports via desktop notifications. */
   useEffect(() => {
     if (!swKey) return undefined;
     const tick = () => {
@@ -1907,6 +1912,7 @@ function SoftwarePanelBody({ tab }: Props) {
    *  notably the russh handshake of a freshly-opened terminal,
    *  which used to stall behind a backlog of metrics probes. */
   function startMetricsPoll(descriptorId: string) {
+    if (!isActive) return;
     if (!sshParams) return;
     if (!isDbDescriptor(descriptorId)) return;
     if (metricsTimers.current[descriptorId]) return;
@@ -1939,16 +1945,32 @@ function SoftwarePanelBody({ tab }: Props) {
     }
   }
 
+  function stopAllMetricsPolls() {
+    for (const id of Object.keys(metricsTimers.current)) {
+      clearInterval(metricsTimers.current[id]);
+    }
+    metricsTimers.current = {};
+  }
+
   // Stop every poll on unmount / host change so we don't leak
   // intervals across SSH tabs.
   useEffect(() => {
     return () => {
-      for (const id of Object.keys(metricsTimers.current)) {
-        clearInterval(metricsTimers.current[id]);
-      }
-      metricsTimers.current = {};
+      stopAllMetricsPolls();
     };
   }, [swKey]);
+
+  useEffect(() => {
+    if (!isActive) {
+      stopAllMetricsPolls();
+      return;
+    }
+    for (const [descriptorId, expanded] of Object.entries(expandedRows)) {
+      if (expanded && statuses[descriptorId]?.installed) {
+        startMetricsPoll(descriptorId);
+      }
+    }
+  }, [isActive, expandedRows, statuses, sshParams]);
 
   /** Run the inverse of a history entry. Reachable from the
    *  history dialog's "Undo" button. Resolves credentials via the

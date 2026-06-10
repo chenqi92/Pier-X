@@ -1,6 +1,7 @@
 import * as cmd from "./commands";
 import { translate } from "../i18n/useI18n";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { useTabStore } from "../stores/useTabStore";
 import type { TabState, TunnelInfoView } from "./types";
 import { effectiveSshTarget } from "./types";
 
@@ -83,14 +84,36 @@ export async function closeTunnelSlot(
   updateTab(tab.id, tunnelPatch(slot, null));
 }
 
-export async function ensureTunnelSlot(params: {
+type EnsureTunnelParams = {
   tab: TabState;
   slot: TunnelSlot;
   remoteHost: string;
   remotePort: number;
   updateTab: UpdateTab;
   force?: boolean;
-}) {
+};
+
+// Overlapping ensure calls on the same (tab, slot) — e.g. two rapid
+// draft connects, each with `force` — would race the close/reopen and
+// leak whichever tunnel loses the final `updateTab`. Later calls queue
+// behind the in-flight one and then run against the live tab state.
+const ensureChain = new Map<string, Promise<unknown>>();
+
+export async function ensureTunnelSlot(params: EnsureTunnelParams) {
+  const key = `${params.tab.id}:${params.slot}`;
+  const run = (ensureChain.get(key) ?? Promise.resolve())
+    .catch(() => {})
+    .then(() => ensureTunnelSlotNow(params));
+  const link = run.catch(() => {});
+  ensureChain.set(key, link);
+  try {
+    return await run;
+  } finally {
+    if (ensureChain.get(key) === link) ensureChain.delete(key);
+  }
+}
+
+async function ensureTunnelSlotNow(params: EnsureTunnelParams) {
   const {
     tab,
     slot,
@@ -113,7 +136,11 @@ export async function ensureTunnelSlot(params: {
   }
 
   const resolvedRemoteHost = normalizedRemoteHost(remoteHost);
-  const tunnelId = getTunnelId(tab, slot);
+  // `tab` is the caller's render-time snapshot — a queued call must see
+  // the tunnel a just-finished ensure opened (and close it under
+  // `force`), so read the slot from the live store instead.
+  const liveTab = useTabStore.getState().tabs.find((other) => other.id === tab.id) ?? tab;
+  const tunnelId = getTunnelId(liveTab, slot);
 
   if (tunnelId) {
     try {
@@ -124,7 +151,7 @@ export async function ensureTunnelSlot(params: {
         info.remoteHost === resolvedRemoteHost &&
         info.remotePort === remotePort
       ) {
-        if (getTunnelPort(tab, slot) !== info.localPort) {
+        if (getTunnelPort(liveTab, slot) !== info.localPort) {
           updateTab(tab.id, tunnelPatch(slot, info));
         }
         return info;

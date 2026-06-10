@@ -38,11 +38,13 @@ import * as cmd from "../lib/shellCommands";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { useConnectionStore } from "../stores/useConnectionStore";
+import { rowHeightForDensity, useThemeStore } from "../stores/useThemeStore";
 import { useTabStore } from "../stores/useTabStore";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import { confirm } from "../stores/useConfirmStore";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import DismissibleNote from "../components/DismissibleNote";
+import VirtualList from "../components/VirtualList";
 import {
   DT_LOCAL_FILE,
   DT_SFTP_FILE,
@@ -527,7 +529,19 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
     if (!currentPath) return;
     onPathChange?.(currentPath);
   }, [currentPath, onPathChange]);
-  const filteredEntries = entries.filter((e) => !searchText.trim() || e.name.toLowerCase().includes(searchText.toLowerCase()));
+  const filteredEntries = useMemo(() => {
+    const needle = searchText.trim().toLowerCase();
+    if (!needle) return entries;
+    return entries.filter((e) => e.name.toLowerCase().includes(needle));
+  }, [entries, searchText]);
+  const fileRowHeight = rowHeightForDensity(useThemeStore((s) => s.density));
+  const fileListScrollRef = useRef<HTMLDivElement | null>(null);
+  // When the entry set shrinks under a deep scroll offset, the
+  // virtualized list would otherwise clamp scrollTop one frame at a
+  // time and flash empty spacer rows — jump back to the top instead.
+  useEffect(() => {
+    fileListScrollRef.current?.scrollTo({ top: 0 });
+  }, [searchText, currentPath]);
   const segments = pathSegments(currentPath, homeDir);
   const effectiveWorkspaceRoot = workspaceRoot || coreWorkspaceRoot;
   const defaultFavoritePlaces = useMemo(
@@ -1070,7 +1084,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
           </div>
 
           <div
-            className={"sidebar-list" + (sftpDropActive ? " is-drop" : "")}
+            className={"sidebar-list is-virtual" + (sftpDropActive ? " is-drop" : "")}
             onDragEnter={handleFileListDragEnter}
             onDragOver={handleFileListDragOver}
             onDragLeave={handleFileListDragLeave}
@@ -1112,53 +1126,60 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
                 </button>
               </div>
             )}
-            {filteredEntries.map((entry) => {
-              const isSelected = entry.kind === "file" && selectedFilePath === entry.path;
-              const isDir = entry.kind === "directory";
-              const isDrive = currentPath === DRIVES_PATH;
-              const isMd = entry.name.toLowerCase().endsWith(".md");
-              const cls =
-                "file-row" +
-                (isDir ? " is-dir" : "") +
-                (isMd ? " is-md" : "") +
-                (isSelected ? " selected" : "");
-              const icon = isDrive
-                ? <HardDrive size={12} />
-                : isDir
-                  ? <Folder size={12} />
-                  : <FileText size={12} />;
-              return (
-                <div
-                key={entry.path}
-                className={cls}
-                onClick={() => {
-                    if (isDir) pushPath(entry.path);
-                    else onFileSelect?.(entry);
-                  }}
-                  onDoubleClick={() => { if (isDir) onOpenLocalTerminal(entry.path); }}
-                  onContextMenu={isDrive ? undefined : (e) => handleLocalRowContextMenu(e, entry)}
-                  role="button"
-                  tabIndex={0}
-                  draggable={!isDrive}
-                  onDragStart={(e) => {
-                    if (isDrive) {
-                      e.preventDefault();
-                      return;
-                    }
-                    handleLocalRowDragStart(e, entry);
-                  }}
-                >
-                  <span className="fi">{icon}</span>
-                  <span className="fname">{entry.name}</span>
-                  <span className="fmod">{entry.modified}</span>
-                  <span className="fsize">{entry.sizeLabel}</span>
-                </div>
-              );
-            })}
-            {filteredEntries.length === 0 && (
+            {filteredEntries.length === 0 ? (
               <div className="empty-note" style={{ padding: "var(--sp-3)" }}>
                 {searchText ? t("No matching files") : t("Empty directory")}
               </div>
+            ) : (
+              <VirtualList
+                items={filteredEntries}
+                rowHeight={fileRowHeight}
+                scrollRef={fileListScrollRef}
+                className="sidebar-list-rows"
+                renderRow={(entry) => {
+                  const isSelected = entry.kind === "file" && selectedFilePath === entry.path;
+                  const isDir = entry.kind === "directory";
+                  const isDrive = currentPath === DRIVES_PATH;
+                  const isMd = entry.name.toLowerCase().endsWith(".md");
+                  const cls =
+                    "file-row" +
+                    (isDir ? " is-dir" : "") +
+                    (isMd ? " is-md" : "") +
+                    (isSelected ? " selected" : "");
+                  const icon = isDrive
+                    ? <HardDrive size={12} />
+                    : isDir
+                      ? <Folder size={12} />
+                      : <FileText size={12} />;
+                  return (
+                    <div
+                      key={entry.path}
+                      className={cls}
+                      onClick={() => {
+                        if (isDir) pushPath(entry.path);
+                        else onFileSelect?.(entry);
+                      }}
+                      onDoubleClick={() => { if (isDir) onOpenLocalTerminal(entry.path); }}
+                      onContextMenu={isDrive ? undefined : (e) => handleLocalRowContextMenu(e, entry)}
+                      role="button"
+                      tabIndex={0}
+                      draggable={!isDrive}
+                      onDragStart={(e) => {
+                        if (isDrive) {
+                          e.preventDefault();
+                          return;
+                        }
+                        handleLocalRowDragStart(e, entry);
+                      }}
+                    >
+                      <span className="fi">{icon}</span>
+                      <span className="fname">{entry.name}</span>
+                      <span className="fmod">{entry.modified}</span>
+                      <span className="fsize">{entry.sizeLabel}</span>
+                    </div>
+                  );
+                }}
+              />
             )}
           </div>
           </div>

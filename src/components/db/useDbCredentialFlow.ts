@@ -11,6 +11,7 @@ import type {
   DetectedDbInstance,
   TabState,
 } from "../../lib/types";
+import type { DbConnectionDraft } from "../DbAddCredentialDialog";
 import { effectiveSshTarget, isSshTargetReady } from "../../lib/types";
 import { useConnectionStore } from "../../stores/useConnectionStore";
 import { useDetectedServicesStore } from "../../stores/useDetectedServicesStore";
@@ -49,6 +50,9 @@ export type DbCredentialFieldAdapter = {
   /** Patch fired after the Add Credential dialog saves. Mirrors `patchFromCred`
    *  but does not clear password (the user typed one). */
   patchFromSaved: (cred: DbCredential) => Partial<TabState>;
+  /** Patch fired when the Add Credential dialog cannot persist because the
+   *  SSH context is not backed by a saved profile. */
+  patchFromDraft: (draft: DbConnectionDraft) => Partial<TabState>;
   /** Patch fired when the auto-browse effect resolves a password from
    *  the keyring and needs to cache it in tab state. */
   patchPassword: (password: string) => Partial<TabState>;
@@ -70,7 +74,7 @@ export type UseDbCredentialFlowOpts = {
    * lets the hook pass a freshly resolved keyring password that hasn't
    * made it into React state yet.
    */
-  browse: (passwordOverride?: string) => Promise<void>;
+  browse: (passwordOverride?: string, draft?: DbConnectionDraft) => Promise<void>;
 
   /** Whether the panel currently has live browser state — gates the
    *  auto-browse effect so it only runs on cold opens. */
@@ -123,7 +127,7 @@ export type DbCredentialFlow = {
   tunnelError: string;
   setTunnelError: (msg: string) => void;
   /** Opens (or returns the cached) tunnel. Falls back to direct on local tabs. */
-  ensureConnectionTarget: (forceRebuild?: boolean) => Promise<{ host: string; port: number }>;
+  ensureConnectionTarget: (forceRebuild?: boolean, draft?: DbConnectionDraft) => Promise<{ host: string; port: number }>;
   rebuildTunnel: () => Promise<void>;
   closeTunnel: () => Promise<void>;
 
@@ -141,6 +145,8 @@ export type DbCredentialFlow = {
   disconnect: () => Promise<void>;
   /** Wire-up callback for the `DbAddCredentialDialog` `onSaved` prop. */
   handleCredentialAdded: (cred: DbCredential) => void;
+  /** Connect with an unsaved DB credential for the current tab only. */
+  handleCredentialConnected: (draft: DbConnectionDraft) => void;
   /** Resolves a newly-rotated password from the keyring and re-browses. */
   handlePasswordUpdated: () => Promise<void>;
   /** Returns true when the current error is an auth failure on a saved
@@ -272,14 +278,14 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     };
   }, [hasSsh, tab.id, tabTunnelId, tabTunnelPort, tunnelSlot, updateTab]);
 
-  async function ensureConnectionTarget(forceRebuild = false) {
+  async function ensureConnectionTarget(forceRebuild = false, draft?: DbConnectionDraft) {
     // Credential-level egress wins over the parent SSH tunnel: when a
     // saved credential carries an `egressId`, the backend lazily spins
     // up a forwarder bound to 127.0.0.1 and we connect to that loopback
     // address. The parent SSH tab's tunnel slot is irrelevant in that
     // case — the egress profile (SOCKS5 / wg / ssh-jump / …) handles
     // routing on its own.
-    const activeCredId = adapter.readActiveCredId(tab);
+    const activeCredId = draft ? null : adapter.readActiveCredId(tab);
     if (savedIndex !== null && activeCredId) {
       try {
         const ep = await cmd.dbEgressEndpoint(savedIndex, activeCredId);
@@ -293,8 +299,10 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
         // error instead of dead-ending here.
       }
     }
+    const remoteHost = draft?.host ?? tabHost.trim();
+    const remotePort = draft?.port ?? tabPort;
     if (!hasSsh) {
-      return { host: tabHost.trim(), port: tabPort };
+      return { host: remoteHost, port: remotePort };
     }
     if (!sshReady) {
       throw new Error(t("SSH credentials are not ready yet."));
@@ -302,10 +310,10 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     const info = await ensureTunnelSlot({
       tab,
       slot: tunnelSlot,
-      remoteHost: tabHost.trim(),
-      remotePort: tabPort,
+      remoteHost,
+      remotePort,
       updateTab,
-      force: forceRebuild,
+      force: forceRebuild || !!draft,
     });
     setTunnelError("");
     return { host: info.localHost, port: info.localPort };
@@ -469,6 +477,23 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     void refreshConnections();
   }
 
+  function handleCredentialConnected(draft: DbConnectionDraft) {
+    setTunnelError("");
+    setActivating(null);
+    setConnectingStep(t("Connecting..."));
+    updateTab(tab.id, adapter.patchFromDraft(draft));
+    onReset();
+    void (async () => {
+      try {
+        await browse(draft.password, draft);
+      } catch (e) {
+        setError(formatError(e));
+      } finally {
+        setConnectingStep(null);
+      }
+    })();
+  }
+
   async function handlePasswordUpdated() {
     if (savedIndex === null || !activeCredId) return;
     setError("");
@@ -518,6 +543,7 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     activateCredential,
     disconnect,
     handleCredentialAdded,
+    handleCredentialConnected,
     handlePasswordUpdated,
     canUpdatePassword,
   };

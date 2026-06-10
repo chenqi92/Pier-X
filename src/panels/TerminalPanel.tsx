@@ -32,7 +32,13 @@ import {
 } from "../stores/useTerminalHistoryStore";
 import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
-import type { TabState, TerminalSessionInfo, TerminalSnapshot, TerminalSize } from "../lib/types";
+import type {
+  TabState,
+  TerminalLine,
+  TerminalSessionInfo,
+  TerminalSnapshot,
+  TerminalSize,
+} from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
@@ -77,9 +83,37 @@ type Props = {
 // or full-width space; normalize those at human text ingress so `ps -ef |`
 // does not become one invalid `-ef<nbsp>|` argument.
 const SHELL_COMPAT_SPACE_RE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/g;
+const TERMINAL_CREATE_RETRY_DELAYS_MS = [1200, 2500, 5000, 8000, 13000, 21000];
 
 function normalizeTerminalCommandText(text: string): string {
   return text.replace(SHELL_COMPAT_SPACE_RE, " ");
+}
+
+function terminalCreateErrorString(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function isTransientSshChannelOpenError(error: unknown): boolean {
+  const message = terminalCreateErrorString(error).toLowerCase();
+  // Permanent server-side rejections — retrying the channel open
+  // cannot succeed, so don't burn the retry ladder on them.
+  if (
+    message.includes("administratively prohibited") ||
+    message.includes("unknown channel type")
+  ) {
+    return false;
+  }
+  return (
+    message.includes("failed to open channel") ||
+    message.includes("connectfailed") ||
+    message.includes("channel open")
+  );
 }
 
 function terminalLineText(snapshot: TerminalSnapshot, row: number): string {
@@ -94,6 +128,119 @@ function inferPromptUser(snapshot: TerminalSnapshot): string {
   const matches = Array.from(line.matchAll(/(?:^|[\s([{<])([A-Za-z_][A-Za-z0-9_.-]*)@[A-Za-z0-9_.-]+(?=[\s)\]}>:/~-])/g));
   const match = matches[matches.length - 1];
   return match?.[1] ?? "";
+}
+
+type TerminalSelectionPoint = {
+  row: number;
+  col: number;
+};
+
+type TerminalSelectionModel = {
+  anchor: TerminalSelectionPoint;
+  focus: TerminalSelectionPoint;
+};
+
+function compareTerminalPoints(a: TerminalSelectionPoint, b: TerminalSelectionPoint): number {
+  if (a.row !== b.row) return a.row - b.row;
+  return a.col - b.col;
+}
+
+function normalizeTerminalSelection(
+  selection: TerminalSelectionModel | null,
+): { start: TerminalSelectionPoint; end: TerminalSelectionPoint } | null {
+  if (!selection) return null;
+  if (compareTerminalPoints(selection.anchor, selection.focus) <= 0) {
+    return { start: selection.anchor, end: selection.focus };
+  }
+  return { start: selection.focus, end: selection.anchor };
+}
+
+function terminalSelectionHasText(selection: TerminalSelectionModel | null): boolean {
+  const normalized = normalizeTerminalSelection(selection);
+  if (!normalized) return false;
+  return compareTerminalPoints(normalized.start, normalized.end) !== 0;
+}
+
+function terminalCellWidth(char: string): number {
+  const cp = char.codePointAt(0) ?? 0;
+  if (cp === 0) return 0;
+  if (
+    (cp >= 0x0300 && cp <= 0x036f) ||
+    (cp >= 0x1ab0 && cp <= 0x1aff) ||
+    (cp >= 0x1dc0 && cp <= 0x1dff) ||
+    (cp >= 0xfe00 && cp <= 0xfe0f) ||
+    (cp >= 0xfe20 && cp <= 0xfe2f)
+  ) {
+    return 0;
+  }
+  if (
+    cp >= 0x1100 &&
+    (cp <= 0x115f ||
+      cp === 0x2329 ||
+      cp === 0x232a ||
+      (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+      (cp >= 0xac00 && cp <= 0xd7a3) ||
+      (cp >= 0xf900 && cp <= 0xfaff) ||
+      (cp >= 0xfe10 && cp <= 0xfe19) ||
+      (cp >= 0xfe30 && cp <= 0xfe6f) ||
+      (cp >= 0xff00 && cp <= 0xff60) ||
+      (cp >= 0xffe0 && cp <= 0xffe6) ||
+      (cp >= 0x20000 && cp <= 0x3fffd))
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function stringOffsetForTerminalCell(text: string, targetCell: number): number {
+  if (targetCell <= 0) return 0;
+  let cells = 0;
+  let offset = 0;
+  for (const char of Array.from(text)) {
+    const width = terminalCellWidth(char);
+    if (cells + width > targetCell) return offset;
+    cells += width;
+    offset += char.length;
+    if (cells >= targetCell) return offset;
+  }
+  return text.length;
+}
+
+function sliceTextByTerminalCells(text: string, startCell: number, endCell: number): string {
+  const start = stringOffsetForTerminalCell(text, startCell);
+  const end = stringOffsetForTerminalCell(text, Math.max(startCell, endCell));
+  return text.slice(start, end);
+}
+
+function terminalLineCells(line: TerminalLine): number {
+  return line.segments.reduce((total, segment) => total + segment.cells, 0);
+}
+
+function sliceTerminalLine(line: TerminalLine, startCol: number, endCol: number): string {
+  const safeStart = Math.max(0, startCol);
+  const safeEnd = Math.max(safeStart, endCol);
+  let text = "";
+  let col = 0;
+  for (const segment of line.segments) {
+    const segmentStart = col;
+    const segmentEnd = segmentStart + segment.cells;
+    if (segmentEnd <= safeStart) {
+      col = segmentEnd;
+      continue;
+    }
+    if (segmentStart >= safeEnd) break;
+    text += sliceTextByTerminalCells(
+      segment.text,
+      Math.max(0, safeStart - segmentStart),
+      Math.min(segment.cells, safeEnd - segmentStart),
+    );
+    col = segmentEnd;
+  }
+  return text;
+}
+
+function copySliceTerminalLine(line: TerminalLine, startCol: number, endCol: number): string {
+  return sliceTerminalLine(line, startCol, endCol).replace(/[ \t]+$/g, "");
 }
 
 function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
@@ -114,12 +261,21 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   const termTheme = TERMINAL_THEMES[termThemeIdx] ?? TERMINAL_THEMES[0];
   const [session, setSession] = useState<TerminalSessionInfo | null>(null);
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | null>(null);
+  const sessionRef = useRef<TerminalSessionInfo | null>(null);
+  const snapshotRef = useRef<TerminalSnapshot | null>(null);
+  sessionRef.current = session;
+  snapshotRef.current = snapshot;
   const [error, setError] = useState("");
+  const [createAttempt, setCreateAttempt] = useState(0);
+  const createRetryCountRef = useRef(0);
   const [needsPasswordRecovery, setNeedsPasswordRecovery] = useState(false);
   const requestEditConnection = useUiActionsStore((s) => s.requestEditConnection);
   const [terminalSize, setTerminalSize] = useState<TerminalSize>({ cols: 120, rows: 26 });
   const setStatusTerminalSize = useStatusStore((s) => s.setTerminalSize);
   const [scrollbackOffset, setScrollbackOffset] = useState(0);
+  const [snapshotViewOffset, setSnapshotViewOffset] = useState(0);
+  const snapshotViewOffsetRef = useRef(0);
+  snapshotViewOffsetRef.current = snapshotViewOffset;
   // Referentially-stable per-row environment for the memoized TerminalRow.
   // Changes only on theme / cursor-setting / column-count changes, so a
   // pushed snapshot re-renders only the rows whose content hash differs.
@@ -135,6 +291,17 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   );
   const [visualBellActive, setVisualBellActive] = useState(false);
   const [selectingInTerminal, setSelectingInTerminal] = useState(false);
+  const [terminalSelection, setTerminalSelectionState] =
+    useState<TerminalSelectionModel | null>(null);
+  const terminalSelectionRef = useRef<TerminalSelectionModel | null>(null);
+  const selectionDragRef = useRef<TerminalSelectionModel | null>(null);
+  const selectionDragCleanupRef = useRef<(() => void) | null>(null);
+  const screenRef = useRef<HTMLDivElement | null>(null);
+  const setTerminalSelection = (next: TerminalSelectionModel | null) => {
+    terminalSelectionRef.current = next;
+    setTerminalSelectionState(next);
+    setSelectingInTerminal(terminalSelectionHasText(next));
+  };
   // Brief gate after `isActive` flips on. While the panel was
   // display:none, the viewport had no box and the ResizeObserver
   // didn't measure it; the moment we re-show it the observer fires,
@@ -521,9 +688,16 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     if (session) return;
     if (!isActive) return;
     let cancelled = false;
+    let retryTimer: number | null = null;
 
     async function create() {
       try {
+        // On an automatic channel-open retry (retry count > 0) keep
+        // the existing error on screen — blanking it per attempt makes
+        // the banner flicker. It's cleared on success below, and the
+        // manual Restart path clears it itself.
+        if (createRetryCountRef.current === 0) setError("");
+        setNeedsPasswordRecovery(false);
         // Read the size from the ref so a ResizeObserver tick that
         // arrives mid-flight doesn't re-fire this effect (terminalSize
         // is intentionally not a dep — that's what kept us from
@@ -568,6 +742,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
         if (!cancelled) {
           setSession(next);
           setError("");
+          createRetryCountRef.current = 0;
           setNeedsPasswordRecovery(false);
         } else {
           // The component / tab credentials changed before our backend
@@ -578,21 +753,38 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
         }
       } catch (e) {
         if (!cancelled) {
+          const missingKeychain = isMissingKeychainError(e);
           setError(formatError(e));
-          if (isMissingKeychainError(e)) setNeedsPasswordRecovery(true);
+          if (missingKeychain) setNeedsPasswordRecovery(true);
+          if (
+            tab.backend === "ssh" &&
+            !missingKeychain &&
+            isTransientSshChannelOpenError(e) &&
+            createRetryCountRef.current < TERMINAL_CREATE_RETRY_DELAYS_MS.length
+          ) {
+            const delay = TERMINAL_CREATE_RETRY_DELAYS_MS[createRetryCountRef.current];
+            createRetryCountRef.current += 1;
+            retryTimer = window.setTimeout(() => {
+              retryTimer = null;
+              if (!cancelled) setCreateAttempt((attempt) => attempt + 1);
+            }, delay);
+          }
         }
       }
     }
 
     void create();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
     // `tab.sshPassword` is in the deps so a tab whose first
     // create() rejected with "saved password missing in keychain"
     // automatically retries once the user re-enters the password
     // via the recovery dialog (App.tsx propagates the new password
     // into matching tabs and nulls `terminalSessionId`, which we
     // mirror into local `session` state below).
-  }, [session, isActive, tab.backend, tab.sshHost, tab.sshPassword]);
+  }, [session, isActive, tab.backend, tab.sshHost, tab.sshPassword, createAttempt]);
 
   // When App.tsx clears `tab.terminalSessionId` (e.g. as part of
   // the post-recovery propagation), drop the local session state
@@ -662,11 +854,38 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
 
   useEffect(() => {
     if (!isActive) {
+      setTerminalSelection(null);
       setSelectingInTerminal(false);
       return;
     }
 
     const updateSelectionState = () => {
+      if (terminalSelectionHasText(terminalSelectionRef.current)) {
+        // The user moved the native selection wholly outside the
+        // terminal (clicked / selected in another panel): drop the
+        // model selection, otherwise the snapshot-driven re-assert
+        // effect below keeps stomping the other panel's selection on
+        // every refresh. Skipped mid-drag — the drag owns the model.
+        const outside = window.getSelection?.();
+        const anchor = outside?.anchorNode ?? null;
+        const focus = outside?.focusNode ?? null;
+        const vp = viewportRef.current;
+        if (
+          !selectionDragRef.current &&
+          vp &&
+          outside &&
+          outside.rangeCount > 0 &&
+          anchor &&
+          focus &&
+          !vp.contains(anchor) &&
+          !vp.contains(focus)
+        ) {
+          setTerminalSelection(null);
+          return;
+        }
+        setSelectingInTerminal(true);
+        return;
+      }
       const viewport = viewportRef.current;
       const selection = window.getSelection?.();
       if (!viewport || !selection || selection.isCollapsed || selection.rangeCount === 0) {
@@ -690,6 +909,12 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     };
   }, [isActive]);
 
+  useLayoutEffect(() => {
+    if (!isActive) return;
+    if (!terminalSelectionHasText(terminalSelection)) return;
+    applyTerminalSelectionToDom(terminalSelection);
+  }, [isActive, terminalSelection, snapshot, snapshotViewOffset]);
+
   // ── Resize session (trigger-based) ──────────────────────────
   //
   // Dragging a resize handle compresses the terminal viewport many
@@ -711,6 +936,10 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       return;
     }
     pendingResizeRef.current = false;
+    // A dead PTY can't resize — the exited surface (status chip +
+    // Restart) is the recovery path; painting the BrokenPipe error
+    // over the last screen contents would just hide it.
+    if (snapshotRef.current?.alive === false) return;
     cmd.terminalResize(session.sessionId, terminalSize.cols, terminalSize.rows).catch((e) =>
       setError(formatError(e)),
     );
@@ -728,6 +957,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
         if (!pendingResizeRef.current) return;
         if (document.body.classList.contains("is-resizing")) return;
         pendingResizeRef.current = false;
+        if (snapshotRef.current?.alive === false) return;
         const size = latestSizeRef.current;
         cmd.terminalResize(session.sessionId, size.cols, size.rows).catch((e) =>
           setError(formatError(e)),
@@ -748,15 +978,9 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     const viewport = viewportRef.current;
     if (!viewport) return;
     const handler = () => {
-      const sel = window.getSelection();
-      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
-      const anchor = sel.anchorNode;
-      const focus = sel.focusNode;
-      if (!anchor || !focus) return;
-      if (!viewport.contains(anchor) || !viewport.contains(focus)) return;
-      const text = sel.toString();
-      if (!text) return;
-      void writeClipboardText(text);
+      void getSelectionTextForCopy().then((text) => {
+        if (text) void writeClipboardText(text);
+      });
     };
     viewport.addEventListener("mouseup", handler);
     return () => viewport.removeEventListener("mouseup", handler);
@@ -888,6 +1112,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       if (scrollbackOffset > next.scrollbackLen) {
         setScrollbackOffset(next.scrollbackLen);
       }
+      setSnapshotViewOffset(Math.min(scrollbackOffset, next.scrollbackLen));
       const shellUser = inferPromptUser(next) || next.currentUser.trim();
       if (shellUser && shellUser !== lastShellUserRef.current) {
         lastShellUserRef.current = shellUser;
@@ -1085,6 +1310,8 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
 
   useEffect(() => {
     return () => {
+      selectionDragCleanupRef.current?.();
+      selectionDragCleanupRef.current = null;
       if (bellTimerRef.current !== null) {
         window.clearTimeout(bellTimerRef.current);
       }
@@ -1911,7 +2138,124 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     }
   }
 
-  function getSelectionText(): string {
+  function visibleStartForSnapshot(view: TerminalSnapshot, viewOffset: number): number {
+    return Math.max(0, view.scrollbackLen - Math.min(viewOffset, view.scrollbackLen));
+  }
+
+  function terminalPointFromClient(
+    clientX: number,
+    clientY: number,
+    viewOffset = snapshotViewOffsetRef.current,
+  ): TerminalSelectionPoint | null {
+    // Read the snapshot / view offset through refs: the selection-drag
+    // listeners on `window` capture this closure at mousedown, and a
+    // mid-drag wheel scroll or streaming output must map rows against
+    // the live view, not the render the drag started in. cellMetrics
+    // stays render-scoped — it only changes on font remeasure, which
+    // can't happen while the pointer is held down.
+    const view = snapshotRef.current;
+    const screen = screenRef.current;
+    if (!screen || !view) return null;
+    const rowHeight = cellMetrics.rowHeight;
+    const charWidth = cellMetrics.charWidth;
+    if (rowHeight <= 0 || charWidth <= 0) return null;
+
+    const rect = screen.getBoundingClientRect();
+    const row = Math.max(
+      0,
+      Math.min(view.lines.length - 1, Math.floor((clientY - rect.top) / rowHeight)),
+    );
+    const col = Math.max(0, Math.min(view.cols, Math.floor((clientX - rect.left) / charWidth)));
+    return {
+      row: visibleStartForSnapshot(view, viewOffset) + row,
+      col,
+    };
+  }
+
+  function domPositionForTerminalCell(
+    row: HTMLElement,
+    col: number,
+  ): { node: Node; offset: number } {
+    const segments = Array.from(row.querySelectorAll<HTMLElement>(".terminal-segment"));
+    let cursor = 0;
+    for (const segment of segments) {
+      const cells = Number(segment.dataset.terminalCells ?? 0);
+      const next = cursor + cells;
+      if (col <= next) {
+        const textNode = Array.from(segment.childNodes).find(
+          (node) => node.nodeType === Node.TEXT_NODE,
+        );
+        if (!textNode) return { node: segment, offset: 0 };
+        return {
+          node: textNode,
+          offset: stringOffsetForTerminalCell(
+            textNode.textContent ?? "",
+            Math.max(0, Math.min(cells, col - cursor)),
+          ),
+        };
+      }
+      cursor = next;
+    }
+    return { node: row, offset: row.childNodes.length };
+  }
+
+  function rowElementForLocalRow(localRow: number): HTMLElement | null {
+    return screenRef.current?.querySelector<HTMLElement>(
+      `.terminal-row[data-terminal-row="${localRow}"]`,
+    ) ?? null;
+  }
+
+  function applyTerminalSelectionToDom(selection: TerminalSelectionModel | null) {
+    const normalized = normalizeTerminalSelection(selection);
+    const view = snapshotRef.current;
+    const browserSelection = window.getSelection?.();
+    if (!normalized || !view || !browserSelection) return;
+
+    // Snapshots refresh every ~1.5s even when idle; don't let that
+    // re-assert stomp a selection the user is making in another panel.
+    const viewport = viewportRef.current;
+    if (
+      viewport &&
+      !browserSelection.isCollapsed &&
+      browserSelection.rangeCount > 0 &&
+      browserSelection.anchorNode &&
+      browserSelection.focusNode &&
+      !viewport.contains(browserSelection.anchorNode) &&
+      !viewport.contains(browserSelection.focusNode)
+    ) {
+      return;
+    }
+
+    const visibleStart = visibleStartForSnapshot(view, snapshotViewOffsetRef.current);
+    const visibleEnd = visibleStart + view.lines.length - 1;
+    const startRow = Math.max(normalized.start.row, visibleStart);
+    const endRow = Math.min(normalized.end.row, visibleEnd);
+    if (startRow > endRow) {
+      browserSelection.removeAllRanges();
+      return;
+    }
+
+    const startCol = startRow === normalized.start.row ? normalized.start.col : 0;
+    const endCol = endRow === normalized.end.row ? normalized.end.col : view.cols;
+    if (startRow === endRow && startCol === endCol) {
+      browserSelection.removeAllRanges();
+      return;
+    }
+
+    const startEl = rowElementForLocalRow(startRow - visibleStart);
+    const endEl = rowElementForLocalRow(endRow - visibleStart);
+    if (!startEl || !endEl) return;
+
+    const start = domPositionForTerminalCell(startEl, startCol);
+    const end = domPositionForTerminalCell(endEl, endCol);
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    browserSelection.removeAllRanges();
+    browserSelection.addRange(range);
+  }
+
+  function getNativeSelectionText(): string {
     const viewport = viewportRef.current;
     const sel = window.getSelection();
     if (!viewport || !sel || sel.rangeCount === 0 || sel.isCollapsed) return "";
@@ -1919,6 +2263,92 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     const focus = sel.focusNode;
     if (!anchor || !focus || !viewport.contains(anchor) || !viewport.contains(focus)) return "";
     return sel.toString();
+  }
+
+  function hasCopyableSelection(): boolean {
+    return terminalSelectionHasText(terminalSelectionRef.current) || getNativeSelectionText().length > 0;
+  }
+
+  async function getTerminalSelectionText(): Promise<string> {
+    const session = sessionRef.current;
+    const currentSnapshot = snapshotRef.current;
+    const normalized = normalizeTerminalSelection(terminalSelectionRef.current);
+    if (!session || !currentSnapshot || !normalized) return "";
+    if (compareTerminalPoints(normalized.start, normalized.end) === 0) return "";
+
+    const lines = new Map<number, TerminalLine>();
+    const addSnapshotLines = (view: TerminalSnapshot, viewOffset: number) => {
+      const visibleStart = visibleStartForSnapshot(view, viewOffset);
+      view.lines.forEach((line, index) => {
+        lines.set(visibleStart + index, line);
+      });
+    };
+
+    addSnapshotLines(currentSnapshot, snapshotViewOffsetRef.current);
+    // Each fetch returns a viewport-height window, so cap the total:
+    // a huge selection must not queue thousands of sequential IPC
+    // round-trips on mouseup. When the cap hits we truncate to the
+    // rows we actually fetched instead of blank-filling the rest.
+    const maxFetches = 64;
+    let cursor = normalized.start.row;
+    let fetches = 0;
+    let retriedCursor = -1;
+    while (cursor <= normalized.end.row && fetches < maxFetches) {
+      if (lines.has(cursor)) {
+        while (cursor <= normalized.end.row && lines.has(cursor)) {
+          cursor += 1;
+        }
+        continue;
+      }
+
+      const latest = snapshotRef.current ?? currentSnapshot;
+      const offset = Math.max(0, Math.min(latest.scrollbackLen, latest.scrollbackLen - cursor));
+      fetches += 1;
+      try {
+        const view = await cmd.terminalSnapshot(session.sessionId, offset);
+        addSnapshotLines(view, offset);
+        if (!lines.has(cursor)) {
+          // The window raced output growth and missed the cursor row;
+          // retry it once against the fresh scrollbackLen, then give
+          // this row up (it stays a blank line in the copy).
+          if (retriedCursor !== cursor) {
+            retriedCursor = cursor;
+            continue;
+          }
+          cursor += 1;
+        }
+      } catch {
+        break;
+      }
+    }
+
+    // Fetch cap or IPC failure: emit only up to the last row we
+    // resolved rather than padding the remainder with empty lines.
+    const lastRow = cursor > normalized.end.row ? normalized.end.row : cursor - 1;
+    const parts: string[] = [];
+    for (let row = normalized.start.row; row <= lastRow; row += 1) {
+      const line = lines.get(row);
+      if (!line) {
+        parts.push("");
+        continue;
+      }
+      const lineEnd = terminalLineCells(line);
+      if (normalized.start.row === normalized.end.row) {
+        parts.push(copySliceTerminalLine(line, normalized.start.col, normalized.end.col));
+      } else if (row === normalized.start.row) {
+        parts.push(copySliceTerminalLine(line, normalized.start.col, lineEnd));
+      } else if (row === normalized.end.row) {
+        parts.push(copySliceTerminalLine(line, 0, normalized.end.col));
+      } else {
+        parts.push(copySliceTerminalLine(line, 0, lineEnd));
+      }
+    }
+    return parts.join("\n");
+  }
+
+  async function getSelectionTextForCopy(): Promise<string> {
+    const terminalText = await getTerminalSelectionText();
+    return terminalText || getNativeSelectionText();
   }
 
   // ── M4: Tab completion popover ─────────────────────────────────
@@ -2197,7 +2627,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     const mod = event.ctrlKey || event.metaKey;
-    const selText = getSelectionText();
+    const hasSelection = hasCopyableSelection();
 
     // M4: completion popover key handling. Highest precedence — we
     // own arrow / Enter / Tab / Esc while the popover is open, so
@@ -2306,9 +2736,9 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       return;
     }
 
-    if (mod && !event.altKey && event.key.toLowerCase() === "c" && selText) {
+    if (mod && !event.altKey && event.key.toLowerCase() === "c" && hasSelection) {
       event.preventDefault();
-      void writeClipboardText(selText);
+      void copySelection();
       return;
     }
 
@@ -2352,15 +2782,85 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     void sendInput(payload);
   }
 
+  function updateTerminalSelectionFocus(clientX: number, clientY: number, viewOffset = snapshotViewOffsetRef.current) {
+    const active = selectionDragRef.current;
+    if (!active) return;
+    const focus = terminalPointFromClient(clientX, clientY, viewOffset);
+    if (!focus) return;
+    const next = { anchor: active.anchor, focus };
+    selectionDragRef.current = next;
+    setTerminalSelection(next);
+  }
+
+  function handleTerminalSelectionMouseDown(event: React.MouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    // Double / triple click: let the browser's native word / line
+    // selection stand — a zero-length model drag would erase it on
+    // mouseup. The model stays null, so the re-assert effect skips it.
+    if (event.detail > 1) return;
+    if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+    const anchor = terminalPointFromClient(event.clientX, event.clientY);
+    if (!anchor) return;
+
+    selectionDragCleanupRef.current?.();
+    const hadModelSelection = terminalSelectionHasText(terminalSelectionRef.current);
+    const initial = { anchor, focus: anchor };
+    selectionDragRef.current = initial;
+    setTerminalSelection(null);
+
+    let cleanup = () => {};
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      if ((moveEvent.buttons & 1) === 0) {
+        onMouseUp(moveEvent);
+        return;
+      }
+      updateTerminalSelectionFocus(moveEvent.clientX, moveEvent.clientY);
+    };
+    const onMouseUp = (upEvent: MouseEvent) => {
+      updateTerminalSelectionFocus(upEvent.clientX, upEvent.clientY);
+      const finalSelection = selectionDragRef.current;
+      cleanup();
+      selectionDragRef.current = null;
+      if (!terminalSelectionHasText(finalSelection)) {
+        setTerminalSelection(null);
+        // Only wipe the DOM selection when a prior model selection was
+        // actually painted there — a plain click must not destroy a
+        // native (e.g. double-click word) selection it never owned.
+        if (hadModelSelection) window.getSelection?.()?.removeAllRanges();
+        return;
+      }
+      setTerminalSelection(finalSelection);
+    };
+    cleanup = () => {
+      window.removeEventListener("mousemove", onMouseMove, true);
+      window.removeEventListener("mouseup", onMouseUp, true);
+      if (selectionDragCleanupRef.current === cleanup) {
+        selectionDragCleanupRef.current = null;
+      }
+    };
+    selectionDragCleanupRef.current = cleanup;
+    window.addEventListener("mousemove", onMouseMove, true);
+    window.addEventListener("mouseup", onMouseUp, true);
+  }
+
   function handleWheel(event: React.WheelEvent<HTMLDivElement>) {
     if (!snapshot?.scrollbackLen) return;
     event.preventDefault();
     const step = Math.max(1, Math.round(Math.abs(event.deltaY) / 36));
-    setScrollbackOffset((prev) =>
-      event.deltaY < 0
-        ? Math.min(prev + step, snapshot.scrollbackLen)
-        : Math.max(prev - step, 0),
-    );
+    const { clientX, clientY, deltaY } = event;
+    // Functional updater: two wheel events can land between renders,
+    // and a render-captured offset would lose the first step.
+    setScrollbackOffset((prev) => {
+      const scrollbackLen = snapshotRef.current?.scrollbackLen ?? 0;
+      const next =
+        deltaY < 0
+          ? Math.min(prev + step, scrollbackLen)
+          : Math.max(prev - step, 0);
+      if (selectionDragRef.current) {
+        updateTerminalSelectionFocus(clientX, clientY, next);
+      }
+      return next;
+    });
   }
 
   /**
@@ -2439,11 +2939,17 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     }
     setSession(null);
     setSnapshot(null);
+    setError("");
+    setNeedsPasswordRecovery(false);
     setScrollbackOffset(0);
+    setSnapshotViewOffset(0);
+    setTerminalSelection(null);
+    createRetryCountRef.current = 0;
+    setCreateAttempt((attempt) => attempt + 1);
   }
 
   async function copySelection() {
-    const sel = window.getSelection?.()?.toString() ?? "";
+    const sel = await getSelectionTextForCopy();
     if (!sel) return;
     await writeClipboardText(sel);
   }
@@ -2463,6 +2969,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   function selectAllInTerminal() {
     const screen = viewportRef.current?.querySelector(".terminal-screen");
     if (!screen) return;
+    setTerminalSelection(null);
     const range = document.createRange();
     range.selectNodeContents(screen);
     const sel = window.getSelection();
@@ -2589,6 +3096,8 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
           <div
             className={rowSeparators ? "terminal-screen terminal-screen--ruled" : "terminal-screen"}
             onClick={handleScreenClick}
+            onMouseDown={handleTerminalSelectionMouseDown}
+            ref={screenRef}
             style={{
               fontFamily: `"${monoFont}", monospace`,
               fontSize: `${terminalFontSize}px`,
@@ -2599,7 +3108,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
             }}
           >
             {snapshot.lines.map((line, i) => (
-              <TerminalRow key={`line-${i}`} line={line} env={rowEnv} />
+              <TerminalRow key={`line-${i}`} line={line} env={rowEnv} rowIndex={i} />
             ))}
             {smartActive &&
               snapshot.promptEnd &&
@@ -2649,7 +3158,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       </div>
 
       {ctxMenu && (() => {
-        const hasSelection = (window.getSelection?.()?.toString() ?? "").length > 0;
+        const hasSelection = hasCopyableSelection();
         const isMac = navigator.platform.includes("Mac");
         const mod = isMac ? "\u2318" : "Ctrl+";
         const items: ContextMenuItem[] = [

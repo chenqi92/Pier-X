@@ -49,6 +49,9 @@ export const zhExtra: Record<string, string> = {
   "the remote host": "该远端主机",
   "Saved sudo password was rejected — please re-enter.":
     "已保存的 sudo 密码被拒绝 —— 请重新输入。",
+  "Elevate with sudo": "用 sudo 提权",
+  "This panel runs Docker as {user}; the su/sudo session in the terminal does not carry over here.":
+    "该面板以 {user} 身份运行 Docker；终端里的 su / sudo 会话不会带到这里。",
   "Wrong password — please try again.": "密码错误 —— 请重试。",
   "This host requires a password for sudo. The password stays in memory for this session and is never written to disk.":
     "该主机的 sudo 需要密码。密码仅在本次会话内存中保留，不会写入磁盘。",
@@ -438,6 +441,7 @@ export const zhExtra: Record<string, string> = {
   "Show date column": "显示日期列",
   "Show diff": "显示 diff",
   "Show hash column": "显示哈希列",
+  "Showing first {n} commits": "仅显示前 {n} 条提交",
   "Sign off": "Sign off",
   "showing": "显示",
   "Simplified Chinese": "简体中文",

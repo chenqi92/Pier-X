@@ -124,6 +124,20 @@ function applyDensity(density: Density) {
   document.documentElement.dataset.density = density;
 }
 
+/** Pixel value of the `--row-h` token per density — must stay in sync
+ *  with tokens.css. VirtualList needs the row height as a number, so
+ *  callers that virtualize `--row-h`-sized rows derive it from here. */
+export function rowHeightForDensity(density: Density): number {
+  switch (density) {
+    case "comfortable":
+      return 32;
+    case "spacious":
+      return 36;
+    default:
+      return 26;
+  }
+}
+
 export const useThemeStore = create<ThemeState>((set, get) => {
   const stored = loadPrefs();
   const initialMode: ThemeMode = stored.mode ?? "dark";

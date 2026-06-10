@@ -309,6 +309,11 @@ function DockerPanelBody({ tab }: Props) {
     hostLabel: string;
     errorMessage?: string;
   } | null>(null);
+  // Permission verdict for the most recent caught error, computed from
+  // the RAW error text at catch time. `snapshot.error` can be localized
+  // (handleDockerCatch stores `formatError(e)`), and translated text is
+  // not guaranteed to keep the English keywords the heuristic matches.
+  const [permErr, setPermErr] = useState(false);
   // The fingerprint of the current snapshot.error we have already
   // surfaced as a sudo prompt. Without this guard the dialog would
   // re-open on every render while the error is still on the
@@ -394,7 +399,9 @@ function DockerPanelBody({ tab }: Props) {
    *  in zh-CN. */
   function handleDockerCatch(e: unknown) {
     const raw = errorString(e);
-    if (hasSsh && sshTarget && looksLikePermissionDenied(raw)) {
+    const isPerm = looksLikePermissionDenied(raw);
+    setPermErr(isPerm);
+    if (hasSsh && sshTarget && isPerm) {
       const label = `${sshTarget.user}@${sshTarget.host}`;
       setSudoPrompt({
         hostLabel: label,
@@ -441,7 +448,11 @@ function DockerPanelBody({ tab }: Props) {
         loaded: ["containers"],
       },
       force,
-    ).catch(() => { /* error stored on snapshot */ });
+    ).catch((e) => {
+      // Error text lands on the snapshot via the store; record the
+      // permission verdict here while the raw error is in hand.
+      setPermErr(looksLikePermissionDenied(errorString(e)));
+    });
   }
 
   async function loadDockerSection(section: DockerSection, force = false) {
@@ -475,7 +486,10 @@ function DockerPanelBody({ tab }: Props) {
         return { networks };
       },
       force,
-    ).catch(() => { /* error stored on snapshot */ });
+    ).catch((e) => {
+      // Same as refresh(): keep the raw-text permission verdict.
+      setPermErr(looksLikePermissionDenied(errorString(e)));
+    });
   }
 
   async function refreshActiveTab(force = true) {
@@ -1071,6 +1085,30 @@ function DockerPanelBody({ tab }: Props) {
       ? t("Local Docker socket")
       : t("Not connected");
 
+  // A permission error means the Docker daemon refused the SSH login
+  // user. The panel runs every `docker` command on its own one-shot
+  // exec channel as `sshTarget.user` — it does NOT inherit a `su` /
+  // `sudo -s` performed in the interactive terminal, so the shell
+  // user shown in the header (effectiveShellUser) can read "root"
+  // while the daemon still rejects us. Surface an explicit elevate
+  // action so the user can (re)open the sudo dialog even after
+  // dismissing it once. `permErr` carries the verdict computed from
+  // the RAW error at catch time; the heuristic fallback covers
+  // snapshot errors that survived a panel remount (store-path errors
+  // keep the raw `String(e)`, so the keywords still match there).
+  const isPermErr = !!error && (permErr || looksLikePermissionDenied(error));
+  const shellUserDiffers =
+    hasSsh && !!sshTarget && effectiveShellUser(tab, sshTarget) !== sshTarget.user;
+  const openSudoPrompt = () => {
+    if (!sshTarget) return;
+    setSudoPrompt({
+      hostLabel: `${sshTarget.user}@${sshTarget.host}`,
+      errorMessage: sudoPassword
+        ? t("Saved sudo password was rejected — please re-enter.")
+        : undefined,
+    });
+  };
+
   // Group containers by their `com.docker.compose.project` label.
   // Projects tab is a pure derived view; containers without that
   // label are omitted. Runs only when containers are loaded so
@@ -1184,18 +1222,47 @@ function DockerPanelBody({ tab }: Props) {
           </button>
         </div>
 
-        {!canRefresh && <div className="lg-note">{t("SSH connection required for Docker.")}</div>}
-        {/* First-load spinner belongs inside each tab body as a skeleton
-            (see <DkSkeleton/>), not at the panel top — a centered banner
-            here used to cover the toolbar and felt like a "whole-area"
-            loading state. */}
-        {notice && (
-          <DismissibleNote onDismiss={() => setNotice("")}>{notice}</DismissibleNote>
-        )}
-        {error && (
-          <DismissibleNote tone="error" onDismiss={() => setError("")}>
-            {error}
-          </DismissibleNote>
+        {(!canRefresh || notice || error) && (
+          <div className="dk-alerts">
+            {!canRefresh && <div className="lg-note dk-note">{t("SSH connection required for Docker.")}</div>}
+            {/* First-load spinner belongs inside each tab body as a skeleton
+                (see <DkSkeleton/>), not at the panel top — a centered banner
+                here used to cover the toolbar and felt like a "whole-area"
+                loading state. */}
+            {notice && (
+              <DismissibleNote className="dk-note" onDismiss={() => setNotice("")}>
+                {notice}
+              </DismissibleNote>
+            )}
+            {error && (
+              <DismissibleNote
+                className="dk-note"
+                tone="error"
+                onDismiss={() => setError("")}
+                action={
+                  isPermErr && hasSsh && sshTarget ? (
+                    <button
+                      type="button"
+                      className="btn is-compact"
+                      onClick={openSudoPrompt}
+                    >
+                      {t("Elevate with sudo")}
+                    </button>
+                  ) : undefined
+                }
+              >
+                {error}
+                {isPermErr && shellUserDiffers && sshTarget && (
+                  <div className="dk-perm-hint">
+                    {t(
+                      "This panel runs Docker as {user}; the su/sudo session in the terminal does not carry over here.",
+                      { user: sshTarget.user },
+                    )}
+                  </div>
+                )}
+              </DismissibleNote>
+            )}
+          </div>
         )}
         {hasSsh && dockerInstalled === false && (
           <div style={{ padding: "var(--sp-3)" }}>

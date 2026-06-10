@@ -306,28 +306,49 @@ export default function DbResultGrid({
   const numericSet = useMemo(() => new Set(numericColumns ?? []), [numericColumns]);
   const pkSet = useMemo(() => new Set(pkColumns ?? []), [pkColumns]);
 
-  const cols = viewPreview?.columns ?? columnsMeta?.map((c) => c.name) ?? [];
+  const cols = useMemo(
+    () => viewPreview?.columns ?? columnsMeta?.map((c) => c.name) ?? [],
+    [viewPreview?.columns, columnsMeta],
+  );
+  const colIndex = useMemo(
+    () => new Map(cols.map((col, index) => [col, index])),
+    [cols],
+  );
+  const metaByName = useMemo(
+    () => new Map((columnsMeta ?? []).map((meta) => [meta.name, meta])),
+    [columnsMeta],
+  );
+  const dirtyRows = useMemo(() => {
+    const out = new Set<number>();
+    for (const dirty of dirtyMap.values()) {
+      out.add(dirty.row);
+    }
+    return out;
+  }, [dirtyMap]);
   const editEnabled = writable && !!columnsMeta && pkSet.size > 0 && !!onCommit;
   const insertEnabled = writable && !!columnsMeta && !!onCommit;
 
   const filteredSorted = useMemo(() => {
     if (!viewPreview) return [] as { row: string[]; absIdx: number }[];
     let pairs = viewPreview.rows.map((row, absIdx) => ({ row, absIdx }));
-    // Filter
-    const activeFilters = Object.entries(filters).filter(([, q]) => q.trim() !== "");
+    // Filter — trim decides whether a filter is active, but matching
+    // keeps the raw query so deliberate trailing spaces still narrow.
+    const activeFilters = Object.entries(filters)
+      .filter(([, q]) => q.trim() !== "")
+      .map(([col, q]) => [col, q.toLowerCase()] as const);
     if (activeFilters.length > 0) {
       pairs = pairs.filter(({ row }) =>
         activeFilters.every(([col, q]) => {
-          const ci = cols.indexOf(col);
+          const ci = colIndex.get(col) ?? -1;
           if (ci < 0) return true;
           const cell = row[ci];
-          return (cell ?? "").toString().toLowerCase().includes(q.toLowerCase());
+          return (cell ?? "").toString().toLowerCase().includes(q);
         }),
       );
     }
     // Sort
     if (sortCol) {
-      const ci = cols.indexOf(sortCol);
+      const ci = colIndex.get(sortCol) ?? -1;
       if (ci >= 0) {
         const numeric = numericSet.has(sortCol);
         pairs = [...pairs].sort((a, b) => {
@@ -347,7 +368,7 @@ export default function DbResultGrid({
       }
     }
     return pairs;
-  }, [viewPreview, filters, sortCol, sortDir, cols, numericSet]);
+  }, [viewPreview, filters, sortCol, sortDir, colIndex, numericSet]);
 
   const pageCount = Math.max(1, Math.ceil(filteredSorted.length / pageSize));
   const safePage = Math.min(page, pageCount - 1);
@@ -837,8 +858,7 @@ export default function DbResultGrid({
               slice.map(({ row, absIdx }, sliceIdx) => {
                 const isDeleted = pendingDeletes.has(absIdx);
                 const displayIdx = safePage * pageSize + sliceIdx + 1;
-                const rowIsDirty = isDeleted ||
-                  Array.from(dirtyMap.values()).some((d) => d.row === absIdx);
+                const rowIsDirty = isDeleted || dirtyRows.has(absIdx);
                 return (
                   <tr
                     key={absIdx}
@@ -855,7 +875,7 @@ export default function DbResultGrid({
                       const col = cols[ci];
                       const isPk = pkSet.has(col);
                       const isNum = numericSet.has(col);
-                      const meta = columnsMeta?.find((m) => m.name === col);
+                      const meta = metaByName.get(col);
                       const isEditing = editing?.row === absIdx && editing?.col === col;
                       const dirtyVal = dirtyValueFor(absIdx, col);
                       const isDirty = dirtyVal !== null;

@@ -155,56 +155,59 @@ export default function DbPasswordUpdateDialog({
           </div>
         </div>
         <div className="dlg-foot">
-          {onTest && (
+          <div className="dlg-foot-main">
+            {onTest && (
+              <button
+                className="gb-btn"
+                // No password requirement on Test — Redis without AUTH
+                // is a legitimate config, and the result tells the user
+                // whether their (possibly empty) password actually works.
+                disabled={testing || saving}
+                onClick={() => void runTest()}
+                type="button"
+                title={t(
+                  "Probes the database with this password before saving. Catches a wrong password here instead of after the splash tries to connect.",
+                )}
+              >
+                {testing ? <Loader2 size={11} className="spin" /> : <Plug size={11} />}
+                {testing ? t("Testing...") : t("Test connection")}
+              </button>
+            )}
+            {testResult && (
+              <span
+                className={
+                  "dlg-test-result " +
+                  (testResult.ok ? "dlg-test-result--ok" : "dlg-test-result--err")
+                }
+                title={testResult.ok ? "" : testResult.msg}
+              >
+                {testResult.ok ? (
+                  <>
+                    <CheckCircle2 size={11} />
+                    {t("Connected via {via}.", { via: testResult.via })}
+                  </>
+                ) : (
+                  <>
+                    <XCircle size={11} />
+                    <span className="dlg-test-result-msg">{testResult.msg}</span>
+                  </>
+                )}
+              </span>
+            )}
+          </div>
+          <div className="dlg-foot-actions">
+            <button className="gb-btn" onClick={onClose} type="button">
+              {t("Cancel")}
+            </button>
             <button
               className="gb-btn"
-              // No password requirement on Test — Redis without AUTH
-              // is a legitimate config, and the result tells the user
-              // whether their (possibly empty) password actually works.
-              disabled={testing || saving}
-              onClick={() => void runTest()}
+              onClick={() => void save()}
+              disabled={saving}
               type="button"
-              title={t(
-                "Probes the database with this password before saving. Catches a wrong password here instead of after the splash tries to connect.",
-              )}
             >
-              {testing ? <Loader2 size={11} className="spin" /> : <Plug size={11} />}
-              {testing ? t("Testing...") : t("Test connection")}
+              {saving ? t("Saving...") : t("Save")}
             </button>
-          )}
-          {testResult && (
-            <span
-              className={
-                "dlg-test-result " +
-                (testResult.ok ? "dlg-test-result--ok" : "dlg-test-result--err")
-              }
-              title={testResult.ok ? "" : testResult.msg}
-            >
-              {testResult.ok ? (
-                <>
-                  <CheckCircle2 size={11} />
-                  {t("Connected via {via}.", { via: testResult.via })}
-                </>
-              ) : (
-                <>
-                  <XCircle size={11} />
-                  <span className="dlg-test-result-msg">{testResult.msg}</span>
-                </>
-              )}
-            </span>
-          )}
-          <div style={{ flex: 1 }} />
-          <button className="gb-btn" onClick={onClose} type="button">
-            {t("Cancel")}
-          </button>
-          <button
-            className="gb-btn"
-            onClick={() => void save()}
-            disabled={saving}
-            type="button"
-          >
-            {saving ? t("Saving...") : t("Save")}
-          </button>
+          </div>
         </div>
       </div>
     </div>

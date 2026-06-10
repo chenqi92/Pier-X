@@ -37,7 +37,7 @@ import { useTabStore } from "../stores/useTabStore";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import "../styles/log-viewer.css";
 
-type Props = { tab: TabState };
+type Props = { tab: TabState; isActive?: boolean };
 type IconType = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
 
 const MAX_EVENTS = 600;
@@ -84,7 +84,7 @@ export default function LogViewerPanel(props: Props) {
   );
 }
 
-function LogViewerPanelBody({ tab }: Props) {
+function LogViewerPanelBody({ tab, isActive = true }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
@@ -122,6 +122,15 @@ function LogViewerPanelBody({ tab }: Props) {
   const lastDrainAt = useRef<number | null>(null);
   const rateEma = useRef(0);
   const [linesPerSecond, setLinesPerSecond] = useState(0);
+
+  // RightSidebar keeps visited tools mounted-hidden, so `isActive`
+  // can flip without unmounting us. The drain loop reads visibility
+  // through this ref so a flip doesn't tear down the effect (and
+  // with it an in-flight drain's batch).
+  const isActiveRef = useRef(isActive);
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   // Accept SSH context inferred from a local terminal that ran `ssh
   // user@host` or from a nested-ssh overlay on top of a real SSH tab.
@@ -289,6 +298,9 @@ function LogViewerPanelBody({ tab }: Props) {
     // at 200ms for low latency; an idle stream backs off exponentially to
     // 2s so we don't burn IPC on silence. Each non-empty drain resets to
     // the fast tier — the loop keeps feel snappy once logs start flowing.
+    // While the panel is hidden the loop keeps draining at the slow tier
+    // and discards the batches — the backend buffers events in an
+    // unbounded channel, so an undrained followed log grows without limit.
     const MIN_MS = 200;
     const MAX_MS = 2000;
 
@@ -301,10 +313,34 @@ function LogViewerPanelBody({ tab }: Props) {
       timerId = window.setTimeout(run, delay);
     };
 
+    // Exit / error ends the stream regardless of visibility.
+    // Returns true when the stream was terminated.
+    const handleTerminal = (batch: LogEventView[]): boolean => {
+      const terminalEvent = batch.find((entry) => entry.kind === "exit" || entry.kind === "error");
+      if (!terminalEvent) return false;
+      if (terminalEvent.kind === "exit") {
+        setNotice(t("Log stream exited with code {code}.", { code: terminalEvent.text }));
+      } else {
+        setError(localizeRuntimeMessage(terminalEvent.text || t("Log stream ended with an error."), t));
+      }
+      void stopStream(streamId);
+      return true;
+    };
+
     const run = () => {
       cmd.logStreamDrain(streamId)
         .then((batch) => {
           if (disposed) return;
+
+          // Hidden: discard the batch (no list / EMA / scroll work)
+          // so the backend buffer stays empty and re-activation never
+          // faces a giant backlog payload.
+          if (!isActiveRef.current) {
+            if (handleTerminal(batch)) return;
+            delay = MAX_MS;
+            schedule();
+            return;
+          }
 
           if (batch.length === 0) {
             delay = Math.min(delay * 2, MAX_MS);
@@ -341,16 +377,7 @@ function LogViewerPanelBody({ tab }: Props) {
             return [...current, ...appended].slice(-MAX_EVENTS);
           });
 
-          const terminalEvent = batch.find((entry) => entry.kind === "exit" || entry.kind === "error");
-          if (terminalEvent) {
-            if (terminalEvent.kind === "exit") {
-              setNotice(t("Log stream exited with code {code}.", { code: terminalEvent.text }));
-            } else {
-              setError(localizeRuntimeMessage(terminalEvent.text || t("Log stream ended with an error."), t));
-            }
-            void stopStream(streamId);
-            return;
-          }
+          if (handleTerminal(batch)) return;
           schedule();
         })
         .catch((drainError) => {

@@ -295,46 +295,6 @@
   font-size: var(--size-small);
 }
 .lg-search input::placeholder { color: var(--muted); }
-.lg-x {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  width: 14px;
-  height: 14px;
-  border-radius: 2px;
-  display: grid;
-  place-items: center;
-  cursor: default;
-}
-.lg-x:hover { color: var(--ink); background: var(--panel-2); }
-
-.lg-ic {
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--muted);
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-xs);
-  cursor: default;
-  display: grid;
-  place-items: center;
-  flex: none;
-}
-.lg-ic:hover {
-  color: var(--ink);
-  background: var(--panel-2);
-  border-color: var(--line-2);
-}
-.lg-ic.on {
-  color: var(--accent);
-  background: var(--accent-dim);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-}
-.lg-ic:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 .lg-body {
   flex: 1;
   overflow: auto;
@@ -343,48 +303,6 @@
   font-family: var(--mono);
   font-size: 11.5px;
   line-height: 1.6;
-}
-.lg-note {
-  padding: 6px var(--sp-3);
-  color: var(--muted);
-  font-size: var(--size-small);
-}
-.lg-note--error {
-  color: var(--neg);
-  background: color-mix(in srgb, var(--neg) 6%, transparent);
-  border-left: 2px solid var(--neg);
-}
-.lg-note--dismissible {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-2);
-  padding-right: var(--sp-2);
-}
-.lg-note--dismissible .lg-note-body {
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
-}
-.lg-note-close {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  margin-top: 1px;
-  color: inherit;
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  opacity: 0.7;
-  transition: opacity var(--dur-fast) var(--easing), background var(--dur-fast) var(--easing);
-}
-.lg-note-close:hover {
-  opacity: 1;
-  background: color-mix(in srgb, currentColor 14%, transparent);
 }
 .lg-line {
   display: grid;

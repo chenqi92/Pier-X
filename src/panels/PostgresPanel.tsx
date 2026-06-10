@@ -2,7 +2,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import ConfirmDialog from "../components/ConfirmDialog";
-import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
+import DbAddCredentialDialog, { type DbConnectionDraft } from "../components/DbAddCredentialDialog";
 import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
 import DbTunnelChip from "../components/DbTunnelChip";
 import DismissibleNote from "../components/DismissibleNote";
@@ -109,6 +109,16 @@ const POSTGRES_ADAPTER: DbCredentialFieldAdapter = {
     pgTunnelId: null,
     pgTunnelPort: null,
   }),
+  patchFromDraft: (draft) => ({
+    pgActiveCredentialId: null,
+    pgHost: draft.host,
+    pgPort: draft.port,
+    pgUser: draft.user,
+    pgPassword: draft.password,
+    pgDatabase: draft.database ?? "",
+    pgTunnelId: null,
+    pgTunnelPort: null,
+  }),
   patchPassword: (password) => ({ pgPassword: password }),
   patchPasswordAfterRotate: (password) => ({ pgPassword: password }),
 };
@@ -171,20 +181,31 @@ function PostgresPanelBody({ tab }: Props) {
     setWriteConfirm("");
   }
 
-  async function browse(passwordOverride?: string, nextTable?: string, nextDb?: string, nextSchema?: string) {
+  async function browse(
+    passwordOverride?: string,
+    nextTable?: string,
+    nextDb?: string,
+    nextSchema?: string,
+    draft?: DbConnectionDraft,
+  ) {
     setBusy(true);
     setError("");
     try {
-      const target = await flow.ensureConnectionTarget();
+      const target = await flow.ensureConnectionTarget(false, draft);
       const pw = passwordOverride !== undefined ? passwordOverride : tab.pgPassword;
+      const connectionUser = draft?.user ?? tab.pgUser;
+      const connectionDatabase = draft ? draft.database ?? "" : tab.pgDatabase;
       const s = await cmd.postgresBrowse({
         host: target.host,
         port: target.port,
-        user: tab.pgUser.trim(),
+        user: connectionUser.trim(),
         password: pw,
-        database: (nextDb ?? tab.pgDatabase).trim() || null,
-        schema: (nextSchema ?? schema).trim() || null,
-        table: (nextTable ?? state?.tableName ?? "").trim() || null,
+        database: (nextDb ?? connectionDatabase).trim() || null,
+        // A draft targets a different server — `schema` / `state` in
+        // this closure predate the `onReset` that draft-connect fired,
+        // so the previous server's schema and table must not leak in.
+        schema: draft ? null : (nextSchema ?? schema).trim() || null,
+        table: draft ? null : (nextTable ?? state?.tableName ?? "").trim() || null,
       });
       setState(s);
       setSchema(s.schemaName);
@@ -215,7 +236,7 @@ function PostgresPanelBody({ tab }: Props) {
     kind: "postgres",
     tunnelSlot: "postgres",
     adapter: POSTGRES_ADAPTER,
-    browse: (pwOverride) => browse(pwOverride),
+    browse: (pwOverride, draft) => browse(pwOverride, undefined, undefined, undefined, draft),
     hasLiveState: state !== null,
     onReset: resetPanel,
     setError,
@@ -887,6 +908,7 @@ function PostgresPanelBody({ tab }: Props) {
         adopting={flow.adopting}
         tab={tab}
         onSaved={flow.handleCredentialAdded}
+        onConnect={flow.handleCredentialConnected}
       />
       {tab.pgActiveCredentialId && flow.savedIndex !== null && (
         <DbPasswordUpdateDialog

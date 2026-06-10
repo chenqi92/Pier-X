@@ -10,14 +10,25 @@ import type { DbCredential, DbKind, DetectedDbInstance, TabState } from "../lib/
 import { effectiveSshTarget } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 
+export type DbConnectionDraft = {
+  kind: Extract<DbKind, "mysql" | "postgres" | "redis">;
+  label: string;
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string | null;
+  favorite: boolean;
+  detectionSignature: string | null;
+};
+
 type Props = {
   open: boolean;
   onClose: () => void;
   /** Panel kind. Controls default port + which fields show. */
   kind: Extract<DbKind, "mysql" | "postgres" | "redis">;
-  /** SSH profile index to attach the credential to. `null` blocks
-   *  save (manual / unsaved SSH connections have nowhere to put
-   *  the credential). */
+  /** SSH profile index to attach the credential to. `null` means the
+   *  dialog can connect for this tab only, but cannot persist. */
   savedConnectionIndex: number | null;
   /** Optional detection row being adopted — pre-fills host/port
    *  and stamps `source: detected`. */
@@ -29,6 +40,9 @@ type Props = {
   /** Called after a successful save, with the new credential.
    *  Parent typically activates it in the tab immediately. */
   onSaved: (cred: DbCredential) => void;
+  /** Called when there is no saved SSH profile to attach to. The
+   *  credential is used for this tab only and is not persisted. */
+  onConnect: (draft: DbConnectionDraft) => void;
 };
 
 const DEFAULT_PORT: Record<Props["kind"], number> = {
@@ -57,6 +71,7 @@ export default function DbAddCredentialDialog({
   adopting,
   tab,
   onSaved,
+  onConnect,
 }: Props) {
   const { t } = useI18n();
   const formatError = (e: unknown) => localizeError(e, t);
@@ -147,12 +162,17 @@ export default function DbAddCredentialDialog({
   if (!open) return null;
 
   const parsedPort = Number.parseInt(port, 10);
-  const canSave =
-    savedConnectionIndex !== null &&
-    label.trim().length > 0 &&
+  const canPersist = savedConnectionIndex !== null;
+  // Redis's "database" field is a numeric DB index — a typo must fail
+  // here, not silently coerce to DB 0 at connect time.
+  const dbIndexValid =
+    kind !== "redis" || database.trim() === "" || /^\d+$/.test(database.trim());
+  const canSubmit =
+    (!canPersist || label.trim().length > 0) &&
     host.trim().length > 0 &&
     Number.isFinite(parsedPort) &&
     parsedPort > 0 &&
+    dbIndexValid &&
     !saving;
 
   /**
@@ -252,25 +272,44 @@ export default function DbAddCredentialDialog({
     }
   }
 
-  async function handleSave() {
-    if (savedConnectionIndex === null) return;
+  function buildDraft(): DbConnectionDraft {
+    return {
+      kind,
+      label: label.trim(),
+      host: host.trim(),
+      port: parsedPort,
+      user: user.trim(),
+      password,
+      database: database.trim() || null,
+      favorite,
+      detectionSignature: adopting?.signature ?? null,
+    };
+  }
+
+  async function handleSubmit() {
+    const draft = buildDraft();
+    if (savedConnectionIndex === null) {
+      onConnect(draft);
+      onClose();
+      return;
+    }
     setSaving(true);
     setError("");
     try {
       const cred = await cmd.dbCredSave(
         savedConnectionIndex,
         {
-          kind,
-          label: label.trim(),
-          host: host.trim(),
-          port: parsedPort,
-          user: user.trim(),
-          database: database.trim() || null,
+          kind: draft.kind,
+          label: draft.label,
+          host: draft.host,
+          port: draft.port,
+          user: draft.user,
+          database: draft.database,
           sqlitePath: null,
-          favorite,
-          detectionSignature: adopting?.signature ?? null,
+          favorite: draft.favorite,
+          detectionSignature: draft.detectionSignature,
         },
-        password.length > 0 ? password : null,
+        draft.password.length > 0 ? draft.password : null,
       );
       await refreshConnections();
       onSaved(cred);
@@ -283,6 +322,9 @@ export default function DbAddCredentialDialog({
   }
 
   const Icon = RIGHT_TOOL_META[kind].icon;
+  const submitLabel = saving
+    ? canPersist ? t("Saving...") : t("Connecting...")
+    : canPersist ? t("Save & connect") : t("Connect");
 
   return (
     <div className="cmdp-overlay" onClick={onClose}>
@@ -294,7 +336,9 @@ export default function DbAddCredentialDialog({
         <div className="dlg-head" {...handleProps}>
           <span className="dlg-title">
             <Icon size={13} />
-            {t("Save {kind} connection", { kind: KIND_LABEL[kind] })}
+            {canPersist
+              ? t("Save {kind} connection", { kind: KIND_LABEL[kind] })
+              : t("Connect to {kind}", { kind: KIND_LABEL[kind] })}
           </span>
           <div style={{ flex: 1 }} />
           <IconButton variant="mini" onClick={onClose} title={t("Close")}>
@@ -363,85 +407,95 @@ export default function DbAddCredentialDialog({
                 value={database}
               />
             </div>
-            <div className="dlg-row">
-              <label className="dlg-row-label">{t("Favorite")}</label>
-              <button
-                type="button"
-                className={
-                  "dlg-opt" + (favorite ? " active" : "")
-                }
-                onClick={() => setFavorite((v) => !v)}
-                style={{ display: "inline-flex", alignItems: "center", gap: "var(--sp-1)" }}
-              >
-                <Star size={11} fill={favorite ? "currentColor" : "none"} />
-                {favorite ? t("Seed on open") : t("Don't seed")}
-              </button>
-            </div>
-            {savedConnectionIndex === null && (
+            {!dbIndexValid && (
+              <div className="status-note status-note--error">
+                {t("DB index must be a non-negative integer.")}
+              </div>
+            )}
+            {canPersist && (
+              <div className="dlg-row">
+                <label className="dlg-row-label">{t("Favorite")}</label>
+                <button
+                  type="button"
+                  className={
+                    "dlg-opt" + (favorite ? " active" : "")
+                  }
+                  onClick={() => setFavorite((v) => !v)}
+                  style={{ display: "inline-flex", alignItems: "center", gap: "var(--sp-1)" }}
+                >
+                  <Star size={11} fill={favorite ? "currentColor" : "none"} />
+                  {favorite ? t("Seed on open") : t("Don't seed")}
+                </button>
+              </div>
+            )}
+            {!canPersist && (
               <div className="dlg-note">
-                {t("Credentials can only be saved for a saved SSH profile. Open the connection from the sidebar first.")}
+                {t("No saved SSH profile is attached. Pier-X will connect for this tab only and will not add this database connection to a saved profile.")}
               </div>
             )}
             {error && <div className="status-note status-note--error">{error}</div>}
           </div>
         </div>
         <div className="dlg-foot">
-          <button
-            className="gb-btn"
-            disabled={
-              testing ||
-              saving ||
-              host.trim() === "" ||
-              // MySQL / Postgres won't accept an empty user; Redis can
-              // (no username = default ACL user, only meaningful from 6+).
-              (kind !== "redis" && user.trim() === "")
-            }
-            onClick={() => void testConnection()}
-            type="button"
-            title={
-              tab && effectiveSshTarget(tab)
-                ? t("Probes via the tab's SSH session — no port exposure required.")
-                : t("Probes directly to host:port — only works when the database accepts external clients.")
-            }
-          >
-            {testing ? <Loader2 size={11} className="spin" /> : <Plug size={11} />}
-            {testing ? t("Testing...") : t("Test connection")}
-          </button>
-          {testResult && (
-            <span
-              className={
-                "dlg-test-result " +
-                (testResult.ok ? "dlg-test-result--ok" : "dlg-test-result--err")
+          <div className="dlg-foot-main">
+            <button
+              className="gb-btn"
+              disabled={
+                testing ||
+                saving ||
+                host.trim() === "" ||
+                // MySQL / Postgres won't accept an empty user; Redis can
+                // (no username = default ACL user, only meaningful from 6+).
+                (kind !== "redis" && user.trim() === "")
               }
-              title={testResult.ok ? "" : testResult.msg}
+              onClick={() => void testConnection()}
+              type="button"
+              title={
+                tab && effectiveSshTarget(tab)
+                  ? t("Probes via the tab's SSH session — no port exposure required.")
+                  : t("Probes directly to host:port — only works when the database accepts external clients.")
+              }
             >
-              {testResult.ok ? (
-                <>
-                  <CheckCircle2 size={11} />
-                  {testResult.via === "ssh-tunnel"
-                    ? t("Connected via SSH tunnel.")
-                    : t("Connected directly.")}
-                </>
-              ) : (
-                <>
-                  <XCircle size={11} />
-                  <span className="dlg-test-result-msg">{testResult.msg}</span>
-                </>
-              )}
-            </span>
-          )}
-          <div style={{ flex: 1 }} />
-          <button className="gb-btn" onClick={onClose} type="button">
-            {t("Cancel")}
-          </button>
-          <button
-            className="gb-btn"
-            disabled={!canSave}
-            onClick={() => void handleSave()}
-            type="button"
-          >
-            {saving ? t("Saving...") : t("Save")}
-          </button>
+              {testing ? <Loader2 size={11} className="spin" /> : <Plug size={11} />}
+              {testing ? t("Testing...") : t("Test connection")}
+            </button>
+            {testResult && (
+              <span
+                className={
+                  "dlg-test-result " +
+                  (testResult.ok ? "dlg-test-result--ok" : "dlg-test-result--err")
+                }
+                title={testResult.ok ? "" : testResult.msg}
+              >
+                {testResult.ok ? (
+                  <>
+                    <CheckCircle2 size={11} />
+                    {testResult.via === "ssh-tunnel"
+                      ? t("Connected via SSH tunnel.")
+                      : t("Connected directly.")}
+                  </>
+                ) : (
+                  <>
+                    <XCircle size={11} />
+                    <span className="dlg-test-result-msg">{testResult.msg}</span>
+                  </>
+                )}
+              </span>
+            )}
+          </div>
+          <div className="dlg-foot-actions">
+            <button className="gb-btn" onClick={onClose} type="button">
+              {t("Cancel")}
+            </button>
+            <button
+              className="gb-btn"
+              disabled={!canSubmit}
+              onClick={() => void handleSubmit()}
+              type="button"
+            >
+              {submitLabel}
+            </button>
+          </div>
         </div>
       </div>
     </div>

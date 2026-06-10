@@ -116,6 +116,40 @@
   flex-direction: column;
 }
 
+.dk-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  flex: none;
+  min-width: 0;
+}
+.dk-alerts .dk-note {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.dk-alerts .dk-note.lg-note--error {
+  border-color: color-mix(in srgb, var(--neg) 32%, var(--line));
+  border-left-color: var(--neg);
+  background: color-mix(in srgb, var(--neg-dim) 32%, var(--panel));
+}
+.dk-alerts .lg-note-body {
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  line-height: 1.45;
+}
+
+.dk-perm-hint {
+  margin-top: var(--sp-1);
+  color: var(--muted);
+  font-size: var(--size-micro);
+  line-height: 1.5;
+}
+
 .dk-scroll {
   flex: 1;
   min-height: 0;

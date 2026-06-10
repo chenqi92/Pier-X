@@ -53,14 +53,15 @@ export type TerminalRowEnv = {
 type Props = {
   line: TerminalLine;
   env: TerminalRowEnv;
+  rowIndex: number;
 };
 
-function TerminalRowImpl({ line, env }: Props) {
+function TerminalRowImpl({ line, env, rowIndex }: Props) {
   const { cursorStyle, cursorBlink, ansi, fg, cols } = env;
   const usedCols = line.segments.reduce((n, s) => n + s.cells, 0);
   const padCols = Math.max(0, cols - usedCols);
   return (
-    <div className="terminal-row" style={{ color: fg }}>
+    <div className="terminal-row" data-terminal-row={rowIndex} style={{ color: fg }}>
       {line.segments.map((seg, j) => {
         const isCursor = seg.cursor;
         // Cursor style: 0=block (default), 1=beam, 2=underline. Blink
@@ -81,6 +82,7 @@ function TerminalRowImpl({ line, env }: Props) {
         return (
           <span
             className={cursorClass}
+            data-terminal-cells={seg.cells}
             key={`seg-${j}`}
             style={{
               backgroundColor: segBg,
@@ -94,7 +96,11 @@ function TerminalRowImpl({ line, env }: Props) {
         );
       })}
       {padCols > 0 && (
-        <span className="terminal-segment terminal-segment--filler" aria-hidden>
+        <span
+          className="terminal-segment terminal-segment--filler"
+          data-terminal-cells={padCols}
+          aria-hidden
+        >
           {" ".repeat(padCols)}
         </span>
       )}
@@ -109,5 +115,6 @@ function TerminalRowImpl({ line, env }: Props) {
  */
 export const TerminalRow = memo(
   TerminalRowImpl,
-  (prev, next) => prev.line.hash === next.line.hash && prev.env === next.env,
+  (prev, next) =>
+    prev.line.hash === next.line.hash && prev.env === next.env && prev.rowIndex === next.rowIndex,
 );

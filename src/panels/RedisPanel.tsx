@@ -1,7 +1,7 @@
 import { Play, Search, Terminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
+import DbAddCredentialDialog, { type DbConnectionDraft } from "../components/DbAddCredentialDialog";
 import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
 import DbTunnelChip from "../components/DbTunnelChip";
 import DismissibleNote from "../components/DismissibleNote";
@@ -308,13 +308,14 @@ function RedisPanelBody({ tab }: Props) {
   }, [tab.redisActiveCredentialId, savedIndex, hasSsh, browseTrigger]);
 
   // ── Actions ───────────────────────────────────────────────
-  async function ensureConnectionTarget(forceTunnel = false) {
+  async function ensureConnectionTarget(forceTunnel = false, draft?: DbConnectionDraft) {
     // Mirrors useDbCredentialFlow.ensureConnectionTarget: a credential
     // with its own egress profile bypasses the parent SSH tunnel and
     // connects through the loopback forwarder the backend started for it.
-    if (savedIndex !== null && tab.redisActiveCredentialId) {
+    const activeCredId = draft ? null : tab.redisActiveCredentialId;
+    if (savedIndex !== null && activeCredId) {
       try {
-        const ep = await cmd.dbEgressEndpoint(savedIndex, tab.redisActiveCredentialId);
+        const ep = await cmd.dbEgressEndpoint(savedIndex, activeCredId);
         if (ep.viaForwarder) {
           setTunnelError("");
           return { host: ep.host, port: ep.port };
@@ -323,14 +324,16 @@ function RedisPanelBody({ tab }: Props) {
         /* fall through to legacy path */
       }
     }
-    if (!hasSsh) return { host: host.trim(), port: p };
+    const remoteHost = draft?.host ?? host.trim();
+    const remotePort = draft?.port ?? p;
+    if (!hasSsh) return { host: remoteHost, port: remotePort };
     const info = await ensureTunnelSlot({
       tab,
       slot: "redis",
-      remoteHost: host.trim(),
-      remotePort: p,
+      remoteHost,
+      remotePort,
       updateTab,
-      force: forceTunnel,
+      force: forceTunnel || !!draft,
     });
     setTunnelError("");
     return { host: info.localHost, port: info.localPort };
@@ -396,19 +399,23 @@ function RedisPanelBody({ tab }: Props) {
     }
   }
 
-  async function browse(nextKey = keyName, passwordOverride?: string) {
+  async function browse(nextKey = keyName, passwordOverride?: string, draft?: DbConnectionDraft) {
     setBusy(true);
     setError("");
     const pw = passwordOverride !== undefined ? passwordOverride : password;
+    const connectionUser = draft?.user ?? user;
+    // `draft.database` is null (→ DB 0) or a digit string — the Add
+    // Credential dialog validates the index before submitting.
+    const connectionDb = draft ? Number.parseInt(draft.database ?? "", 10) || 0 : d;
     try {
-      const target = await ensureConnectionTarget();
+      const target = await ensureConnectionTarget(false, draft);
       const s = await cmd.redisBrowse({
         host: target.host,
         port: target.port,
-        db: d,
+        db: connectionDb,
         pattern: pattern.trim() || "*",
         key: nextKey.trim() || null,
-        username: user.trim() || null,
+        username: connectionUser.trim() || null,
         password: pw || null,
         cursor: null,
       });
@@ -812,6 +819,40 @@ function RedisPanelBody({ tab }: Props) {
           // auto-browse to fire.
           setBrowseTrigger((n) => n + 1);
           void refreshConnections();
+        }}
+        onConnect={(draft) => {
+          // `draft.database` is null (→ DB 0) or a dialog-validated
+          // digit string.
+          const dbN = Number.parseInt(draft.database ?? "", 10) || 0;
+          setActivating(null);
+          setConnectingStep(t("Connecting..."));
+          setState(null);
+          setError("");
+          setCmdResult(null);
+          setCmdError("");
+          setKeyName("");
+          setHost(draft.host);
+          setPort(String(draft.port));
+          setDb(String(dbN));
+          setUser(draft.user);
+          setPassword(draft.password);
+          updateTab(tab.id, {
+            redisActiveCredentialId: null,
+            redisHost: draft.host,
+            redisPort: draft.port,
+            redisDb: dbN,
+            redisUser: draft.user,
+            redisPassword: draft.password,
+            redisTunnelId: null,
+            redisTunnelPort: null,
+          });
+          void (async () => {
+            try {
+              await browse("", draft.password, draft);
+            } finally {
+              setConnectingStep(null);
+            }
+          })();
         }}
       />
       {tab.redisActiveCredentialId && savedIndex !== null && (

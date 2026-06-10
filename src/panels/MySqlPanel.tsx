@@ -2,7 +2,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import ConfirmDialog from "../components/ConfirmDialog";
-import DbAddCredentialDialog from "../components/DbAddCredentialDialog";
+import DbAddCredentialDialog, { type DbConnectionDraft } from "../components/DbAddCredentialDialog";
 import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
 import DbTunnelChip from "../components/DbTunnelChip";
 import DismissibleNote from "../components/DismissibleNote";
@@ -113,6 +113,16 @@ const MYSQL_ADAPTER: DbCredentialFieldAdapter = {
     mysqlTunnelId: null,
     mysqlTunnelPort: null,
   }),
+  patchFromDraft: (draft) => ({
+    mysqlActiveCredentialId: null,
+    mysqlHost: draft.host,
+    mysqlPort: draft.port,
+    mysqlUser: draft.user,
+    mysqlPassword: draft.password,
+    mysqlDatabase: draft.database ?? "",
+    mysqlTunnelId: null,
+    mysqlTunnelPort: null,
+  }),
   patchPassword: (password) => ({ mysqlPassword: password }),
   patchPasswordAfterRotate: (password) => ({ mysqlPassword: password }),
 };
@@ -192,24 +202,30 @@ function MySqlPanelBody({ tab }: Props) {
     nextTable?: string,
     nextOffset?: number,
     nextSize?: number,
+    draft?: DbConnectionDraft,
   ) {
     setBusy(true);
     setError("");
     try {
-      const target = await flow.ensureConnectionTarget();
+      const target = await flow.ensureConnectionTarget(false, draft);
       const pw = passwordOverride !== undefined ? passwordOverride : tab.mysqlPassword;
-      const tableTarget = (nextTable ?? state?.tableName ?? "").trim() || null;
+      const connectionUser = draft?.user ?? tab.mysqlUser;
+      const connectionDatabase = draft ? draft.database ?? "" : tab.mysqlDatabase;
+      // A draft targets a different server — `state` / `pageOffset` in
+      // this closure predate the `onReset` that draft-connect fired, so
+      // the previous server's table and offset must not leak in.
+      const tableTarget = draft ? null : (nextTable ?? state?.tableName ?? "").trim() || null;
       // Switching the active table resets paging — the previous
       // table's offset doesn't apply.
       const tableChanged = tableTarget !== (state?.tableName ?? "");
-      const effectiveOffset = nextOffset ?? (tableChanged ? 0 : pageOffset);
+      const effectiveOffset = draft ? 0 : nextOffset ?? (tableChanged ? 0 : pageOffset);
       const effectiveSize = nextSize ?? pageSize;
       const s = await cmd.mysqlBrowse({
         host: target.host,
         port: target.port,
-        user: tab.mysqlUser.trim(),
+        user: connectionUser.trim(),
         password: pw,
-        database: tab.mysqlDatabase.trim() || null,
+        database: connectionDatabase.trim() || null,
         table: tableTarget,
         offset: effectiveOffset,
         limit: effectiveSize,
@@ -242,7 +258,7 @@ function MySqlPanelBody({ tab }: Props) {
     kind: "mysql",
     tunnelSlot: "mysql",
     adapter: MYSQL_ADAPTER,
-    browse: (pwOverride) => browse(pwOverride),
+    browse: (pwOverride, draft) => browse(pwOverride, undefined, undefined, undefined, draft),
     hasLiveState: state !== null,
     onReset: resetPanel,
     setError,
@@ -908,6 +924,7 @@ function MySqlPanelBody({ tab }: Props) {
         adopting={flow.adopting}
         tab={tab}
         onSaved={flow.handleCredentialAdded}
+        onConnect={flow.handleCredentialConnected}
       />
       {tab.mysqlActiveCredentialId && flow.savedIndex !== null && (
         <DbPasswordUpdateDialog

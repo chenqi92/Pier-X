@@ -116,7 +116,7 @@ function ToolContent({
     case "redis":
       return tab ? <RedisPanel key={tab.id} tab={tab} /> : renderSplash("redis", t, onConnectSaved, onNewConnection);
     case "log":
-      return tab ? <LogViewerPanel key={tab.id} tab={tab} /> : renderSplash("log", t, onConnectSaved, onNewConnection);
+      return tab ? <LogViewerPanel key={tab.id} tab={tab} isActive={isActive} /> : renderSplash("log", t, onConnectSaved, onNewConnection);
     case "sftp":
       return tab ? <SftpPanel key={tab.id} tab={tab} /> : renderSplash("sftp", t, onConnectSaved, onNewConnection);
     case "search":
@@ -126,7 +126,7 @@ function ToolContent({
     case "webserver":
       return tab ? <WebServerPanel key={tab.id} tab={tab} /> : renderSplash("webserver", t, onConnectSaved, onNewConnection);
     case "software":
-      return tab ? <SoftwarePanel key={tab.id} tab={tab} /> : renderSplash("software", t, onConnectSaved, onNewConnection);
+      return tab ? <SoftwarePanel key={tab.id} tab={tab} isActive={isActive} /> : renderSplash("software", t, onConnectSaved, onNewConnection);
     case "markdown":
       return <MarkdownPanel key={markdownPath} filePath={markdownPath} />;
     default:

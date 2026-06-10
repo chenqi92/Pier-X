@@ -194,6 +194,94 @@
   font-size: var(--size-small);
 }
 
+/* ─── Shared inline note / clear affordances ───────────────────── */
+.lg-x {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  width: var(--icon-md);
+  height: var(--icon-md);
+  border-radius: var(--radius-xs);
+  display: grid;
+  place-items: center;
+  cursor: default;
+}
+.lg-x:hover { color: var(--ink); background: var(--panel-2); }
+
+.lg-ic {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  width: calc(var(--control-height) - var(--sp-1-5));
+  height: calc(var(--control-height) - var(--sp-1-5));
+  border-radius: var(--radius-xs);
+  cursor: default;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.lg-ic:hover {
+  color: var(--ink);
+  background: var(--panel-2);
+  border-color: var(--line-2);
+}
+.lg-ic.on {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.lg-ic:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.lg-note {
+  padding: var(--sp-1-5) var(--sp-3);
+  color: var(--muted);
+  font-size: var(--size-small);
+}
+.lg-note--error {
+  color: var(--neg);
+  background: color-mix(in srgb, var(--neg) 6%, transparent);
+  border-left: var(--sp-0-5) solid var(--neg);
+}
+.lg-note--dismissible {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding-right: var(--sp-2);
+}
+.lg-note--dismissible .lg-note-body {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.lg-note-action {
+  flex: none;
+  align-self: center;
+}
+.lg-note-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-xl);
+  height: var(--icon-xl);
+  padding: 0;
+  margin-top: var(--sp-0-5);
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-xs);
+  cursor: default;
+  opacity: 0.7;
+  transition: opacity var(--dur-fast) var(--easing), background var(--dur-fast) var(--easing);
+}
+.lg-note-close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
 /* Generic spin utility — apply to any SVG icon for a steady rotation. */
 .spin {
   animation: spin 0.9s linear infinite;

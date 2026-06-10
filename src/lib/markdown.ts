@@ -38,6 +38,17 @@ function safeUrl(url: string): string {
   return trimmed;
 }
 
+// Image sources are stricter than link hrefs: the app CSP only
+// allows `img-src 'self' data: https:`, so anything else (notably
+// plain http:) returns "" and the caller falls back to alt text.
+function safeImageSrc(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  if (/^(https:|\/|\.\/|\.\.\/)/i.test(trimmed)) return trimmed;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return "";
+  return trimmed;
+}
+
 function renderInline(src: string): string {
   // Tokenize step by step against the source so we can emit raw HTML
   // for the recognised constructs and escape everything else. We walk
@@ -74,7 +85,13 @@ function renderInline(src: string): string {
         if (urlEnd > 0) {
           const alt = src.slice(i + 2, close);
           const url = src.slice(close + 2, urlEnd);
-          out += `<img alt="${escapeAttr(alt)}" src="${escapeAttr(safeUrl(url))}" loading="lazy"/>`;
+          const src_ = safeImageSrc(url);
+          // Sources the CSP would block anyway (plain http:, exotic
+          // schemes) degrade to the alt text instead of a broken
+          // image plus a console violation.
+          out += src_
+            ? `<img alt="${escapeAttr(alt)}" src="${escapeAttr(src_)}" loading="lazy"/>`
+            : escapeHtml(alt || url);
           i = urlEnd + 1;
           continue;
         }

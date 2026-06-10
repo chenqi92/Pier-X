@@ -43,8 +43,10 @@ pub fn extract(cmd: &str) -> Result<CommandPack, String> {
         ));
     }
     let body = strip_backspace_overstrike(&String::from_utf8_lossy(&out.stdout));
-    let mut pack = CommandPack::default();
-    pack.command = cmd.to_string();
+    let mut pack = CommandPack {
+        command: cmd.to_string(),
+        ..Default::default()
+    };
     parse_into(&body, &mut pack);
     if pack.subcommands.is_empty() && pack.options.is_empty() {
         return Err(format!("man `{cmd}` had no recognised entries"));
@@ -164,7 +166,7 @@ fn flush(current: &mut Option<Pending>, state: &mut State, pack: &mut CommandPac
             // value placeholder ("-t, --tag tag"). Drop the
             // placeholder.
             let head = pending.head.clone();
-            let mut head_parts = head.splitn(2, |c: char| c == ' ' || c == '\t');
+            let mut head_parts = head.splitn(2, [' ', '\t']);
             let raw_flag = head_parts.next().unwrap_or("");
             // Look for `, --long` continuation on the same line.
             let flag = if let Some(rest) = head_parts.next() {

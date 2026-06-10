@@ -60,10 +60,12 @@ pub fn extract(cmd: &str) -> Result<CommandPack, String> {
         ));
     }
     let body = String::from_utf8_lossy(&out.stdout);
-    let mut pack = CommandPack::default();
-    pack.command = cmd.to_string();
-    pack.subcommands = parse_describe_blocks(&body);
-    pack.options = parse_argument_flags(&body);
+    let pack = CommandPack {
+        command: cmd.to_string(),
+        subcommands: parse_describe_blocks(&body),
+        options: parse_argument_flags(&body),
+        ..Default::default()
+    };
     if pack.subcommands.is_empty() && pack.options.is_empty() {
         return Err(format!("zsh script for `{cmd}` had no recognised entries"));
     }
@@ -257,7 +259,7 @@ fn recover_flag_before(prefix: &str) -> Option<&str> {
     trimmed
         .rsplit(|c: char| c.is_whitespace() || c == ',')
         .next()
-        .map(|s| s.trim_start_matches(|c: char| c == '\'' || c == '"' || c == '='))
+        .map(|s| s.trim_start_matches(['\'', '"', '=']))
         .map(str::trim)
 }
 

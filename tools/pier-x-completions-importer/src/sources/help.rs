@@ -33,8 +33,10 @@ use crate::timeout::{run_with_timeout, DEFAULT_TIMEOUT};
 
 pub fn extract(cmd: &str) -> Result<CommandPack, String> {
     let body = run_help(cmd)?;
-    let mut pack = CommandPack::default();
-    pack.command = cmd.to_string();
+    let mut pack = CommandPack {
+        command: cmd.to_string(),
+        ..Default::default()
+    };
     parse_into(&body, &mut pack);
     if pack.subcommands.is_empty() && pack.options.is_empty() {
         return Err(format!("`{cmd} --help` had no recognised entries"));

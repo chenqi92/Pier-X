@@ -45,6 +45,8 @@ pub struct OptionEntry {
 impl SubcommandEntry {
     /// Build a single-locale entry. The importer always populates
     /// `en` initially; a later locale-overlay pass adds zh-CN.
+    // dead_code: src/bin/merge_packs.rs re-includes this file via #[path], and that binary never calls with_en.
+    #[allow(dead_code)]
     pub fn with_en(name: impl Into<String>, description: impl Into<String>) -> Self {
         let mut i18n = BTreeMap::new();
         i18n.insert("en".to_string(), description.into());
@@ -58,6 +60,8 @@ impl SubcommandEntry {
 }
 
 impl OptionEntry {
+    // dead_code: src/bin/merge_packs.rs re-includes this file via #[path], and that binary never calls with_en.
+    #[allow(dead_code)]
     pub fn with_en(flag: impl Into<String>, description: impl Into<String>) -> Self {
         let mut i18n = BTreeMap::new();
         i18n.insert("en".to_string(), description.into());

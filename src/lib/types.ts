@@ -288,6 +288,17 @@ export type EgressDns =
  *  is gated behind a backend cargo feature. */
 export type ExternalVpnEngine = "open_vpn" | "open_connect";
 
+/** WebVPN dialect handed to `openconnect --protocol=<x>`. Values
+ *  mirror `pier_core::egress::OpenConnectProtocol`. */
+export type OpenConnectProtocol =
+  | "anyconnect"
+  | "nc"
+  | "gp"
+  | "pulse"
+  | "f5"
+  | "fortinet"
+  | "array";
+
 /** Discriminated union of supported egress kinds. The `kind` field
  *  doubles as the serde tag, matching `pier_core::egress::EgressKind`. */
 export type EgressKind =
@@ -301,7 +312,13 @@ export type EgressKind =
        *  back to the app-managed slot under `~/.config/pier-x/egress/<id>.conf`. */
       confPath: string;
     }
-  | { kind: "external_vpn"; engine: ExternalVpnEngine; config: string };
+  | {
+      kind: "external_vpn";
+      engine: ExternalVpnEngine;
+      config: string;
+      /** OpenConnect only. Omitted / null → AnyConnect default. */
+      protocol?: OpenConnectProtocol | null;
+    };
 
 /** One egress profile. The flattened serde shape on the Rust side
  *  means the `kind` discriminator and its fields live alongside

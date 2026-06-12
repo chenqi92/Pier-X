@@ -200,22 +200,13 @@ fn plan_for(profile_id: &str, kind: &EgressKind) -> io::Result<Option<SpawnPlan>
                 ));
             }
             let conf_str = conf.display().to_string();
-            Ok(Some(SpawnPlan {
-                program: "wg-quick".to_string(),
-                args: vec!["up".to_string(), conf_str.clone()],
-                expect_tun_within: Duration::from_secs(10),
-                // `wg-quick up` configures the interface then exits 0 —
-                // it is NOT a long-lived daemon. Hold no child; tear
-                // down with `wg-quick down <conf>` on Drop.
-                lifecycle: Lifecycle::Oneshot {
-                    teardown: TeardownPlan {
-                        program: "wg-quick".to_string(),
-                        args: vec!["down".to_string(), conf_str],
-                    },
-                },
-            }))
+            Ok(Some(wireguard_plan(&conf, conf_str)?))
         }
-        EgressKind::ExternalVpn { engine, config } => {
+        EgressKind::ExternalVpn {
+            engine,
+            config,
+            protocol,
+        } => {
             reject_flaglike(config, "external vpn config")?;
             match engine {
                 ExternalVpnEngine::OpenVpn => Ok(Some(SpawnPlan {
@@ -224,17 +215,107 @@ fn plan_for(profile_id: &str, kind: &EgressKind) -> io::Result<Option<SpawnPlan>
                     expect_tun_within: Duration::from_secs(20),
                     lifecycle: Lifecycle::Daemon,
                 })),
-                ExternalVpnEngine::OpenConnect => Ok(Some(SpawnPlan {
-                    program: "openconnect".to_string(),
+                ExternalVpnEngine::OpenConnect => {
+                    // `--protocol` selects the WebVPN dialect
+                    // (anyconnect / nc / gp / pulse / f5 / fortinet /
+                    // array). Omitted → the binary's AnyConnect
+                    // default. Values come from a closed enum, so no
+                    // injection surface here.
+                    let mut args = Vec::new();
+                    if let Some(p) = protocol {
+                        args.push(format!("--protocol={}", p.flag_value()));
+                    }
                     // OpenConnect treats the bare positional arg as the
                     // VPN gateway hostname (or `--config <file>`).
-                    args: vec![config.clone()],
-                    expect_tun_within: Duration::from_secs(30),
-                    lifecycle: Lifecycle::Daemon,
-                })),
+                    args.push(config.clone());
+                    Ok(Some(SpawnPlan {
+                        program: "openconnect".to_string(),
+                        args,
+                        expect_tun_within: Duration::from_secs(30),
+                        lifecycle: Lifecycle::Daemon,
+                    }))
+                }
             }
         }
         _ => Ok(None),
+    }
+}
+
+/// WireGuard spawn plan for the current platform.
+///
+/// Unix: `wg-quick up <conf>` (configure-and-exit) torn down by
+/// `wg-quick down <conf>`.
+///
+/// Windows has no wg-quick — the official client installs the tunnel
+/// as a Windows service instead: `wireguard.exe /installtunnelservice
+/// <conf>` (service name derives from the conf file stem), torn down
+/// by `wireguard.exe /uninstalltunnelservice <stem>`. Both verbs need
+/// an elevated process, same privilege stance as the Unix path.
+#[cfg(not(windows))]
+fn wireguard_plan(_conf: &std::path::Path, conf_str: String) -> io::Result<SpawnPlan> {
+    Ok(SpawnPlan {
+        program: "wg-quick".to_string(),
+        args: vec!["up".to_string(), conf_str.clone()],
+        expect_tun_within: Duration::from_secs(10),
+        // `wg-quick up` configures the interface then exits 0 —
+        // it is NOT a long-lived daemon. Hold no child; tear
+        // down with `wg-quick down <conf>` on Drop.
+        lifecycle: Lifecycle::Oneshot {
+            teardown: TeardownPlan {
+                program: "wg-quick".to_string(),
+                args: vec!["down".to_string(), conf_str],
+            },
+        },
+    })
+}
+
+#[cfg(windows)]
+fn wireguard_plan(conf: &std::path::Path, conf_str: String) -> io::Result<SpawnPlan> {
+    let tunnel = conf
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+    if tunnel.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "wireguard conf filename is not a valid tunnel name: {}",
+                conf.display()
+            ),
+        ));
+    }
+    let program = windows_wireguard_binary();
+    Ok(SpawnPlan {
+        program: program.clone(),
+        args: vec!["/installtunnelservice".to_string(), conf_str],
+        expect_tun_within: Duration::from_secs(10),
+        // `/installtunnelservice` registers + starts the tunnel
+        // service then exits — same configure-and-exit shape as
+        // wg-quick, with the uninstall verb as teardown.
+        lifecycle: Lifecycle::Oneshot {
+            teardown: TeardownPlan {
+                program,
+                args: vec!["/uninstalltunnelservice".to_string(), tunnel],
+            },
+        },
+    })
+}
+
+/// Locate `wireguard.exe`. The official installer puts it under
+/// `%ProgramFiles%\WireGuard` but does not always extend PATH, so
+/// probe the well-known location first and fall back to PATH lookup.
+#[cfg(windows)]
+fn windows_wireguard_binary() -> String {
+    let program_files =
+        std::env::var_os("ProgramFiles").unwrap_or_else(|| "C:\\Program Files".into());
+    let well_known = PathBuf::from(program_files)
+        .join("WireGuard")
+        .join("wireguard.exe");
+    if well_known.exists() {
+        well_known.display().to_string()
+    } else {
+        "wireguard.exe".to_string()
     }
 }
 
@@ -353,6 +434,7 @@ pub fn spawn(profile_id: &str, kind: &EgressKind) -> io::Result<Option<VpnProces
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::egress::OpenConnectProtocol;
 
     #[test]
     fn plan_for_socks_returns_none() {
@@ -369,6 +451,7 @@ mod tests {
         let kind = EgressKind::ExternalVpn {
             engine: ExternalVpnEngine::OpenVpn,
             config: "/tmp/example.ovpn".into(),
+            protocol: None,
         };
         let plan = plan_for("p", &kind).unwrap().expect("plan");
         assert_eq!(plan.program, "openvpn");
@@ -380,6 +463,7 @@ mod tests {
         let kind = EgressKind::ExternalVpn {
             engine: ExternalVpnEngine::OpenConnect,
             config: "vpn.corp.example.com".into(),
+            protocol: None,
         };
         let plan = plan_for("p", &kind).unwrap().expect("plan");
         assert_eq!(plan.program, "openconnect");
@@ -387,13 +471,79 @@ mod tests {
     }
 
     #[test]
+    fn plan_for_openconnect_protocol_maps_to_flag() {
+        let kind = EgressKind::ExternalVpn {
+            engine: ExternalVpnEngine::OpenConnect,
+            config: "vpn.corp.example.com".into(),
+            protocol: Some(OpenConnectProtocol::Gp),
+        };
+        let plan = plan_for("p", &kind).unwrap().expect("plan");
+        assert_eq!(
+            plan.args,
+            vec![
+                "--protocol=gp".to_string(),
+                "vpn.corp.example.com".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_for_openvpn_ignores_protocol() {
+        let kind = EgressKind::ExternalVpn {
+            engine: ExternalVpnEngine::OpenVpn,
+            config: "/tmp/example.ovpn".into(),
+            protocol: Some(OpenConnectProtocol::Pulse),
+        };
+        let plan = plan_for("p", &kind).unwrap().expect("plan");
+        assert_eq!(plan.args, vec!["--config".to_string(), "/tmp/example.ovpn".into()]);
+    }
+
+    #[test]
     fn plan_for_rejects_flaglike_openconnect_config() {
         let kind = EgressKind::ExternalVpn {
             engine: ExternalVpnEngine::OpenConnect,
             config: "--script=/tmp/evil".into(),
+            protocol: None,
         };
         let err = plan_for("p", &kind).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn wireguard_plan_matches_platform_tooling() {
+        let conf = std::env::temp_dir().join("pier-x-test-wg0.conf");
+        std::fs::write(&conf, "[Interface]\n").expect("write temp conf");
+        let kind = EgressKind::Wireguard {
+            conf_path: conf.display().to_string(),
+        };
+        let plan = plan_for("p", &kind).unwrap().expect("plan");
+        let _ = std::fs::remove_file(&conf);
+        #[cfg(windows)]
+        {
+            assert!(plan.program.ends_with("wireguard.exe"));
+            assert_eq!(plan.args[0], "/installtunnelservice");
+            match plan.lifecycle {
+                Lifecycle::Oneshot { teardown } => {
+                    assert_eq!(
+                        teardown.args,
+                        vec![
+                            "/uninstalltunnelservice".to_string(),
+                            "pier-x-test-wg0".to_string()
+                        ]
+                    );
+                }
+                Lifecycle::Daemon => panic!("wireguard plan must be oneshot"),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(plan.program, "wg-quick");
+            assert_eq!(plan.args[0], "up");
+            match plan.lifecycle {
+                Lifecycle::Oneshot { teardown } => assert_eq!(teardown.args[0], "down"),
+                Lifecycle::Daemon => panic!("wireguard plan must be oneshot"),
+            }
+        }
     }
 
     #[test]

@@ -1,6 +1,8 @@
 import { Key, Server, Shield, ShieldCheck, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import ComboInput from "../components/ComboInput";
 import IconButton from "../components/IconButton";
+import Select from "../components/Select";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
@@ -9,6 +11,13 @@ import type { SavedSshConnection } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useEgressStore } from "../stores/useEgressStore";
 import { useSudoStore } from "../stores/useSudoStore";
+import EgressProfileForm, {
+  type EgressDraft,
+  egressProfileToDraft,
+  emptyEgressDraft,
+  persistEgressDraft,
+  validateEgressDraft,
+} from "./EgressProfileForm";
 
 const EgressProfilesDialog = lazy(() => import("./EgressProfilesDialog"));
 
@@ -95,6 +104,13 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const [envTag, setEnvTag] = useState(initialDraft.envTag);
   const [egressId, setEgressId] = useState(initialDraft.egressId);
   const [egressDialogOpen, setEgressDialogOpen] = useState(false);
+  // Inline egress editor (right pane). Opened from the "Configure…"
+  // button next to the egress picker; edits the selected profile or
+  // drafts a new one without a second stacked dialog.
+  const [egressPaneOpen, setEgressPaneOpen] = useState(false);
+  const [egressDraft, setEgressDraft] = useState<EgressDraft>(() => emptyEgressDraft());
+  const [egressError, setEgressError] = useState("");
+  const [egressSaving, setEgressSaving] = useState(false);
   const [error, setError] = useState("");
   // Guards double-submit: `persistConnection` is async and the buttons
   // previously stayed enabled while the IPC was in flight, so a quick
@@ -143,6 +159,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
     setGroup(next.group);
     setEnvTag(next.envTag);
     setEgressId(next.egressId);
+    setEgressPaneOpen(false);
+    setEgressError("");
     setError("");
   }, [initialConnection, open]);
 
@@ -323,6 +341,42 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
     }
   }
 
+  /** Open the inline egress editor pre-filled with the selected
+   *  profile, or a fresh draft when "Direct" is selected. Clicking
+   *  again collapses the pane. */
+  function toggleEgressPane() {
+    if (egressPaneOpen) {
+      setEgressPaneOpen(false);
+      return;
+    }
+    const selected = egressProfiles.find((p) => p.id === egressId);
+    setEgressDraft(selected ? egressProfileToDraft(selected) : emptyEgressDraft());
+    setEgressError("");
+    setEgressPaneOpen(true);
+  }
+
+  async function handleEgressSave() {
+    if (egressSaving) return;
+    const invalid = validateEgressDraft(egressDraft);
+    if (invalid) {
+      setEgressError(t(invalid));
+      return;
+    }
+    setEgressSaving(true);
+    try {
+      const profile = await persistEgressDraft(egressDraft);
+      // Bind the freshly saved profile to this connection right away —
+      // that's the whole point of editing it from here.
+      setEgressId(profile.id);
+      setEgressError("");
+      setEgressPaneOpen(false);
+    } catch (e) {
+      setEgressError(formatError(e));
+    } finally {
+      setEgressSaving(false);
+    }
+  }
+
   function handleConnect() {
     if (!canDirectConnect) return;
     // Editing an existing connection — prefer the saved-index connect path
@@ -347,7 +401,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   return (
     <div className="cmdp-overlay" onClick={onClose}>
       <div
-        className="dlg dlg--newconn"
+        className={"dlg dlg--newconn" + (egressPaneOpen ? " dlg--newconn-wide" : "")}
         style={dialogStyle}
         onClick={(e) => e.stopPropagation()}
       >
@@ -362,6 +416,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
           </IconButton>
         </div>
         <div className="dlg-body dlg-body--form">
+          <div className={"dlg-split" + (egressPaneOpen ? " dlg-split--two" : "")}>
           <div className="dlg-form">
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Name")}</label>
@@ -369,65 +424,61 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Group")}</label>
-              <input
+              <ComboInput
                 className="dlg-input"
-                list="new-conn-group-list"
-                onChange={(e) => setGroup(e.currentTarget.value)}
+                onChange={(v) => setGroup(v)}
                 placeholder={t("Default")}
                 value={group}
+                suggestions={knownGroups}
               />
-              {knownGroups.length > 0 && (
-                <datalist id="new-conn-group-list">
-                  {knownGroups.map((g) => <option key={g} value={g} />)}
-                </datalist>
-              )}
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Env tag")}</label>
-              <input
+              <ComboInput
                 className="dlg-input"
-                list="new-conn-envtag-list"
-                onChange={(e) => setEnvTag(e.currentTarget.value)}
+                onChange={(v) => setEnvTag(v)}
                 placeholder={t("prod / staging / dev / local")}
                 value={envTag}
+                suggestions={["prod", "staging", "dev", "local"]}
               />
-              <datalist id="new-conn-envtag-list">
-                <option value="prod" />
-                <option value="staging" />
-                <option value="dev" />
-                <option value="local" />
-              </datalist>
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Egress")}</label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "var(--sp-2)" }}>
-                <select
+                <Select
                   className="dlg-input"
                   value={egressId}
-                  onChange={(e) => setEgressId(e.currentTarget.value)}
-                >
-                  <option value="">{t("Direct (no tunnel)")}</option>
-                  {egressProfiles.map((p) => {
-                    const isSystemVpn = p.kind === "wireguard" || p.kind === "external_vpn";
-                    const prefix = isSystemVpn ? "⚠ " : "";
-                    return (
-                      <option key={p.id} value={p.id}>
-                        {prefix}{p.name || p.id}
-                      </option>
-                    );
-                  })}
-                  {egressId && !egressProfiles.some((p) => p.id === egressId) && (
-                    <option value={egressId}>{t("(missing)")}: {egressId}</option>
-                  )}
-                </select>
+                  onChange={(val) => {
+                    setEgressId(val);
+                    // Keep the open inline editor in sync with the
+                    // selection — it always edits "the selected
+                    // profile" (unsaved pane edits are discarded).
+                    if (egressPaneOpen) {
+                      const sel = egressProfiles.find((p) => p.id === val);
+                      setEgressDraft(sel ? egressProfileToDraft(sel) : emptyEgressDraft());
+                      setEgressError("");
+                    }
+                  }}
+                  items={[
+                    { value: "", label: t("Direct (no tunnel)") },
+                    ...egressProfiles.map((p) => {
+                      const isSystemVpn = p.kind === "wireguard" || p.kind === "external_vpn";
+                      const prefix = isSystemVpn ? "⚠ " : "";
+                      return { value: p.id, label: `${prefix}${p.name || p.id}` };
+                    }),
+                    ...(egressId && !egressProfiles.some((p) => p.id === egressId)
+                      ? [{ value: egressId, label: `${t("(missing)")}: ${egressId}` }]
+                      : []),
+                  ]}
+                />
                 <button
                   type="button"
-                  className="gb-btn"
-                  onClick={() => setEgressDialogOpen(true)}
-                  title={t("Manage egress profiles")}
+                  className={"gb-btn" + (egressPaneOpen ? " active" : "")}
+                  onClick={toggleEgressPane}
+                  title={t("Edit the selected egress profile, or create a new one, in a side pane")}
                 >
                   <Shield size={12} />
-                  {t("Manage…")}
+                  {t("Configure…")}
                 </button>
               </div>
             </div>
@@ -611,6 +662,45 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
               </div>
             ) : null}
             {error && <div className="status-note status-note--error">{error}</div>}
+          </div>
+          {egressPaneOpen && (
+            <div className="dlg-split-pane">
+              <div className="dlg-split-pane-title">
+                <Shield size={12} />
+                {t(egressDraft.isNew ? "New egress profile" : "Edit egress profile")}
+              </div>
+              <EgressProfileForm
+                draft={egressDraft}
+                onChange={setEgressDraft}
+                connections={connections}
+              />
+              {egressError && (
+                <div className="status-note status-note--error">{egressError}</div>
+              )}
+              <div className="dlg-split-pane-foot">
+                <button
+                  type="button"
+                  className="gb-btn"
+                  onClick={() => setEgressDialogOpen(true)}
+                  title={t("Manage egress profiles")}
+                >
+                  {t("Manage…")}
+                </button>
+                <div style={{ flex: 1 }} />
+                <button type="button" className="gb-btn" onClick={() => setEgressPaneOpen(false)}>
+                  {t("Cancel")}
+                </button>
+                <button
+                  type="button"
+                  className="gb-btn primary"
+                  disabled={egressSaving}
+                  onClick={() => void handleEgressSave()}
+                >
+                  {t("Save profile")}
+                </button>
+              </div>
+            </div>
+          )}
           </div>
         </div>
         <div className="dlg-foot">

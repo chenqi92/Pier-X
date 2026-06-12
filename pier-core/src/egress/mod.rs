@@ -131,6 +131,12 @@ pub enum EgressKind {
     /// Jump through an existing saved SSH connection. Stage B.
     SshJump {
         /// References an [`crate::ssh::SshConfig`] by name.
+        ///
+        /// Serialized as `viaConnection` — the profile crosses the
+        /// Tauri IPC boundary verbatim and the frontend speaks
+        /// camelCase. The snake_case alias keeps any pre-existing
+        /// on-disk store entries readable.
+        #[serde(rename = "viaConnection", alias = "via_connection")]
         via_connection: String,
     },
     /// WireGuard via system `wg-quick` subprocess. The actual peer
@@ -146,7 +152,10 @@ pub enum EgressKind {
         /// Absolute path to a wg-quick compatible `.conf` file.
         /// Empty / omitted → the default per-profile path under
         /// the app data dir.
-        #[serde(default)]
+        ///
+        /// Serialized as `confPath` (camelCase over IPC); the
+        /// snake_case alias keeps old on-disk entries readable.
+        #[serde(default, rename = "confPath", alias = "conf_path")]
         conf_path: String,
     },
     /// External VPN binary (openvpn / openconnect). Stage B+.
@@ -158,6 +167,11 @@ pub enum EgressKind {
         /// Path to the config (`.ovpn` for OpenVPN, hostname or `.xml`
         /// for OpenConnect).
         config: String,
+        /// OpenConnect protocol flavour, mapped to `--protocol=<x>`.
+        /// `None` means the binary default (AnyConnect). Ignored for
+        /// the OpenVPN engine.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        protocol: Option<OpenConnectProtocol>,
     },
 }
 
@@ -171,6 +185,43 @@ pub enum ExternalVpnEngine {
     OpenConnect,
 }
 
+/// WebVPN dialect passed to `openconnect --protocol=<x>`. Variant
+/// serde names match the binary's accepted values exactly, so
+/// [`OpenConnectProtocol::flag_value`] and the wire format agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenConnectProtocol {
+    /// Cisco AnyConnect / ocserv (binary default).
+    Anyconnect,
+    /// Juniper Network Connect.
+    Nc,
+    /// Palo Alto GlobalProtect.
+    Gp,
+    /// Pulse Connect Secure / Ivanti.
+    Pulse,
+    /// F5 BIG-IP.
+    F5,
+    /// Fortinet FortiGate.
+    Fortinet,
+    /// Array Networks AG.
+    Array,
+}
+
+impl OpenConnectProtocol {
+    /// The value accepted by `openconnect --protocol=`.
+    pub fn flag_value(self) -> &'static str {
+        match self {
+            OpenConnectProtocol::Anyconnect => "anyconnect",
+            OpenConnectProtocol::Nc => "nc",
+            OpenConnectProtocol::Gp => "gp",
+            OpenConnectProtocol::Pulse => "pulse",
+            OpenConnectProtocol::F5 => "f5",
+            OpenConnectProtocol::Fortinet => "fortinet",
+            OpenConnectProtocol::Array => "array",
+        }
+    }
+}
+
 /// Reference to a credential stored in the OS keyring under the
 /// `pier-x.egress.*` namespace. The blob convention is one logical
 /// secret string; for username/password it's `"user\npassword"`,
@@ -178,6 +229,8 @@ pub enum ExternalVpnEngine {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EgressAuthRef {
     /// Keyring key, conventionally `pier-x.egress.<profile-id>`.
+    /// camelCase over IPC; snake_case alias for old on-disk entries.
+    #[serde(rename = "credentialId", alias = "credential_id")]
     pub credential_id: String,
 }
 
@@ -477,19 +530,94 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_external_vpn_keeps_engine() {
+    fn round_trip_external_vpn_keeps_engine_and_protocol() {
         let p = EgressProfile {
             id: "p2".into(),
             name: "AnyConnect".into(),
             kind: EgressKind::ExternalVpn {
                 engine: ExternalVpnEngine::OpenConnect,
                 config: "vpn.corp.example.com".into(),
+                protocol: Some(OpenConnectProtocol::Gp),
             },
             dns: None,
         };
         let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"protocol\":\"gp\""));
         let parsed: EgressProfile = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, p);
+    }
+
+    #[test]
+    fn multi_word_fields_serialize_camel_case() {
+        // The profile crosses the Tauri IPC boundary verbatim, and
+        // the frontend types (src/lib/types.ts) speak camelCase.
+        let jump = EgressProfile {
+            id: "j".into(),
+            name: "jump".into(),
+            kind: EgressKind::SshJump {
+                via_connection: "prod-bastion".into(),
+            },
+            dns: None,
+        };
+        let json = serde_json::to_string(&jump).unwrap();
+        assert!(json.contains("\"viaConnection\":\"prod-bastion\""));
+
+        let wg = EgressProfile {
+            id: "w".into(),
+            name: "wg".into(),
+            kind: EgressKind::Wireguard {
+                conf_path: "/etc/wireguard/wg0.conf".into(),
+            },
+            dns: None,
+        };
+        let json = serde_json::to_string(&wg).unwrap();
+        assert!(json.contains("\"confPath\""));
+
+        let socks = EgressProfile {
+            id: "s".into(),
+            name: "s".into(),
+            kind: EgressKind::Socks5 {
+                host: "10.0.0.1".into(),
+                port: 1080,
+                auth: Some(EgressAuthRef {
+                    credential_id: "pier-x.egress.s".into(),
+                }),
+            },
+            dns: None,
+        };
+        let json = serde_json::to_string(&socks).unwrap();
+        assert!(json.contains("\"credentialId\""));
+    }
+
+    #[test]
+    fn snake_case_aliases_still_deserialize() {
+        // Pre-rename on-disk entries used snake_case field names.
+        let parsed: EgressProfile = serde_json::from_str(
+            r#"{"id":"j","name":"jump","kind":"ssh_jump","via_connection":"prod-bastion"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            parsed.kind,
+            EgressKind::SshJump { ref via_connection } if via_connection == "prod-bastion"
+        ));
+
+        let parsed: EgressProfile = serde_json::from_str(
+            r#"{"id":"w","name":"wg","kind":"wireguard","conf_path":"/x/wg0.conf"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            parsed.kind,
+            EgressKind::Wireguard { ref conf_path } if conf_path == "/x/wg0.conf"
+        ));
+
+        let parsed: EgressProfile = serde_json::from_str(
+            r#"{"id":"s","name":"s","kind":"socks5","host":"h","port":1080,"auth":{"credential_id":"pier-x.egress.s"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            parsed.kind,
+            EgressKind::Socks5 { auth: Some(ref a), .. } if a.credential_id == "pier-x.egress.s"
+        ));
     }
 
     #[test]

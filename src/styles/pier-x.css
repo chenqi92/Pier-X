@@ -1106,6 +1106,8 @@ body.is-panel-animating .rightzone {
 }
 .dlg.small,
 .dlg--newconn { width: 520px; }
+/* Widened when the inline egress editor pane is open. */
+.dlg--newconn-wide { width: 1040px; }
 .dlg--new-entry { width: 440px; }
 .dlg--diff {
   width: 1120px;
@@ -1758,6 +1760,47 @@ body.is-panel-animating .rightzone {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2-5);
+}
+
+/* Two-column dialog body: main form on the left, an optional inline
+   editor pane (e.g. the egress profile editor in NewConnectionDialog)
+   on the right. Single column collapses to the plain form. */
+.dlg-split {
+  display: flex;
+  gap: var(--sp-4);
+  align-items: stretch;
+}
+.dlg-split > .dlg-form { flex: 1; min-width: 0; }
+.dlg-split-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2-5);
+  border-left: 1px solid var(--line);
+  padding-left: var(--sp-4);
+}
+.dlg-split-pane-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+.dlg-split-pane-title svg { color: var(--accent); }
+.dlg-split-pane-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
 }
 
 .dlg-input {

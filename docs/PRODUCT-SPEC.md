@@ -143,8 +143,8 @@ Pier-X 是一款桌面开发辅助工具，把**终端 / Git / SSH / 数据库 /
 | `none` | 不走任何通道（默认） | — | — |
 | `socks5` / `http` | 公司代理 / Clash / Mihomo / 跳板机 SOCKS | 无 | 在建连 socket 上做 CONNECT 协商 |
 | `ssh-jump` | 经一台已保存的 SSH 主机做 jump host | 无 | russh 多通道 + ProxyJump 语义 |
-| `wireguard` | 自建 WG / Tailscale 风格出口 | 管理员 | 调用系统 `wg-quick` / `wireguard-go`，系统级 tun 接管路由 |
-| `external-vpn` | OpenVPN / OpenConnect / AnyConnect 兼容 | 管理员 | 调用系统 `openvpn` / `openconnect` 二进制，系统级 tun 接管路由 |
+| `wireguard` | 自建 WG / Tailscale 风格出口 | 管理员 | macOS / Linux 调用系统 `wg-quick`；Windows 调用 `wireguard.exe /installtunnelservice`（官方客户端的隧道服务），系统级 tun 接管路由 |
+| `external-vpn` | OpenVPN / OpenConnect / AnyConnect 兼容 | 管理员 | 调用系统 `openvpn` / `openconnect` 二进制，系统级 tun 接管路由；openconnect 可选 `--protocol=anyconnect/nc/gp/pulse/f5/fortinet/array` 指定 WebVPN 方言 |
 
 **安全与边界**：
 
@@ -152,7 +152,7 @@ Pier-X 是一款桌面开发辅助工具，把**终端 / Git / SSH / 数据库 /
 - `wireguard` / `external-vpn` 都是 **subprocess 模型**：启动后系统 tun 接管路由，**这一刻起所有走该 profile 的连接共享同一系统级隧道**。Per-connection 隔离不在 §3.4 范围内（要做需要平台特定策略路由 + root，超出 Pier-X 边界）。
 - 这两类 profile 都需要管理员权限（macOS sudo 提示 / Windows UAC / Linux pkexec），用户在 UI 里启用 profile 即触发提权 prompt。
 - 不接管系统级 VPN 配置（不写 macOS 系统设置里的 IKEv2、不写 NetworkManager profile）。Pier-X 仅 spawn 子进程，profile 删除时 SIGTERM 进程；OS 路由的清理由对应 VPN 客户端自己做（`wg-quick down` / `openvpn` SIGTERM 时的 cleanup）。
-- WebVPN（思科 AnyConnect / 深信服 EasyConnect / 华为等私有协议）只通过 OpenConnect 兼容的子集支持；私有逆向客户端**不内置**。
+- WebVPN（思科 AnyConnect / 深信服 EasyConnect / 华为等私有协议）只通过 OpenConnect 兼容的子集支持（profile 里的 `protocol` 字段映射到 `openconnect --protocol`，覆盖 AnyConnect / Juniper NC / GlobalProtect / Pulse / F5 / Fortinet / Array）；私有逆向客户端**不内置**。
 
 **存储**：
 
@@ -161,8 +161,9 @@ Pier-X 是一款桌面开发辅助工具，把**终端 / Git / SSH / 数据库 /
 
 **UI 入口**：
 
-- 编辑/新建连接（`NewConnectionDialog`）里加一个「出站通道」下拉，选项 = 已有 profiles + `Direct (no tunnel)` + `Manage egress profiles…`。
-- Egress profiles 的增删改在**设置页**里集中管理；不在 Sidebar 单开子 tab，不污染 Servers 列表。
+- 编辑/新建连接（`NewConnectionDialog`）里有一个「出站通道」下拉，选项 = 已有 profiles + `Direct (no tunnel)`。
+- 下拉旁的「配置…」按钮在**同一弹框右侧展开内联编辑列**（`EgressProfileForm`），新建 / 编辑当前选中的 profile，保存后自动绑定到该连接；不弹二级弹框。
+- 删除 / 剪贴板导入 / 连通性测试 / VPN 启停等管理操作在独立的管理弹框（`EgressProfilesDialog`，复用同一表单组件）；入口在内联编辑列底部的「管理…」。不在 Sidebar 单开子 tab，不污染 Servers 列表。
 
 **DNS 策略**：
 

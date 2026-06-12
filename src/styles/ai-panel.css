@@ -127,13 +127,87 @@
 .ai-notice.is-error {
   color: var(--neg);
 }
+.ai-notice__hint {
+  margin-top: var(--sp-1);
+  color: var(--muted);
+}
 
 /* ── Assistant markdown: text runs + fenced code blocks ── */
-.ai-md-text {
-  white-space: pre-wrap;
+/* Chat-tuned markdown (compact, no document chrome — distinct from
+ * the full-page `.markdown-preview`). Tokens only. */
+.ai-md {
+  font-size: var(--ui-fs);
+  line-height: 1.55;
+  color: var(--ink);
 }
-.ai-md-text + .ai-code,
-.ai-code + .ai-md-text,
+.ai-md > :first-child { margin-top: 0; }
+.ai-md > :last-child { margin-bottom: 0; }
+.ai-md p { margin: 0 0 var(--sp-2); }
+.ai-md h1,
+.ai-md h2,
+.ai-md h3,
+.ai-md h4 {
+  margin: var(--sp-3) 0 var(--sp-1);
+  font-family: var(--sans);
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.3;
+}
+.ai-md h1 { font-size: var(--ui-fs-lg); }
+.ai-md h2 { font-size: var(--ui-fs-lg); }
+.ai-md h3,
+.ai-md h4 { font-size: var(--ui-fs); }
+.ai-md ul,
+.ai-md ol {
+  margin: 0 0 var(--sp-2);
+  padding-left: var(--sp-5);
+}
+.ai-md li { margin: var(--sp-0-5) 0; }
+.ai-md code {
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  background: var(--surface-2);
+  color: var(--accent);
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  word-break: break-word;
+}
+.ai-md pre {
+  margin: 0 0 var(--sp-2);
+  padding: var(--sp-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+.ai-md pre code {
+  background: transparent;
+  color: var(--ink);
+  padding: 0;
+  white-space: pre;
+}
+.ai-md blockquote {
+  margin: 0 0 var(--sp-2);
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--line-2);
+  color: var(--muted);
+}
+.ai-md a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-dim);
+}
+.ai-md a:hover { border-bottom-color: var(--accent); }
+.ai-md strong { font-weight: 600; color: var(--ink); }
+.ai-md em { font-style: italic; }
+.ai-md hr {
+  margin: var(--sp-3) 0;
+  border: none;
+  border-top: 1px solid var(--line);
+}
+.ai-md img { max-width: 100%; border-radius: var(--radius-sm); }
+.ai-md + .ai-code,
+.ai-code + .ai-md,
 .ai-code + .ai-code {
   margin-top: var(--sp-2);
 }

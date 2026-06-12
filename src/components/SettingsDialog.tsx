@@ -43,6 +43,8 @@ import {
 } from "../lib/logger";
 import type { ComponentType, SVGProps } from "react";
 import IconButton from "./IconButton";
+import Select from "./Select";
+import ComboInput from "./ComboInput";
 import SudoPasswordDialog from "./SudoPasswordDialog";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
@@ -2055,6 +2057,8 @@ function AiSettingsPanel() {
   const [models, setModels] = useState<string[]>([]);
   const [fetchState, setFetchState] = useState<string | null>(null);
   const [fetching, setFetching] = useState(false);
+  const [testState, setTestState] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
   const [whitelist, setWhitelist] = useState<aiCmd.AiWhitelistEntry[]>([]);
 
   // Per-vendor key slot: switching vendors re-reads ITS keyring
@@ -2123,6 +2127,20 @@ function AiSettingsPanel() {
       .finally(() => setFetching(false));
   };
 
+  // Unlike "fetch models" (GET /models) this exercises the REAL chat
+  // path — a 1-token POST to chat/completions — so it catches the
+  // "model list works but chat is unreachable / model id rejected"
+  // class of failure.
+  const testConnection = () => {
+    setTesting(true);
+    setTestState(null);
+    aiCmd
+      .aiTestConnection(providerPayload())
+      .then((msg) => setTestState(`✓ ${msg}`))
+      .catch((err) => setTestState(`✗ ${String(err)}`))
+      .finally(() => setTesting(false));
+  };
+
   return (
     <>
       <SectionTitle>{t("Model provider")}</SectionTitle>
@@ -2130,28 +2148,22 @@ function AiSettingsPanel() {
         label={t("Provider")}
         description={t("Bring your own key. Nothing leaves this machine until a model is configured.")}
       >
-        <select
+        <Select
           className="settings__select"
           value={vendorId}
-          onChange={(e) => applyVendor(e.currentTarget.value)}
-        >
-          {aiVendorsByGroup().map(({ group, vendors }) => (
-            <optgroup key={group} label={t(AI_VENDOR_GROUP_LABELS[group])}>
-              {vendors.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.label}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+          onChange={applyVendor}
+          items={aiVendorsByGroup().map(({ group, vendors }) => ({
+            group: t(AI_VENDOR_GROUP_LABELS[group]),
+            options: vendors.map((v) => ({ value: v.id, label: v.label })),
+          }))}
+        />
       </SettingRow>
       <SettingRow
         label={t("Base URL")}
         description={t("Preset default — always editable, so a vendor moving its endpoint never blocks you.")}
       >
         <input
-          className="settings__select"
+          className="settings__input"
           value={settings.aiBaseUrl}
           onChange={(e) => settings.setAiBaseUrl(e.currentTarget.value)}
           placeholder={vendor.baseUrl || "https://…/v1"}
@@ -2170,7 +2182,7 @@ function AiSettingsPanel() {
       >
         <div style={{ display: "flex", gap: "var(--sp-2)" }}>
           <input
-            className="settings__select"
+            className="settings__input"
             type="password"
             value={keyDraft}
             onChange={(e) => setKeyDraft(e.currentTarget.value)}
@@ -2189,19 +2201,14 @@ function AiSettingsPanel() {
         }
       >
         <div style={{ display: "flex", gap: "var(--sp-2)" }}>
-          <input
-            className="settings__select"
-            list="ai-model-options"
+          <ComboInput
+            className="settings__input"
+            mono
             value={settings.aiModel}
-            onChange={(e) => settings.setAiModel(e.currentTarget.value)}
+            onChange={settings.setAiModel}
+            suggestions={models}
             placeholder={vendor.modelHint ?? "model-id"}
-            style={{ fontFamily: "var(--mono)" }}
           />
-          <datalist id="ai-model-options">
-            {models.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
           <button type="button" className="btn is-compact" onClick={fetchModels} disabled={fetching}>
             {fetching ? t("Fetching…") : t("Fetch models")}
           </button>
@@ -2212,14 +2219,31 @@ function AiSettingsPanel() {
         description={t("0 = default (4096). Caps a single model response.")}
       >
         <input
-          className="settings__select"
+          className="settings__input"
           type="number"
           min={0}
           max={64000}
           value={settings.aiMaxTokens}
           onChange={(e) => settings.setAiMaxTokens(Number(e.currentTarget.value))}
-          style={{ width: 100 }}
+          style={{ width: 100, minWidth: 100 }}
         />
+      </SettingRow>
+      <SettingRow
+        label={t("Connection test")}
+        description={
+          testState ??
+          t("Sends a 1-token chat through the configured endpoint — verifies the URL, key and model id over the same path the panel uses.")
+        }
+      >
+        <button
+          type="button"
+          className="btn is-compact"
+          onClick={testConnection}
+          disabled={testing || !settings.aiModel.trim()}
+          title={!settings.aiModel.trim() ? t("Set a model id first") : undefined}
+        >
+          {testing ? t("Testing…") : t("Test connection")}
+        </button>
       </SettingRow>
 
       <SectionTitle>{t("Saved configurations")}</SectionTitle>
@@ -2437,17 +2461,12 @@ export default function SettingsDialog({
               <div className="settings__page">
                 <SectionTitle>{t("Typography")}</SectionTitle>
                 <SettingRow label={t("UI font")} description={t("Primary font for interface elements.")}>
-                  <select
+                  <Select
                     className="settings__select"
                     value={settings.uiFontFamily}
-                    onChange={(e) => settings.setUiFontFamily(e.currentTarget.value)}
-                  >
-                    {UI_FONT_OPTIONS.map((f) => (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={settings.setUiFontFamily}
+                    items={UI_FONT_OPTIONS.map((f) => ({ value: f, label: f }))}
+                  />
                 </SettingRow>
 
                 <SettingRow
@@ -2468,17 +2487,12 @@ export default function SettingsDialog({
                 </SettingRow>
 
                 <SettingRow label={t("Code / mono font")} description={t("Used in terminal, code blocks, and tables.")}>
-                  <select
+                  <Select
                     className="settings__select"
                     value={settings.monoFontFamily}
-                    onChange={(e) => settings.setMonoFontFamily(e.currentTarget.value)}
-                  >
-                    {MONO_FONT_OPTIONS.map((f) => (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={settings.setMonoFontFamily}
+                    items={MONO_FONT_OPTIONS.map((f) => ({ value: f, label: f }))}
+                  />
                 </SettingRow>
 
                 <SectionTitle>{t("Preview")}</SectionTitle>
@@ -2526,17 +2540,12 @@ export default function SettingsDialog({
 
                 <SectionTitle>{t("Font")}</SectionTitle>
                 <SettingRow label={t("Font family")} description={t("Monospace font used in the terminal.")}>
-                  <select
+                  <Select
                     className="settings__select"
                     value={settings.monoFontFamily}
-                    onChange={(e) => settings.setMonoFontFamily(e.currentTarget.value)}
-                  >
-                    {MONO_FONT_OPTIONS.map((f) => (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={settings.setMonoFontFamily}
+                    items={MONO_FONT_OPTIONS.map((f) => ({ value: f, label: f }))}
+                  />
                 </SettingRow>
 
                 <SettingRow label={t("Font size")} description={t("{size}px", { size: settings.terminalFontSize })}>

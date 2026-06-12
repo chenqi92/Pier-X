@@ -14,11 +14,16 @@
 //! client the webhook fan-out uses — so callers run this on a worker
 //! thread, never on a UI / IPC thread.
 //!
-//! Cancellation: the `CancellationToken` is checked between SSE
-//! lines. A long silent generation is bounded by the read timeout.
+//! Cancellation: the blocking HTTP work (connect, headers, first
+//! byte, SSE reads) runs on a worker thread; [`stream_chat`] polls
+//! the `CancellationToken` every 100 ms while relaying deltas, so a
+//! stop request takes effect immediately even while the socket is
+//! stuck connecting or waiting for the first byte. An abandoned
+//! worker dies on its own at the connect/read timeout.
 
 use std::io::{BufRead, BufReader};
-use std::time::Duration;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -44,6 +49,11 @@ fn agent() -> ureq::Agent {
 /// fragments as they arrive; tool calls are assembled internally and
 /// returned on the outcome (the caller gates them through the risk
 /// classifier before anything executes).
+///
+/// The HTTP request runs on a worker thread so cancellation is
+/// honoured DURING connect / header / first-byte waits, not just
+/// between SSE lines — without this, a black-holed endpoint pinned
+/// the stop button until the read timeout (3 min) fired.
 pub fn stream_chat(
     cfg: &ProviderConfig,
     system: &str,
@@ -52,10 +62,45 @@ pub fn stream_chat(
     on_delta: &mut dyn FnMut(&str),
     cancel: &CancellationToken,
 ) -> Result<TurnOutcome, AiError> {
-    match cfg.kind {
-        ProviderKind::Anthropic => stream_anthropic(cfg, system, messages, tools, on_delta, cancel),
-        ProviderKind::Openai | ProviderKind::Ollama => {
-            stream_openai(cfg, system, messages, tools, on_delta, cancel)
+    enum Ev {
+        Delta(String),
+        Done(Box<Result<TurnOutcome, AiError>>),
+    }
+    let (tx, rx) = mpsc::channel::<Ev>();
+    let delta_tx = tx.clone();
+    let cfg = cfg.clone();
+    let system = system.to_string();
+    let messages = messages.to_vec();
+    let tools = tools.to_vec();
+    let worker_cancel = cancel.clone();
+    std::thread::spawn(move || {
+        let mut send = |s: &str| {
+            let _ = delta_tx.send(Ev::Delta(s.to_string()));
+        };
+        let result = match cfg.kind {
+            ProviderKind::Anthropic => {
+                stream_anthropic(&cfg, &system, &messages, &tools, &mut send, &worker_cancel)
+            }
+            ProviderKind::Openai | ProviderKind::Ollama => {
+                stream_openai(&cfg, &system, &messages, &tools, &mut send, &worker_cancel)
+            }
+        };
+        // The receiver is gone after a cancel — that's fine.
+        let _ = tx.send(Ev::Done(Box::new(result)));
+    });
+    loop {
+        if cancel.is_cancelled() {
+            // Abandon the worker: its next send fails silently and the
+            // socket dies at its own timeout.
+            return Err(AiError::Cancelled);
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Ev::Delta(s)) => on_delta(&s),
+            Ok(Ev::Done(result)) => return *result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(AiError::Http("provider worker exited unexpectedly".into()));
+            }
         }
     }
 }
@@ -115,11 +160,50 @@ pub fn list_models(cfg: &ProviderConfig) -> Result<Vec<String>, AiError> {
     Ok(models)
 }
 
-/// Cheap reachability + auth probe for the settings dialog —
-/// implemented on top of [`list_models`].
+/// Reachability + auth + model probe for the settings dialog: a
+/// real 1-token, non-streaming chat round-trip through the SAME
+/// endpoint the panel uses. `GET /models` is not a sufficient probe
+/// — it can succeed while `POST /chat/completions` is unreachable
+/// (regional blocks, partial proxies) or rejects the model id.
 pub fn test_connection(cfg: &ProviderConfig) -> Result<String, AiError> {
-    let count = list_models(cfg)?.len();
-    Ok(format!("ok ({count} models visible)"))
+    if cfg.model.trim().is_empty() {
+        return Err(AiError::Protocol("no model configured".into()));
+    }
+    let base = cfg.effective_base_url();
+    let started = Instant::now();
+    match cfg.kind {
+        ProviderKind::Anthropic => {
+            let key = cfg.api_key.as_deref().ok_or(AiError::MissingKey)?;
+            let body = json!({
+                "model": cfg.model,
+                "max_tokens": 1,
+                "messages": [{ "role": "user", "content": [{ "type": "text", "text": "ping" }] }],
+            });
+            agent()
+                .post(&format!("{base}/v1/messages"))
+                .set("content-type", "application/json")
+                .set("x-api-key", key)
+                .set("anthropic-version", "2023-06-01")
+                .send_string(&body.to_string())
+                .map_err(map_ureq_error)?;
+        }
+        ProviderKind::Openai | ProviderKind::Ollama => {
+            let body = json!({
+                "model": cfg.model,
+                "max_tokens": 1,
+                "messages": [{ "role": "user", "content": "ping" }],
+            });
+            let mut req = agent()
+                .post(&format!("{base}/chat/completions"))
+                .set("content-type", "application/json");
+            if let Some(key) = cfg.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
+                req = req.set("authorization", &format!("Bearer {key}"));
+            }
+            req.send_string(&body.to_string()).map_err(map_ureq_error)?;
+        }
+    }
+    let ms = started.elapsed().as_millis();
+    Ok(format!("ok · {} · {ms} ms", cfg.model))
 }
 
 fn map_ureq_error(err: ureq::Error) -> AiError {

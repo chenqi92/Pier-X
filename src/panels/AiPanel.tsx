@@ -24,6 +24,7 @@ import * as ai from "../lib/ai";
 import type { AiRiskLevel, AiToolDecision } from "../lib/ai";
 import * as cmd from "../lib/commands";
 import { writeClipboardText } from "../lib/clipboard";
+import { renderMarkdown } from "../lib/markdown";
 import {
   ensureAiListener,
   useAiStore,
@@ -34,6 +35,7 @@ import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
 import { useI18n } from "../i18n/useI18n";
 import IconButton from "../components/IconButton";
+import Select from "../components/Select";
 import "../styles/ai-panel.css";
 
 type Props = {
@@ -323,22 +325,22 @@ export default function AiPanel({ tab, isActive }: Props) {
           {targetLabel}
         </span>
         {settings.aiProfiles.length > 0 && (
-          <select
+          <Select
+            compact
+            mono
             className="ai-profile-select"
             title={t("Switch model configuration")}
             value={settings.aiActiveProfileId ?? ""}
-            onChange={(e) => {
-              const id = e.currentTarget.value;
+            onChange={(id) => {
               if (id) settings.activateAiProfile(id);
             }}
-          >
-            {settings.aiActiveProfileId === null && <option value="">{t("(draft)")}</option>}
-            {settings.aiProfiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+            items={[
+              ...(settings.aiActiveProfileId === null
+                ? [{ value: "", label: t("(draft)") }]
+                : []),
+              ...settings.aiProfiles.map((p) => ({ value: p.id, label: p.name })),
+            ]}
+          />
         )}
         <span className="ai-panel__usage">
           {(conv?.inputTokens ?? 0) > 0 || (conv?.outputTokens ?? 0) > 0
@@ -480,7 +482,19 @@ function Message({
       <div className="ai-msg is-assistant">
         {segs.map((seg, i) =>
           seg.kind === "text" ? (
-            <div key={i} className="ai-md-text">{seg.text}</div>
+            // Markdown for the prose between top-level code fences:
+            // headings, bold/italic, inline `code`, lists,
+            // blockquotes, links. Top-level fences are handled by the
+            // code branch below so they keep the copy / insert
+            // buttons; a fence nested in a blockquote stays inside
+            // this markdown render (no buttons — it's an aside, not a
+            // run-this suggestion). `renderMarkdown` escapes every
+            // leaf, same trust level as the Markdown file preview.
+            <div
+              key={i}
+              className="ai-md"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(seg.text) }}
+            />
           ) : (
             <div key={i} className="ai-code">
               <div className="ai-code__bar">
@@ -516,7 +530,21 @@ function Message({
     );
   }
   if (m.type === "notice") {
-    return <div className={"ai-notice" + (m.tone === "error" ? " is-error" : "")}>{m.text}</div>;
+    // Connectivity failures (TCP timeouts, refused, DNS) get a hint —
+    // "model list worked but chat times out" usually means the chat
+    // endpoint is blocked on this network, not a wrong base URL.
+    const isConnErr =
+      m.tone === "error" && /10060|10061|timed? ?out|connect|unreachable|dns/i.test(m.text);
+    return (
+      <div className={"ai-notice" + (m.tone === "error" ? " is-error" : "")}>
+        {m.text}
+        {isConnErr && (
+          <div className="ai-notice__hint">
+            {t("Endpoint unreachable from this network — check proxy/firewall, or run Settings → AI → Test connection.")}
+          </div>
+        )}
+      </div>
+    );
   }
   return <ToolCard m={m} t={t} onDecide={onDecide} />;
 }

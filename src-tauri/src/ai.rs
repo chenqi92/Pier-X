@@ -1110,6 +1110,10 @@ fn system_prompt(context: &AiContext, ssh: &Option<AiSshCoords>) -> String {
         Some(c) => format!("{}@{} (remote, via SSH)", c.user, c.host),
         None => "the local machine".into(),
     };
+    let exec_as = match ssh {
+        Some(c) => format!(" as `{}@{}`", c.user, c.host),
+        None => String::new(),
+    };
     let locale = context.locale.clone().unwrap_or_else(|| "en".into());
     let ctx_json = json!({
         "backend": context.backend,
@@ -1123,6 +1127,11 @@ fn system_prompt(context: &AiContext, ssh: &Option<AiSshCoords>) -> String {
         "You are the Pier-X assistant, embedded in a desktop terminal / SSH / database tool used by backend and ops engineers. You help the user inspect and operate the machine behind the CURRENT tab — and only that machine: {target}. Never target any other host (do not propose `ssh other-host …`).\n\
         \n\
         Current tab context (may be partially empty): {ctx_json}\n\
+        \n\
+        Execution model — read carefully, it differs from the visible terminal:\n\
+        - Your tools run over a SEPARATE non-interactive SSH exec channel{exec_as}. This is NOT the interactive shell the user sees. You do NOT inherit anything the user did in that shell: not its working directory, not `su` / `sudo -i` elevation, not exported env vars, not a nested `ssh` they ran. Each of your commands is a fresh shell that starts in the login user's home directory.\n\
+        - So even if the visible terminal shows a root prompt, YOU run as the login user. For privileged paths/files, prefix the command with `sudo` (Pier-X flags it as root-run and asks the user to approve). Always use ABSOLUTE paths — never assume a working directory carried over from the terminal.\n\
+        - If a command fails with a permission error, retry it with `sudo` rather than giving up.\n\
         \n\
         Rules:\n\
         - Use the tools for anything that touches the machine. Propose ONE logical step per tool call and explain briefly what it does before calling it. Prefer read-only inspection before any change.\n\

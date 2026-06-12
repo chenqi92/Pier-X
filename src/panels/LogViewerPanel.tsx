@@ -26,6 +26,7 @@ import {
   MODES,
 } from "../lib/logSource";
 import type { LogEventView, LogSource, LogSourceMode, SftpEntryView, TabState } from "../lib/types";
+import { detectLogLevel, type LogLevel } from "../lib/logLevels";
 import { DEFAULT_LOG_SOURCE, effectiveShellUser, effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
@@ -40,9 +41,11 @@ import "../styles/log-viewer.css";
 type Props = { tab: TabState; isActive?: boolean };
 type IconType = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
 
-const MAX_EVENTS = 600;
-
-type LogLevel = "info" | "warn" | "error" | "debug";
+/** Ring size. 600 cut busy streams off after seconds of history;
+ *  2 000 lines of enriched strings is still trivial memory and the
+ *  inline view only renders the last 200 regardless (the dialog
+ *  filters over the full ring). */
+const MAX_EVENTS = 2000;
 
 type Enriched = {
   idx: number;
@@ -51,16 +54,6 @@ type Enriched = {
   level: LogLevel;
   ts: string;
 };
-
-function detectLevel(kind: LogEventView["kind"], text: string): LogLevel {
-  if (kind === "error") return "error";
-  const upper = text.slice(0, 120).toUpperCase();
-  if (/\b(ERROR|ERR|FATAL|PANIC)\b/.test(upper)) return "error";
-  if (/\b(WARN|WARNING)\b/.test(upper)) return "warn";
-  if (/\b(DEBUG|TRACE)\b/.test(upper)) return "debug";
-  if (kind === "stderr") return "warn";
-  return "info";
-}
 
 function clockStamp(d: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -371,7 +364,7 @@ function LogViewerPanelBody({ tab, isActive = true }: Props) {
               idx: ++counter.current,
               kind: b.kind,
               text: b.text,
-              level: detectLevel(b.kind, b.text),
+              level: detectLogLevel(b.text, b.kind),
               ts: now,
             }));
             return [...current, ...appended].slice(-MAX_EVENTS);

@@ -608,7 +608,18 @@
   gap: var(--sp-2);
   padding: 1px 0;
 }
-.dlg-logs-line.is-err { color: var(--neg); }
+/* Wrap mode renders the whole ring (variable-height rows can't be
+ * fixed-row virtualized) — let the engine skip layout/paint of
+ * off-screen lines so the full 5000-line buffer stays smooth. */
+.dlg-logs-body.wrap .dlg-logs-line {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 18px;
+}
+/* Level tinting (shared detector in lib/logLevels.ts): errors and
+ * warnings pop out of the noise; debug recedes; info stays default. */
+.dlg-logs-line.lvl-error .dlg-logs-msg { color: var(--neg); }
+.dlg-logs-line.lvl-warn .dlg-logs-msg { color: var(--warn); }
+.dlg-logs-line.lvl-debug .dlg-logs-msg { color: var(--muted); }
 .dlg-logs-n {
   color: var(--dim);
   text-align: right;

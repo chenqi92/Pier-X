@@ -7,6 +7,7 @@ import { useDraggableDialog } from "../components/useDraggableDialog";
 import * as cmd from "../lib/commands";
 import { quoteCommandArg } from "../lib/commands";
 import type { LogEventView, TabState } from "../lib/types";
+import { detectLogLevel, type LogLevel } from "../lib/logLevels";
 import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
@@ -28,9 +29,13 @@ type Line = {
   idx: number;
   kind: LogEventView["kind"];
   text: string;
+  level: LogLevel;
 };
 
-const MAX_LINES = 2000;
+/** Ring size. Non-wrap mode is virtualized (mounts ~viewport rows),
+ *  wrap mode renders the full ring but off-screen rows skip layout
+ *  via `content-visibility:auto` — 5 000 lines stays smooth in both. */
+const MAX_LINES = 5000;
 
 // Fixed row height (px) for the virtualized non-wrap log view. The row is
 // forced to this height so VirtualList's windowing math stays exact; if log
@@ -40,11 +45,7 @@ const LOG_LINE_H = 18;
 
 function renderLogLine(l: Line, style?: CSSProperties) {
   return (
-    <div
-      key={l.idx}
-      className={"dlg-logs-line" + (l.kind === "stderr" ? " is-err" : "")}
-      style={style}
-    >
+    <div key={l.idx} className={`dlg-logs-line lvl-${l.level}`} style={style}>
       <span className="dlg-logs-n">{l.idx}</span>
       <span className="dlg-logs-msg">{l.text}</span>
     </div>
@@ -149,6 +150,7 @@ export default function ContainerLogsDialog({ open, tab, containerId, containerN
               idx: ++counter.current,
               kind: b.kind,
               text: b.text,
+              level: detectLogLevel(b.text, b.kind),
             }));
             return [...cur, ...appended].slice(-MAX_LINES);
           });

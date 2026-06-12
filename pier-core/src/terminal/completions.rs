@@ -161,6 +161,15 @@ pub fn complete_with_library_using(
     let prefix = &line[word_start..cursor];
 
     if is_command_position(line, word_start) {
+        // A separator in the command word (`./script.sh`, `../bin/x`,
+        // `/usr/local/bin/y`, `~/run.sh`) means the user is invoking
+        // by path, not by name — builtin/$PATH matching can never hit
+        // these, so complete them like a path argument instead (bash
+        // behaves the same way).
+        if prefix.contains('/') || (cfg!(windows) && prefix.contains('\\')) {
+            let resolved_cwd = resolve_cwd(cwd);
+            return complete_file_with(prefix, resolved_cwd.as_deref(), reader);
+        }
         let mut rows = complete_command(prefix);
         // If the user has typed the *full* name of a library command
         // (e.g. `docker` without a trailing space) and hits Tab, what
@@ -666,6 +675,41 @@ mod tests {
         assert!(is_command_position("ls | gr", 5)); // after `| `
         assert!(is_command_position("a; b", 3)); // after `; `
         assert!(!is_command_position("git st", 4)); // arg word
+    }
+
+    /// Stub reader with a fixed listing — lets the path-invocation
+    /// test run without touching the real filesystem.
+    struct FixedReader(Vec<DirReadEntry>);
+    impl DirReader for FixedReader {
+        fn list(&self, _dir: &Path) -> Vec<DirReadEntry> {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn command_position_with_slash_completes_paths() {
+        let reader = FixedReader(vec![
+            DirReadEntry { name: "quick-start.sh".into(), is_dir: false },
+            DirReadEntry { name: "install.sh".into(), is_dir: false },
+            DirReadEntry { name: "data".into(), is_dir: true },
+        ]);
+        let lib = crate::terminal::library::Library::empty();
+
+        // `./qu` at command position → the matching script, with the
+        // typed `./` prefix preserved in the inserted value.
+        let rows = complete_with_library_using("./qu", 4, None, &lib, "en", &reader);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].value, "./quick-start.sh");
+        assert_eq!(rows[0].kind, CompletionKind::File);
+
+        // Bare `./` lists everything, directories first.
+        let rows = complete_with_library_using("./", 2, None, &lib, "en", &reader);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].value, "./data/");
+
+        // Plain command names keep going through builtin/$PATH.
+        let rows = complete_with_library_using("cd", 2, None, &lib, "en", &reader);
+        assert!(rows.iter().any(|r| r.kind == CompletionKind::Builtin));
     }
 
     #[test]

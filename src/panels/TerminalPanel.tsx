@@ -47,6 +47,7 @@ import { useStatusStore } from "../stores/useStatusStore";
 import { useThemeStore, TERMINAL_THEMES } from "../stores/useThemeStore";
 import { parseSshCommand } from "../lib/parseSshCommand";
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
+import { textCols } from "../lib/textCols";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
 import { hasPendingHostKeyPrompts } from "../stores/useHostKeyPromptStore";
@@ -292,19 +293,6 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   const [snapshotViewOffset, setSnapshotViewOffset] = useState(0);
   const snapshotViewOffsetRef = useRef(0);
   snapshotViewOffsetRef.current = snapshotViewOffset;
-  // Referentially-stable per-row environment for the memoized TerminalRow.
-  // Changes only on theme / cursor-setting / column-count changes, so a
-  // pushed snapshot re-renders only the rows whose content hash differs.
-  const rowEnv = useMemo<TerminalRowEnv>(
-    () => ({
-      cursorStyle,
-      cursorBlink,
-      ansi: termTheme.ansi,
-      fg: termTheme.fg,
-      cols: snapshot?.cols ?? 0,
-    }),
-    [cursorStyle, cursorBlink, termTheme, snapshot?.cols],
-  );
   const [visualBellActive, setVisualBellActive] = useState(false);
   const [selectingInTerminal, setSelectingInTerminal] = useState(false);
   const [terminalSelection, setTerminalSelectionState] =
@@ -429,6 +417,22 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     rowHeight: number;
   }>({ charWidth: 7.8, rowHeight: 19 });
 
+  // Referentially-stable per-row environment for the memoized TerminalRow.
+  // Changes only on theme / cursor-setting / column-count / cell-metric
+  // changes, so a pushed snapshot re-renders only the rows whose content
+  // hash differs.
+  const rowEnv = useMemo<TerminalRowEnv>(
+    () => ({
+      cursorStyle,
+      cursorBlink,
+      ansi: termTheme.ansi,
+      fg: termTheme.fg,
+      cols: snapshot?.cols ?? 0,
+      cellWidth: cellMetrics.charWidth,
+    }),
+    [cursorStyle, cursorBlink, termTheme, snapshot?.cols, cellMetrics.charWidth],
+  );
+
   // M4: Tab-completion popover state. `open` flips on the Tab
   // keypress and off when the user accepts / dismisses / leaves the
   // smart-active gate. `items` is the full set returned from the
@@ -534,6 +538,25 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   // its embedded newlines are content, not command submissions).
   const pasteActiveRef = useRef(false);
   const pasteTaintedRef = useRef(false);
+
+  // Mirror DESYNC flag. The mirror conservatively resets its buffer
+  // on bytes it can't model (history-nav escapes, a forwarded Tab,
+  // unknown control chars) — but the shell's REAL line still has the
+  // earlier content. Rendering the overlay from a reset buffer then
+  // paints a wrong fragment on top of the line (e.g. type `cd `, Tab
+  // → forwarded, type `/etc` → overlay shows `/etc` as a red
+  // "missing command" over the grid's `cd /etc`). While desynced the
+  // whole smart UI (overlay, autosuggest, Tab popover) stays silent;
+  // the flag clears at the next prompt-end or Enter, when the line
+  // state is knowable again.
+  const mirrorDesyncedRef = useRef(false);
+  const [mirrorDesynced, setMirrorDesyncedState] = useState(false);
+  function setMirrorDesync(v: boolean) {
+    if (mirrorDesyncedRef.current !== v) {
+      mirrorDesyncedRef.current = v;
+      setMirrorDesyncedState(v);
+    }
+  }
 
   // Sync session ID to tab store
   useEffect(() => {
@@ -1378,7 +1401,9 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       // when conditions return to active.
       smartLineBufferRef.current = "";
       setSmartLineBufferText("");
+      setMirrorDesync(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [smartActive]);
 
   // Reset the mirror buffer at every fresh prompt-end. Encoding
@@ -1391,6 +1416,9 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     if (!smartActive) return;
     smartLineBufferRef.current = "";
     setSmartLineBufferText("");
+    // A fresh prompt-end means the line is empty and knowable again.
+    setMirrorDesync(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [smartActive, promptEndKey]);
 
   // True when the snapshot's caret sits at the end of the mirrored
@@ -1403,7 +1431,8 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     if (!snapshot || !snapshot.promptEnd) return false;
     const [startRow, startCol] = snapshot.promptEnd;
     const cols = snapshot.cols || 1;
-    const totalCols = startCol + smartLineBufferText.length;
+    // Grid columns, not chars — CJK glyphs occupy 2 cells each.
+    const totalCols = startCol + textCols(smartLineBufferText);
     const endRow = startRow + Math.floor(totalCols / cols);
     const endCol = totalCols % cols;
     return snapshot.cursorY === endRow && snapshot.cursorX === endCol;
@@ -1415,7 +1444,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   // smart mode is active. Cheap — `suggestFromHistory` is an O(n)
   // walk of at most 500 strings. Suppressed when the caret isn't
   // at end-of-line so a mid-line edit doesn't see ghost text.
-  const suggestionSuffix = smartActive && cursorAtBufferEnd
+  const suggestionSuffix = smartActive && cursorAtBufferEnd && !mirrorDesynced
     ? suggestFromHistory(historyRing, smartLineBufferText)
     : "";
   suggestionSuffixRef.current = suggestionSuffix;
@@ -1665,13 +1694,18 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
           // One-shot: a secret prompt arms exactly one line.
           suppressHistoryRef.current = null;
         }
-        if (submitted && !inPasswordWindow && !pasteTainted) {
+        // A desynced buffer is a fragment of the real line — never
+        // record it as history (`cd /etc` typed around a forwarded
+        // Tab would otherwise save as `/etc`).
+        if (submitted && !inPasswordWindow && !pasteTainted && !mirrorDesyncedRef.current) {
           pushHistory(submitted, {
             shell: session?.shell,
             persist: historyPersist,
           });
         }
         buf = "";
+        // Enter starts a fresh, fully-knowable line — re-arm.
+        setMirrorDesync(false);
         if (code === CR && data.charCodeAt(i + 1) === LF) i += 1;
         continue;
       }
@@ -1704,7 +1738,11 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
             continue;
           }
           if (final !== "C" && final !== "D") {
+            // History nav / function keys — the shell will rewrite
+            // the line in ways we can't model. Buffer is no longer
+            // the line; mute the smart UI until the next prompt.
             buf = "";
+            setMirrorDesync(true);
           }
           i = j;
         } else if (next === "O") {
@@ -1713,10 +1751,12 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
           const final = j < data.length ? data[j] : "";
           if (final !== "C" && final !== "D") {
             buf = "";
+            setMirrorDesync(true);
           }
           i = j;
         } else {
           buf = "";
+          setMirrorDesync(true);
         }
         continue;
       }
@@ -1725,11 +1765,17 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
         continue;
       }
       if (code === ETX || code === NAK) {
+        // Ctrl+C / Ctrl+U genuinely empty the shell's line — the
+        // reset buffer is ACCURATE, not desynced.
         buf = "";
         continue;
       }
       if (code < 0x20 || code === 0x7f) {
+        // Tab (forwarded to the shell's own completion), Ctrl+R, …
+        // — the shell may extend or rewrite the line invisibly to
+        // the mirror. Mute the smart UI until the next prompt.
         buf = "";
+        setMirrorDesync(true);
         continue;
       }
       buf += data[i];
@@ -2538,6 +2584,13 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
    */
   async function openCompletion() {
     if (!session) return;
+    if (mirrorDesyncedRef.current) {
+      // We don't know what the line actually contains — completing
+      // against the mirror would target the wrong word. Hand the Tab
+      // to the shell's own completion instead.
+      await sendInput("\t");
+      return;
+    }
     const line = smartLineBufferRef.current;
     // Backend slices `line` by byte offset, but JS `.length` returns
     // UTF-16 code units — those disagree the moment the line has any
@@ -2604,7 +2657,16 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       }
     }
     items = [...historyRows, ...items];
-    if (items.length === 0) return;
+    if (items.length === 0) {
+      // No client-side candidates — forward the Tab to the shell so
+      // its own completion still answers (remote bash in SSH tabs;
+      // before this, a zero-candidate Tab was swallowed entirely).
+      // The forwarded control byte marks the mirror DESYNCED, which
+      // mutes the overlay / autosuggest until the next prompt — the
+      // shell may rewrite the line in ways the mirror can't see.
+      await sendInput("\t");
+      return;
+    }
 
     // Mainstream Tab semantics:
     //   1. Compute the longest common append-suffix among all
@@ -3161,6 +3223,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
               <TerminalRow key={`line-${i}`} line={line} env={rowEnv} rowIndex={i} />
             ))}
             {smartActive &&
+              !mirrorDesynced &&
               snapshot.promptEnd &&
               (smartLineBufferText || suggestionSuffix) && (
                 <TerminalSyntaxOverlay
@@ -3170,6 +3233,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
                   rowHeight={cellMetrics.rowHeight}
                   bgColor={termTheme.bg}
                   suggestionSuffix={suggestionSuffix}
+                  fontFamily={`"${monoFont}", monospace`}
                 />
               )}
             {smartActive && (() => {
@@ -3183,7 +3247,8 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
               const [row, col] = snapshot.promptEnd
                 ? [
                     snapshot.promptEnd[0],
-                    snapshot.promptEnd[1] + smartLineBufferText.length,
+                    // Columns, not chars — CJK input occupies 2 cells.
+                    snapshot.promptEnd[1] + textCols(smartLineBufferText),
                   ]
                 : [snapshot.cursorY, snapshot.cursorX];
               return (

@@ -105,8 +105,13 @@
   font-family: var(--mono);
   white-space: pre;
 }
+/* Token boxes are pinned to `textCols(token) × charWidth` inline (same
+ * column-space scheme as .terminal-segment) so per-glyph advance drift
+ * resets at every token boundary instead of accumulating down the line. */
 .terminal-syntax-overlay .terminal-syntax {
-  display: inline;
+  display: inline-block;
+  vertical-align: top;
+  white-space: pre;
 }
 .terminal-syntax--command { color: var(--accent); }
 /* M3: command name not a builtin and not on $PATH — typo. Wavy
@@ -316,6 +321,15 @@
  * fades the cursor block, not the character on top — otherwise the
  * underlying glyph fades together with the cursor and the cell appears
  * to "blink with" the next character. */
+/* The smart-mode syntax overlay paints an opaque copy of the input row
+ * at z-index 1 — the same level as .terminal-segment — and, being later
+ * in the DOM, covered the cursor cell the moment the line had any text.
+ * The cursor cell must stack above the overlay. */
+.terminal-segment--cursor,
+.terminal-segment--cursor-beam,
+.terminal-segment--cursor-underline {
+  z-index: 2;
+}
 .terminal-segment--cursor { color: var(--accent-ink); }
 .terminal-segment--cursor::before {
   content: "";

@@ -48,6 +48,15 @@ export type TerminalRowEnv = {
   ansi: string[];
   fg: string;
   cols: number;
+  /** Measured width of one grid cell in px. When > 0, every segment's
+   *  box is pinned to `cells × cellWidth` so the row is laid out in
+   *  exact column space: the cursor segment, the selection rects and
+   *  the smart-mode overlay (all positioned as `col × cellWidth`)
+   *  stay aligned regardless of font quirks — synthetic-bold advance
+   *  widths, CJK fallback glyphs, ambiguous-width characters. Without
+   *  pinning, glyph-advance drift accumulates along the row and the
+   *  cursor renders columns away from where the shell put it. */
+  cellWidth: number;
 };
 
 type Props = {
@@ -57,9 +66,10 @@ type Props = {
 };
 
 function TerminalRowImpl({ line, env, rowIndex }: Props) {
-  const { cursorStyle, cursorBlink, ansi, fg, cols } = env;
+  const { cursorStyle, cursorBlink, ansi, fg, cols, cellWidth } = env;
   const usedCols = line.segments.reduce((n, s) => n + s.cells, 0);
   const padCols = Math.max(0, cols - usedCols);
+  const pin = cellWidth > 0;
   return (
     <div className="terminal-row" data-terminal-row={rowIndex} style={{ color: fg }}>
       {line.segments.map((seg, j) => {
@@ -89,6 +99,7 @@ function TerminalRowImpl({ line, env, rowIndex }: Props) {
               color: segFg,
               fontWeight: seg.bold ? 510 : 400,
               textDecoration: seg.underline ? "underline" : "none",
+              width: pin ? seg.cells * cellWidth : undefined,
             }}
           >
             {seg.text}
@@ -99,6 +110,7 @@ function TerminalRowImpl({ line, env, rowIndex }: Props) {
         <span
           className="terminal-segment terminal-segment--filler"
           data-terminal-cells={padCols}
+          style={{ width: pin ? padCols * cellWidth : undefined }}
           aria-hidden
         >
           {" ".repeat(padCols)}

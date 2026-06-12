@@ -30,6 +30,7 @@
 
 import { useEffect, useMemo } from "react";
 import { tokenize, type ShellToken } from "../lib/shellLexer";
+import { textCols } from "../lib/textCols";
 import { useTerminalSmartStore } from "../stores/useTerminalSmartStore";
 
 type Props = {
@@ -66,6 +67,13 @@ type Props = {
    * the overlay still renders for the typed portion.
    */
   suggestionSuffix?: string;
+  /**
+   * The terminal grid's font stack (the user's terminal font
+   * setting, NOT the UI `--mono` token). The overlay paints on top
+   * of grid cells, so it must shape text with the same font the
+   * grid uses or its glyphs drift off the columns underneath.
+   */
+  fontFamily: string;
 };
 
 export default function TerminalSyntaxOverlay({
@@ -75,6 +83,7 @@ export default function TerminalSyntaxOverlay({
   rowHeight,
   bgColor,
   suggestionSuffix,
+  fontFamily,
 }: Props) {
   const tokens = useMemo<ShellToken[]>(() => tokenize(text), [text]);
 
@@ -117,6 +126,7 @@ export default function TerminalSyntaxOverlay({
         background: bgColor,
         height: rowHeight,
         lineHeight: `${rowHeight}px`,
+        fontFamily,
       }}
     >
       {tokens.map((tok, i) => {
@@ -129,14 +139,22 @@ export default function TerminalSyntaxOverlay({
             cls = "terminal-syntax terminal-syntax--command-missing";
           }
         }
+        // Each token's box is pinned to its grid-column budget (same
+        // scheme as TerminalRow segments) so glyph-advance drift
+        // never accumulates across the line — the overlay's chars
+        // stay on the same columns as the grid cells underneath,
+        // for any font / charset.
         return (
-          <span key={i} className={cls}>
+          <span key={i} className={cls} style={{ width: textCols(tok.text) * charWidth }}>
             {tok.text}
           </span>
         );
       })}
       {suggestionSuffix ? (
-        <span className="terminal-syntax terminal-syntax--suggestion">
+        <span
+          className="terminal-syntax terminal-syntax--suggestion"
+          style={{ width: textCols(suggestionSuffix) * charWidth }}
+        >
           {suggestionSuffix}
         </span>
       ) : null}

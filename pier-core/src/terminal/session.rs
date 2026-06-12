@@ -706,7 +706,7 @@ impl PierTerminal {
         };
         for line_index in start_line..start_line + visible_rows {
             if line_index < scrollback_len {
-                append_line(&mut cells, &guard.emu.scrollback[line_index], cols as usize);
+                append_line(&mut cells, &guard.emu.scrollback[line_index].cells, cols as usize);
             } else {
                 let visible_index = line_index - scrollback_len;
                 append_line(&mut cells, &guard.emu.cells[visible_index], cols as usize);

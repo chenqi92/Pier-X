@@ -83,7 +83,24 @@ pub enum Color {
 /// render colored scrollback. It's not cheap — a terminal running
 /// `cat` on a huge log will fill `scrollback_limit` lines with ~120
 /// cells each — but it's O(rows × cols × limit) at worst and bounded.
-pub type ScrollbackLine = Vec<Cell>;
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScrollbackLine {
+    /// The cells of this physical line.
+    pub cells: Vec<Cell>,
+    /// True when this line soft-wrapped into the one below it (the text
+    /// reached the right margin and auto-wrapped) rather than ending at
+    /// a hard newline. [`VtEmulator::resize`]'s reflow rejoins runs of
+    /// soft-wrapped lines into a single logical line before re-wrapping
+    /// them at the new width, so a shrink → grow round-trip restores the
+    /// original layout instead of leaving lines stuck at the old width.
+    pub wrapped: bool,
+}
+
+impl ScrollbackLine {
+    fn new(cells: Vec<Cell>, wrapped: bool) -> Self {
+        Self { cells, wrapped }
+    }
+}
 
 /// VT100 state machine + grid + scrollback.
 ///
@@ -105,6 +122,15 @@ pub struct VtEmulator {
 
     /// The visible grid. `cells[row][col]`. `cells.len() == rows`.
     pub cells: Vec<Vec<Cell>>,
+
+    /// Per-row soft-wrap flags, parallel to `cells` (`wrapped.len() ==
+    /// rows`). `wrapped[y] == true` means row `y` auto-wrapped at the
+    /// right margin into row `y + 1`, i.e. the two rows are one logical
+    /// line. Set on auto-wrap in `print`, cleared by a hard newline or
+    /// an erase that touches the row's right edge, and carried alongside
+    /// each row through `scroll_up` / `resize`. Drives reflow on a
+    /// column resize.
+    pub wrapped: Vec<bool>,
 
     /// Bounded FIFO of lines that scrolled off the top.
     pub scrollback: VecDeque<ScrollbackLine>,
@@ -207,6 +233,7 @@ impl VtEmulator {
             cursor_x: 0,
             cursor_y: 0,
             cells: vec![vec![Cell::default(); cols]; rows],
+            wrapped: vec![false; rows],
             scrollback: VecDeque::new(),
             scrollback_limit: 10_000,
             pen: Cell::default(),
@@ -241,6 +268,7 @@ impl VtEmulator {
             cursor_x: &mut self.cursor_x,
             cursor_y: &mut self.cursor_y,
             cells: &mut self.cells,
+            wrapped: &mut self.wrapped,
             scrollback: &mut self.scrollback,
             scrollback_limit: self.scrollback_limit,
             pen: &mut self.pen,
@@ -279,22 +307,57 @@ impl VtEmulator {
         }
     }
 
-    /// Resize the grid. If the new size is smaller, rows are trimmed
-    /// off the bottom and extra columns truncated. If larger, blank
-    /// cells are appended. The cursor is clamped inside the new grid.
+    /// Resize the grid, preserving on-screen content across a resize.
     ///
-    /// This is intentionally simple — it does NOT reflow wrapped
-    /// lines the way alacritty/kitty do. That's M2b+ work.
+    /// The naive approach — `Vec::resize`, which trims rows off the
+    /// *bottom* on shrink — silently discarded the most recent output and
+    /// the live prompt, so dragging the window smaller and back larger
+    /// left the terminal truncated. On the primary screen instead:
+    ///
+    ///   * a **column change** triggers a full reflow: the whole buffer
+    ///     (scrollback + grid) is rejoined into logical lines along the
+    ///     soft-wrap flags, re-wrapped at the new width, and re-split into
+    ///     scrollback + grid — so a line that wrapped at the old width
+    ///     re-wraps cleanly and a shrink → grow round-trip restores the
+    ///     original layout instead of leaving lines stuck at the old
+    ///     width (or column-truncated);
+    ///   * a **row-only change** keeps a cheaper path: shrink drops blank
+    ///     rows below the cursor first (so a post-`clear` prompt near the
+    ///     top is kept) then spills the top rows into scrollback; grow
+    ///     pulls them back. The cursor + prompt marker move with content.
+    ///
+    /// The alternate screen has no scrollback and the TUI redraws itself
+    /// on SIGWINCH, so it keeps a simple trim/pad.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         if cols == 0 || rows == 0 {
             return;
         }
+        if cols == self.cols && rows == self.rows {
+            return;
+        }
+
+        if !self.alt_screen && cols != self.cols {
+            self.reflow(cols, rows);
+        } else if !self.alt_screen && rows != self.rows {
+            self.resize_rows(rows);
+        } else {
+            // Alternate screen (no scrollback; the TUI repaints itself).
+            self.cells.resize(rows, vec![Cell::default(); cols]);
+            self.wrapped.resize(rows, false);
+        }
+
         self.cols = cols;
         self.rows = rows;
-        self.cells.resize(rows, vec![Cell::default(); cols]);
+
+        // Normalize every row to the new column count. A no-op after a
+        // reflow (which already emitted new-width rows); meaningful for
+        // the row-only and alt-screen paths.
         for row in self.cells.iter_mut() {
             row.resize(cols, Cell::default());
         }
+        debug_assert_eq!(self.cells.len(), self.rows);
+        debug_assert_eq!(self.wrapped.len(), self.rows);
+
         if self.cursor_x >= cols {
             self.cursor_x = cols - 1;
         }
@@ -311,6 +374,277 @@ impl VtEmulator {
                 self.awaiting_input = false;
             }
         }
+    }
+
+    /// Row-only resize (column count unchanged) on the primary screen.
+    /// Shrink spills top rows into scrollback after dropping blank rows
+    /// below the cursor; grow pulls them back. Soft-wrap flags travel with
+    /// each row so a later column reflow still sees correct boundaries.
+    fn resize_rows(&mut self, rows: usize) {
+        let old_rows = self.rows;
+        let cols = self.cols;
+        let row_is_blank = |row: &[Cell]| row.iter().all(|c| *c == Cell::default());
+
+        if rows < old_rows {
+            let mut to_remove = old_rows - rows;
+            while to_remove > 0
+                && self.cells.len() > self.cursor_y + 1
+                && self.cells.last().is_some_and(|r| row_is_blank(r))
+            {
+                self.cells.pop();
+                self.wrapped.pop();
+                to_remove -= 1;
+            }
+            for _ in 0..to_remove {
+                if self.cells.is_empty() {
+                    break;
+                }
+                let top = self.cells.remove(0);
+                let top_wrapped = if self.wrapped.is_empty() {
+                    false
+                } else {
+                    self.wrapped.remove(0)
+                };
+                self.scrollback
+                    .push_back(ScrollbackLine::new(top, top_wrapped));
+                while self.scrollback.len() > self.scrollback_limit {
+                    self.scrollback.pop_front();
+                }
+                self.cursor_y = self.cursor_y.saturating_sub(1);
+                match self.last_prompt_end.as_mut() {
+                    Some((0, _)) => {
+                        self.last_prompt_end = None;
+                        self.awaiting_input = false;
+                    }
+                    Some((r, _)) => *r -= 1,
+                    None => {}
+                }
+            }
+            self.cells.truncate(rows);
+            self.wrapped.truncate(rows);
+        } else {
+            let mut to_add = rows - old_rows;
+            while to_add > 0 {
+                let Some(line) = self.scrollback.pop_back() else {
+                    break;
+                };
+                self.cells.insert(0, line.cells);
+                self.wrapped.insert(0, line.wrapped);
+                self.cursor_y += 1;
+                if let Some((r, _)) = self.last_prompt_end.as_mut() {
+                    *r += 1;
+                }
+                to_add -= 1;
+            }
+            for _ in 0..to_add {
+                self.cells.push(vec![Cell::default(); cols]);
+                self.wrapped.push(false);
+            }
+        }
+    }
+
+    /// Full-buffer reflow for a column change. Rejoins the whole buffer
+    /// (scrollback ++ grid) into logical lines along the soft-wrap flags,
+    /// re-wraps each at `new_cols`, and re-splits into scrollback + a
+    /// `new_rows`-tall grid, carrying the cursor to its new position.
+    fn reflow(&mut self, new_cols: usize, new_rows: usize) {
+        /// Length of `cells` with trailing default (blank) cells removed.
+        fn trim_trailing_default_len(cells: &[Cell]) -> usize {
+            let mut n = cells.len();
+            while n > 0 && cells[n - 1] == Cell::default() {
+                n -= 1;
+            }
+            n
+        }
+
+        /// Re-wrap `cells` into rows of at most `cols`, keeping wide-char
+        /// pairs (head + `\0` placeholder) together. When `cursor_at` is
+        /// `Some(offset)`, also report where that input index lands as
+        /// `(row, col)`.
+        fn wrap_cells(
+            cells: &[Cell],
+            cols: usize,
+            cursor_at: Option<usize>,
+        ) -> (Vec<Vec<Cell>>, Option<(usize, usize)>) {
+            let mut rows: Vec<Vec<Cell>> = Vec::new();
+            let mut cur: Vec<Cell> = Vec::with_capacity(cols);
+            let mut cursor_pos: Option<(usize, usize)> = None;
+            let mut i = 0usize;
+            while i < cells.len() {
+                if cursor_at == Some(i) {
+                    cursor_pos = Some((rows.len(), cur.len()));
+                }
+                let ch = cells[i].ch;
+                let is_wide_head = ch != '\0' && is_wide_char(ch);
+                let need = if is_wide_head { 2 } else { 1 };
+                if cur.len() + need > cols && !cur.is_empty() {
+                    rows.push(std::mem::take(&mut cur));
+                }
+                cur.push(cells[i].clone());
+                if is_wide_head {
+                    if i + 1 < cells.len() && cells[i + 1].ch == '\0' {
+                        cur.push(cells[i + 1].clone());
+                        i += 2;
+                    } else {
+                        cur.push(Cell {
+                            ch: '\0',
+                            ..Cell::default()
+                        });
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            if cursor_at == Some(cells.len()) {
+                cursor_pos = Some((rows.len(), cur.len()));
+            }
+            rows.push(cur);
+            (rows, cursor_pos)
+        }
+
+        // 1. Flatten every physical line in order, with its wrap flag. The
+        //    cursor is at grid row `cursor_y`, i.e. physical index
+        //    `scrollback.len() + cursor_y`, column `cursor_x`.
+        let cursor_phys = self.scrollback.len() + self.cursor_y;
+        let mut phys: Vec<(Vec<Cell>, bool)> =
+            Vec::with_capacity(self.scrollback.len() + self.cells.len());
+        for line in self.scrollback.drain(..) {
+            phys.push((line.cells, line.wrapped));
+        }
+        for (i, row) in std::mem::take(&mut self.cells).into_iter().enumerate() {
+            let w = self.wrapped.get(i).copied().unwrap_or(false);
+            phys.push((row, w));
+        }
+        self.wrapped.clear();
+
+        // 2. Group consecutive physical lines into logical lines (a run
+        //    ends at the first line whose wrap flag is false). Track which
+        //    logical line + offset the cursor falls on.
+        struct Logical {
+            cells: Vec<Cell>,
+            // Wrap flag of the run's final physical line — true only for a
+            // still-open last line at the very bottom of the buffer.
+            trailing_wrap: bool,
+        }
+        let mut logicals: Vec<Logical> = Vec::new();
+        let mut cursor_logical = 0usize;
+        let mut cursor_offset = 0usize;
+        let mut cur_cells: Vec<Cell> = Vec::new();
+        let mut cur_has_cursor = false;
+        let mut cur_cursor_offset = 0usize;
+        for (idx, (cells, wrapped)) in phys.into_iter().enumerate() {
+            if idx == cursor_phys {
+                cur_has_cursor = true;
+                cur_cursor_offset = cur_cells.len() + self.cursor_x.min(cells.len());
+            }
+            cur_cells.extend(cells);
+            if !wrapped {
+                if cur_has_cursor {
+                    cursor_logical = logicals.len();
+                    cursor_offset = cur_cursor_offset;
+                    cur_has_cursor = false;
+                }
+                logicals.push(Logical {
+                    cells: std::mem::take(&mut cur_cells),
+                    trailing_wrap: false,
+                });
+            }
+        }
+        // A run that never closed (buffer ended mid soft-wrap) becomes the
+        // final, still-open logical line.
+        if !cur_cells.is_empty() || cur_has_cursor {
+            if cur_has_cursor {
+                cursor_logical = logicals.len();
+                cursor_offset = cur_cursor_offset;
+            }
+            logicals.push(Logical {
+                cells: std::mem::take(&mut cur_cells),
+                trailing_wrap: true,
+            });
+        }
+        if logicals.is_empty() {
+            logicals.push(Logical {
+                cells: Vec::new(),
+                trailing_wrap: false,
+            });
+        }
+
+        // 3. Re-wrap each logical line at new_cols into a flat list of
+        //    (row_cells, wrapped), recording where the cursor lands.
+        let mut out: Vec<(Vec<Cell>, bool)> = Vec::new();
+        let mut cursor_out_row = 0usize;
+        let mut cursor_out_col = 0usize;
+        for (li, mut logical) in logicals.into_iter().enumerate() {
+            // Trim trailing blank padding so a short line doesn't spawn
+            // phantom wrapped rows — but never trim past the cursor on the
+            // cursor's own line.
+            let mut content_len = trim_trailing_default_len(&logical.cells);
+            if li == cursor_logical {
+                content_len = content_len.max(cursor_offset.min(logical.cells.len()));
+            }
+            logical.cells.truncate(content_len);
+
+            let want_cursor = if li == cursor_logical {
+                Some(cursor_offset.min(content_len))
+            } else {
+                None
+            };
+            let base_row = out.len();
+            let (rows_cells, cur_pos) = wrap_cells(&logical.cells, new_cols, want_cursor);
+            let n = rows_cells.len();
+            for (k, rc) in rows_cells.into_iter().enumerate() {
+                let is_last = k + 1 == n;
+                // Interior rows soft-wrap; the final row carries the
+                // logical line's trailing flag.
+                let w = if is_last { logical.trailing_wrap } else { true };
+                out.push((rc, w));
+            }
+            if let Some((r, c)) = cur_pos {
+                cursor_out_row = base_row + r;
+                cursor_out_col = c;
+            }
+        }
+        if out.is_empty() {
+            out.push((Vec::new(), false));
+        }
+
+        // 4. Re-split: the last `new_rows` rows are the live grid; the rest
+        //    go to scrollback (respecting the cap).
+        let total = out.len();
+        let grid_first = total.saturating_sub(new_rows);
+        let mut out_iter = out.into_iter();
+        for (cells, wrapped) in out_iter.by_ref().take(grid_first) {
+            self.scrollback
+                .push_back(ScrollbackLine::new(cells, wrapped));
+            while self.scrollback.len() > self.scrollback_limit {
+                self.scrollback.pop_front();
+            }
+        }
+        self.cells = Vec::with_capacity(new_rows);
+        self.wrapped = Vec::with_capacity(new_rows);
+        for (cells, wrapped) in out_iter {
+            self.cells.push(cells);
+            self.wrapped.push(wrapped);
+        }
+        while self.cells.len() < new_rows {
+            self.cells.push(vec![Cell::default(); new_cols]);
+            self.wrapped.push(false);
+        }
+
+        // 5. Carry the cursor to its new grid row/col.
+        if cursor_out_row >= grid_first {
+            self.cursor_y = (cursor_out_row - grid_first).min(new_rows - 1);
+        } else {
+            self.cursor_y = 0;
+        }
+        self.cursor_x = cursor_out_col.min(new_cols.saturating_sub(1));
+
+        // The OSC 133;B prompt anchor can't be mapped reliably through a
+        // reflow; drop it so the next prompt redraw (the shell repaints on
+        // SIGWINCH) re-arms it cleanly.
+        self.last_prompt_end = None;
+        self.awaiting_input = false;
     }
 
     /// Return the text content of a grid row with trailing spaces
@@ -431,6 +765,7 @@ struct Performer<'a> {
     cursor_x: &'a mut usize,
     cursor_y: &'a mut usize,
     cells: &'a mut Vec<Vec<Cell>>,
+    wrapped: &'a mut Vec<bool>,
     scrollback: &'a mut VecDeque<ScrollbackLine>,
     scrollback_limit: usize,
     pen: &'a mut Cell,
@@ -455,11 +790,20 @@ impl Performer<'_> {
     /// visible row.
     fn scroll_up(&mut self) {
         let top = self.cells.remove(0);
-        self.scrollback.push_back(top);
+        // The evicted row carries its soft-wrap flag into scrollback so a
+        // later reflow can still tell where this logical line continued.
+        let top_wrapped = if self.wrapped.is_empty() {
+            false
+        } else {
+            self.wrapped.remove(0)
+        };
+        self.scrollback
+            .push_back(ScrollbackLine::new(top, top_wrapped));
         while self.scrollback.len() > self.scrollback_limit {
             self.scrollback.pop_front();
         }
         self.cells.push(vec![Cell::default(); self.cols]);
+        self.wrapped.push(false);
 
         // Shift the OSC 133;B prompt-end marker up by one row so the
         // smart-mode UI keeps tracking the still-being-typed line as it
@@ -497,6 +841,12 @@ impl Perform for Performer<'_> {
         // Wrap at right edge: if the cursor is past the last column,
         // or a wide char won't fit, wrap to the next line first.
         if *self.cursor_x + char_width > self.cols {
+            // Record that the row we're leaving soft-wrapped into the
+            // next one (set before line_feed so a scroll carries the flag
+            // along with the row). A hard newline clears it again.
+            if let Some(w) = self.wrapped.get_mut(*self.cursor_y) {
+                *w = true;
+            }
             *self.cursor_x = 0;
             self.line_feed();
         }
@@ -531,6 +881,11 @@ impl Perform for Performer<'_> {
                     *self.ssh_detected_user = user;
                     *self.ssh_detected_port = port;
                     *self.ssh_command_detected = true;
+                }
+                // A hard newline ends the logical line here — the row we
+                // are leaving does not soft-wrap into the next.
+                if let Some(w) = self.wrapped.get_mut(*self.cursor_y) {
+                    *w = false;
                 }
                 self.line_feed();
                 // A real LF (not a print-wrap, which calls `line_feed`
@@ -818,13 +1173,20 @@ impl Perform for Performer<'_> {
 
 impl Performer<'_> {
     fn erase_display_from_cursor(&mut self) {
-        // Cursor line: from cursor to end.
+        // Cursor line: from cursor to end. Clearing the right edge ends
+        // any soft-wrap that started on this row.
         if let Some(row) = self.cells.get_mut(*self.cursor_y) {
             row[*self.cursor_x..].fill(Cell::default());
+        }
+        if let Some(w) = self.wrapped.get_mut(*self.cursor_y) {
+            *w = false;
         }
         // All rows below the cursor.
         for row in self.cells.iter_mut().skip(*self.cursor_y + 1) {
             row.fill(Cell::default());
+        }
+        for w in self.wrapped.iter_mut().skip(*self.cursor_y + 1) {
+            *w = false;
         }
     }
 
@@ -833,7 +1195,11 @@ impl Performer<'_> {
         for row in self.cells.iter_mut().take(*self.cursor_y) {
             row.fill(Cell::default());
         }
-        // Cursor line: from start to cursor inclusive.
+        for w in self.wrapped.iter_mut().take(*self.cursor_y) {
+            *w = false;
+        }
+        // Cursor line: from start to cursor inclusive. The right edge is
+        // untouched, so the row's wrap flag stays as-is.
         if let Some(row) = self.cells.get_mut(*self.cursor_y) {
             let end = (*self.cursor_x + 1).min(self.cols);
             row[..end].fill(Cell::default());
@@ -844,11 +1210,18 @@ impl Performer<'_> {
         for row in self.cells.iter_mut() {
             row.fill(Cell::default());
         }
+        for w in self.wrapped.iter_mut() {
+            *w = false;
+        }
     }
 
     fn erase_line_from_cursor(&mut self) {
         if let Some(row) = self.cells.get_mut(*self.cursor_y) {
             row[*self.cursor_x..].fill(Cell::default());
+        }
+        // Right edge cleared → this row no longer soft-wraps.
+        if let Some(w) = self.wrapped.get_mut(*self.cursor_y) {
+            *w = false;
         }
     }
 
@@ -862,6 +1235,9 @@ impl Performer<'_> {
     fn erase_line_all(&mut self) {
         if let Some(row) = self.cells.get_mut(*self.cursor_y) {
             row.fill(Cell::default());
+        }
+        if let Some(w) = self.wrapped.get_mut(*self.cursor_y) {
+            *w = false;
         }
     }
 
@@ -1099,7 +1475,7 @@ mod tests {
         // Grid was 3 rows. "A" should have scrolled off into the
         // scrollback ring, leaving B/C/D visible.
         assert_eq!(emu.scrollback.len(), 1);
-        let evicted: String = emu.scrollback[0].iter().map(|c| c.ch).collect();
+        let evicted: String = emu.scrollback[0].cells.iter().map(|c| c.ch).collect();
         assert_eq!(evicted.trim_end(), "A");
         assert_eq!(emu.line_text(0).trim_end(), "B");
         assert_eq!(emu.line_text(1).trim_end(), "C");
@@ -1127,6 +1503,105 @@ mod tests {
         assert!(emu.cursor_y < 10);
         assert_eq!(emu.cols, 20);
         assert_eq!(emu.rows, 10);
+    }
+
+    #[test]
+    fn resize_shrink_then_grow_preserves_rows() {
+        let mut emu = VtEmulator::new(20, 4);
+        emu.process(b"L0\r\nL1\r\nL2\r\nL3");
+        assert_eq!(emu.cursor_y, 3);
+
+        // Shrink: the freshest rows stay live, the rest spill to
+        // scrollback instead of being dropped off the bottom.
+        emu.resize(20, 2);
+        assert_eq!(emu.rows, 2);
+        assert_eq!(emu.line_text(0).trim_end(), "L2");
+        assert_eq!(emu.line_text(1).trim_end(), "L3");
+        assert!(emu.scrollback.len() >= 2);
+
+        // Grow back: the spilled rows return in place — no truncation.
+        emu.resize(20, 4);
+        assert_eq!(emu.rows, 4);
+        assert_eq!(emu.line_text(0).trim_end(), "L0");
+        assert_eq!(emu.line_text(1).trim_end(), "L1");
+        assert_eq!(emu.line_text(2).trim_end(), "L2");
+        assert_eq!(emu.line_text(3).trim_end(), "L3");
+    }
+
+    #[test]
+    fn resize_shrink_keeps_prompt_when_blank_rows_below_cursor() {
+        let mut emu = VtEmulator::new(20, 6);
+        emu.process(b"$ "); // prompt on the top row, rows below blank
+        assert_eq!(emu.cursor_y, 0);
+
+        emu.resize(20, 3);
+        assert_eq!(emu.rows, 3);
+        // The prompt is kept; only the blank rows below it were dropped.
+        assert_eq!(emu.line_text(0).trim_end(), "$");
+        assert_eq!(emu.scrollback.len(), 0);
+    }
+
+    #[test]
+    fn autowrap_sets_wrapped_flag_hard_newline_clears_it() {
+        // Auto-wrap at the right margin marks the row as soft-wrapped.
+        let mut emu = VtEmulator::new(5, 3);
+        emu.process(b"abcdefg"); // 7 chars at width 5 → wraps after 5
+        assert!(emu.wrapped[0], "auto-wrap should mark row 0 wrapped");
+        assert!(!emu.wrapped[1], "continuation row is not itself wrapped");
+
+        // A hard newline must NOT mark the row as soft-wrapped.
+        let mut emu2 = VtEmulator::new(5, 3);
+        emu2.process(b"abc\r\ndef");
+        assert!(!emu2.wrapped[0], "hard newline must leave wrapped = false");
+    }
+
+    #[test]
+    fn reflow_shrink_cols_rewraps_long_line_without_loss() {
+        let mut emu = VtEmulator::new(10, 4);
+        emu.process(b"012345678901234"); // 15 chars → wraps once at width 10
+        assert!(emu.wrapped[0]);
+
+        // Shrink width 10 → 5. The 15-char logical line must re-wrap to
+        // three 5-wide segments, split across scrollback + grid, with no
+        // characters lost.
+        emu.resize(5, 4);
+        assert_eq!(emu.cols, 5);
+        let mut joined = String::new();
+        for line in &emu.scrollback {
+            joined.extend(line.cells.iter().map(|c| c.ch));
+        }
+        for r in 0..emu.rows {
+            joined.push_str(&emu.line_text(r));
+        }
+        assert!(
+            joined.replace([' ', '\0'], "").starts_with("012345678901234"),
+            "reflow lost characters: {joined:?}"
+        );
+    }
+
+    #[test]
+    fn reflow_grow_cols_unwraps_line() {
+        let mut emu = VtEmulator::new(5, 4);
+        emu.process(b"012345678901234"); // wraps into three rows at width 5
+        assert!(emu.wrapped[0]);
+
+        // Grow width 5 → 20. The line fits on one row again and the
+        // soft-wrap flag clears.
+        emu.resize(20, 4);
+        assert_eq!(emu.line_text(0).trim_end(), "012345678901234");
+        assert!(!emu.wrapped[0]);
+        assert_eq!(emu.scrollback.len(), 0);
+    }
+
+    #[test]
+    fn reflow_shrink_then_grow_round_trips_to_original_width() {
+        let mut emu = VtEmulator::new(20, 4);
+        emu.process(b"the quick brown fox jumps over"); // 30 chars, wraps at 20
+        emu.resize(8, 4); // shrink width — heavy re-wrap
+        emu.resize(20, 4); // grow back to the original width
+        assert_eq!(emu.line_text(0).trim_end(), "the quick brown fox");
+        assert_eq!(emu.line_text(1).trim_end(), "jumps over");
+        assert!(!emu.wrapped[1]);
     }
 
     #[test]

@@ -782,7 +782,11 @@ button,
   align-items: center;
   gap: var(--sp-1-5);
   padding: 0 var(--sp-2) 0 var(--sp-2);
-  height: var(--row-h);
+  /* --tree-row-h, not --row-h: single-line rows go airy at the
+   * comfortable/spacious row heights. Must stay in sync with
+   * `treeRowHeightForDensity` (useThemeStore) — the VirtualList
+   * needs the same number. */
+  height: var(--tree-row-h);
   cursor: default;
   color: var(--ink-2);
   background: transparent;
@@ -948,7 +952,10 @@ button,
 .srv-group-name {
   flex: 1;
   font-family: var(--sans);
-  font-size: var(--size-micro);
+  /* --ui-fs-sm, not --size-micro: group headers sit next to
+   * --ui-fs connection rows and read undersized at 10.5px
+   * (user-reported). Density-aware like the rest of the list. */
+  font-size: var(--ui-fs-sm);
   color: var(--muted);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -956,7 +963,7 @@ button,
 }
 .srv-group-meta {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--ui-fs-sm);
   color: var(--dim);
   letter-spacing: 0.02em;
 }
@@ -1009,7 +1016,7 @@ button,
 }
 .srv-item.offline .srv-name { color: var(--muted); }
 .srv-addr {
-  font-size: 10.5px;
+  font-size: var(--ui-fs-sm);
   color: var(--muted);
   font-family: var(--mono);
   margin-top: 1px;
@@ -2945,7 +2952,12 @@ button,
 
 .settings__select {
   height: var(--control-height);
-  min-width: 160px;
+  /* Wide enough for endpoint URLs / model ids — the old 160px
+   * minimum clipped most real-world values. Capped by the parent
+   * so tight layouts can still shrink it. */
+  width: 300px;
+  min-width: 200px;
+  max-width: 100%;
   padding: 0 var(--sp-6) 0 var(--sp-2);
   background: var(--panel);
   border: 1px solid var(--line-2);

@@ -30,6 +30,7 @@ import { SFTP_PROGRESS_EVENT, type SftpProgressEvent } from "../lib/commands";
 import type { SftpBrowseState, SftpEntryView, TabState } from "../lib/types";
 import { effectiveShellUser, effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { treeRowHeightForDensity, useThemeStore } from "../stores/useThemeStore";
 import { localizeError } from "../i18n/localizeMessage";
 import StatusDot from "../components/StatusDot";
 import VirtualList from "../components/VirtualList";
@@ -67,11 +68,15 @@ import "../styles/sftp-panel.css";
 const EMPTY_BOOKMARKS: SftpBookmark[] = [];
 const SftpEditorDialog = lazy(() => import("../components/SftpEditorDialog"));
 
-/** Row height for virtualized entries, matching `.ftp-row` in sftp-panel.css
- *  (12px font · 6px padding top+bottom · 1px border). Kept in sync
- *  manually — if that CSS changes, bump this. Mismatches show up as
- *  rows overlapping or whitespace gaps during scroll. */
-const FTP_ROW_HEIGHT = 26;
+/** Row height for virtualized entries. Single-line rows follow the
+ *  density-aware `--tree-row-h` metric (same as the sidebar file
+ *  list) instead of a fixed 26px, so SFTP tightens/loosens with the
+ *  Density setting like every other list. The CSS `.ftp-row` carries
+ *  no vertical padding — this number IS the row height; mismatches
+ *  show up as rows overlapping or whitespace gaps during scroll. */
+function useFtpRowHeight(): number {
+  return treeRowHeightForDensity(useThemeStore((s) => s.density));
+}
 
 /** A single row in the virtualized list, discriminated so the ".." parent
  *  pseudo-row and real entries share one renderer. */
@@ -86,12 +91,13 @@ type FtpListRow =
  * `DkSkeleton` pattern in the Docker panel.
  */
 function FtpSkeleton({ rows = 8 }: { rows?: number }) {
+  const rowHeight = useFtpRowHeight();
   return (
     <div className="ftp-skeleton" aria-hidden>
       {Array.from({ length: rows }, (_, i) => {
         const nameWidth = 55 + ((i * 13) % 40); // 55..94%
         return (
-          <div key={i} className="ftp-skeleton-row" style={{ height: FTP_ROW_HEIGHT }}>
+          <div key={i} className="ftp-skeleton-row" style={{ height: rowHeight }}>
             <span className="ftp-sk-bar ftp-sk-ic" />
             <span className="ftp-sk-bar ftp-sk-name" style={{ width: `${nameWidth}%` }} />
             <span className="ftp-sk-bar ftp-sk-perm" />
@@ -247,6 +253,7 @@ export default function SftpPanel(props: Props) {
 
 function SftpPanelBody({ tab }: Props) {
   const { t } = useI18n();
+  const ftpRowHeight = useFtpRowHeight();
   const formatError = (error: unknown) => localizeError(error, t);
   const [state, setState] = useState<SftpBrowseState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1264,7 +1271,7 @@ function SftpPanelBody({ tab }: Props) {
         <div
           key="__parent__"
           className="ftp-row dir"
-          style={{ height: FTP_ROW_HEIGHT }}
+          style={{ height: ftpRowHeight }}
           onClick={() => void browse(remoteDirname(currentRemotePath), { pushHistory: true })}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
@@ -1292,7 +1299,7 @@ function SftpPanelBody({ tab }: Props) {
       <div
         key={entry.path}
         className={"ftp-row" + (isSel ? " sel" : "") + (entry.isDir ? " dir" : "")}
-        style={{ height: FTP_ROW_HEIGHT }}
+        style={{ height: ftpRowHeight }}
         onClick={() => { if (!isRenaming) selectEntry(entry); }}
         onDoubleClick={() => { if (!isRenaming) openEntry(entry); }}
         onContextMenu={(e) => handleRowContextMenu(e, entry)}
@@ -1431,7 +1438,7 @@ function SftpPanelBody({ tab }: Props) {
           "ftp-list" + (dropHover ? " is-drop" : "") + (busy ? " is-loading" : "")
         }
         items={listRows}
-        rowHeight={FTP_ROW_HEIGHT}
+        rowHeight={ftpRowHeight}
         renderRow={renderListRow}
         onDragEnter={handleListDragEnter}
         onDragOver={handleListDragOver}

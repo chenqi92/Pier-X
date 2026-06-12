@@ -38,7 +38,7 @@ import * as cmd from "../lib/shellCommands";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { useConnectionStore } from "../stores/useConnectionStore";
-import { rowHeightForDensity, useThemeStore } from "../stores/useThemeStore";
+import { treeRowHeightForDensity, useThemeStore } from "../stores/useThemeStore";
 import { useTabStore } from "../stores/useTabStore";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import { confirm } from "../stores/useConfirmStore";
@@ -57,7 +57,7 @@ import {
 
 type Props = {
   onOpenLocalTerminal: (path?: string) => void;
-  onConnectSaved: (index: number) => void;
+  onConnectSaved: (index: number, rightTool?: RightTool) => void;
   onNewConnection: () => void;
   onEditConnection: (index: number) => void;
   onPathChange?: (path: string) => void;
@@ -534,7 +534,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
     if (!needle) return entries;
     return entries.filter((e) => e.name.toLowerCase().includes(needle));
   }, [entries, searchText]);
-  const fileRowHeight = rowHeightForDensity(useThemeStore((s) => s.density));
+  const fileRowHeight = treeRowHeightForDensity(useThemeStore((s) => s.density));
   const fileListScrollRef = useRef<HTMLDivElement | null>(null);
   // When the entry set shrinks under a deep scroll offset, the
   // virtualized list would otherwise clamp scrollTop one frame at a
@@ -1364,7 +1364,7 @@ function ServersPane({
   connections: SavedSshConnection[];
   serverSearch: string;
   onSearchChange: (s: string) => void;
-  onConnect: (index: number) => void;
+  onConnect: (index: number, rightTool?: RightTool) => void;
   onEdit: (index: number) => void;
   onRemove: (index: number) => void;
   onNew: () => void;
@@ -1472,9 +1472,26 @@ function ServersPane({
     void onReorder(order, groupLabels).catch(() => {});
   };
 
-  const openMoveMenu = (event: ReactDragEvent | React.MouseEvent, conn: SavedSshConnection) => {
+  const openServerMenu = (event: ReactDragEvent | React.MouseEvent, conn: SavedSshConnection) => {
     event.preventDefault();
     const items: ContextMenuItem[] = [];
+
+    // Primary actions: open a terminal, or open straight onto a built-in
+    // service panel (Redis / MySQL / … land the tab on that right tool so
+    // the user skips the monitor → tool switch).
+    items.push({ label: t("Open terminal"), action: () => onConnect(conn.index) });
+    const SERVER_MENU_TOOLS: RightTool[] = ["redis", "mysql", "postgres", "docker"];
+    for (const tool of SERVER_MENU_TOOLS) {
+      items.push({
+        label: t("Open {tool}", { tool: RIGHT_TOOL_META[tool].label }),
+        action: () => onConnect(conn.index, tool),
+      });
+    }
+    items.push({ divider: true });
+    items.push({ label: t("Edit"), action: () => onEdit(conn.index) });
+    items.push({ label: t("Delete"), action: () => onRemove(conn.index) });
+    items.push({ divider: true });
+
     const currentGroup = effectiveGroup(conn).group;
     const seen = new Set<GroupKey>();
     for (const g of groups) {
@@ -1775,7 +1792,7 @@ function ServersPane({
                     onConnect={() => onConnect(s.index)}
                     onEdit={() => onEdit(s.index)}
                     onRemove={() => onRemove(s.index)}
-                    onContextMenu={(e) => openMoveMenu(e, s)}
+                    onContextMenu={(e) => openServerMenu(e, s)}
                     onDragStart={(e) => {
                       setDragServer(s.index);
                       if (e.dataTransfer) {
@@ -1996,6 +2013,7 @@ function ServerItem({
         className="srv-row"
         draggable
         onClick={onToggle}
+        onDoubleClick={onConnect}
         onContextMenu={onContextMenu}
         onDragStart={onDragStart}
         onDragOver={onDragOverRow}

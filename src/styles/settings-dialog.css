@@ -1,6 +1,15 @@
 /* ── Settings dialog-only controls ─────────────────────────── */
+
+/* Wider shell than the shared 900px `.dlg`: settings rows carry
+ * long values (endpoint URLs, model ids, key paths) that were
+ * clipped by 160px controls inside the narrow shell. */
+.dlg.dlg--settings {
+  width: min(1080px, 94vw);
+  max-height: 88vh;
+}
+
 .settings__slider {
-  width: 160px;
+  width: 220px;
   height: 4px;
   appearance: none;
   background: var(--line-2);

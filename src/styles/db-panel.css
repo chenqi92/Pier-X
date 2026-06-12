@@ -593,10 +593,12 @@
 .dbt-row.lvl-2 {
   padding-left: 30px;
   color: var(--ink-2);
-  font-size: var(--size-small);
-  font-family: var(--mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  /* UI font + original case, DataGrip-style. The old mono +
+   * `text-transform: uppercase` + wide tracking made the table list
+   * read as a foreign font next to every other tree (user-reported),
+   * and uppercase silently misrendered lowercase table names. Mono
+   * stays where alignment matters: the data grid and the editor. */
+  font-size: var(--ui-fs-sm);
 }
 .dbt-row.lvl-3 { padding-left: 42px; color: var(--ink); }
 .dbt-row.group { color: var(--muted); }

@@ -225,14 +225,21 @@
   --dialog-header-height: var(--dialog-header-h);
   --dialog-footer-height: var(--dialog-footer-h);
 
-  /* Settings → Typography "Interface text scale" writes this; only
-   * font-size tokens consume it. Spacing/row-h/icon/radius are
-   * intentionally NOT scaled — type-only resizing per UX intent. */
+  /* Settings → Typography "Interface scale" is applied as NATIVE
+   * webview zoom (scales everything: text, icons, spacing, raw px).
+   * This var is the FALLBACK path only — when the zoom IPC call is
+   * unavailable, useSettingsStore writes the factor here and font
+   * tokens scale type-only (the pre-zoom behavior). When zoom is
+   * active the var is pinned to 1 so fonts don't double-scale. */
   --ui-scale: 1;
 
   /* Density — compact default (Remix baseline) */
   --row-h: 26px;
   --row-pad: 8px;
+  /* Single-line tree rows (sidebar file list). Tighter than the
+   * generic --row-h: a lone 12px label inside a 32–36px row reads
+   * as wasted space at the higher densities (user-reported). */
+  --tree-row-h: 24px;
   --ui-fs: calc(12px * var(--ui-scale));
   --ui-fs-sm: calc(11px * var(--ui-scale));
   --ui-fs-lg: calc(13px * var(--ui-scale));
@@ -340,14 +347,18 @@
 [data-density="comfortable"] {
   --row-h: 32px;
   --row-pad: 12px;
+  --tree-row-h: 27px;
   --ui-fs: calc(13px * var(--ui-scale));
   --ui-fs-sm: calc(12px * var(--ui-scale));
   --ui-fs-lg: calc(14px * var(--ui-scale));
   --titlebar-h: 40px;
   --tabbar-h: 38px;
   --panel-header-h: 38px;
-  --control-height: 32px;
-  --field-height: 36px;
+  /* Controls grow slower than rows: +4px over compact made panel
+   * toolbars (port inputs, Allow/Deny buttons) look bloated next
+   * to their 11–12px labels. */
+  --control-height: 30px;
+  --field-height: 34px;
 }
 
 /* ── Spacious density ──────────────────────────────────────────
@@ -357,14 +368,15 @@
 [data-density="spacious"] {
   --row-h: 36px;
   --row-pad: 14px;
+  --tree-row-h: 29px;
   --ui-fs: calc(13.5px * var(--ui-scale));
   --ui-fs-sm: calc(12.5px * var(--ui-scale));
   --ui-fs-lg: calc(15px * var(--ui-scale));
   --titlebar-h: 44px;
   --tabbar-h: 40px;
   --panel-header-h: 40px;
-  --control-height: 34px;
-  --field-height: 38px;
+  --control-height: 32px;
+  --field-height: 36px;
 }
 
 /* ── Theme-card preview swatches ───────────────────────────────

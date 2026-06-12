@@ -138,6 +138,20 @@ export function rowHeightForDensity(density: Density): number {
   }
 }
 
+/** Pixel value of the `--tree-row-h` token per density — the tighter
+ *  metric for single-line tree rows (sidebar file list). Must stay in
+ *  sync with tokens.css and `.sidebar__file-row`. */
+export function treeRowHeightForDensity(density: Density): number {
+  switch (density) {
+    case "comfortable":
+      return 27;
+    case "spacious":
+      return 29;
+    default:
+      return 24;
+  }
+}
+
 export const useThemeStore = create<ThemeState>((set, get) => {
   const stored = loadPrefs();
   const initialMode: ThemeMode = stored.mode ?? "dark";

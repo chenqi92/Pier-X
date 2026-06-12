@@ -274,11 +274,15 @@
   display: grid;
   grid-template-columns: 20px 1fr 110px 90px 70px 92px;
   gap: var(--sp-2-5);
-  padding: 6px var(--sp-3);
+  /* No vertical padding: row height comes from the inline
+   * `useFtpRowHeight()` value (density-aware --tree-row-h) and the
+   * grid centers content vertically. Padding stacked on a forced
+   * height would clip at the tighter densities. */
+  padding: 0 var(--sp-3);
   align-items: center;
   cursor: default;
   position: relative;
-  font-size: 12px;
+  font-size: var(--ui-fs);
   border-left: 2px solid transparent;
 }
 .ftp-row:hover { background: var(--panel-2); }

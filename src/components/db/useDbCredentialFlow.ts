@@ -176,6 +176,14 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   // which kept a stale `true` across StrictMode double-mounts and silently
   // swallowed every later click.
   const browseGenRef = useRef(0);
+  // True while the in-flight auto-browse was kicked off by an explicit
+  // user action (clicking Connect / saving a credential) rather than the
+  // passive auto-browse that fires when a tab is restored on app launch.
+  // Gates the password-update MODAL: a passive restore must not throw a
+  // blocking dialog in the user's face before they've touched the panel —
+  // it only surfaces the inline hint, and the saved-cred row's Connect
+  // button re-triggers a (now user-initiated) attempt that can pop it.
+  const userInitiatedBrowseRef = useRef(false);
   // Bumped by `activateCredential` so the auto-browse effect re-fires
   // even when the user re-clicks the credential that's already active
   // (e.g. retrying after the seeded auto-browse failed). Without this
@@ -386,8 +394,14 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
      *  to miss, especially when the message wasn't translated. */
     const surfaceMissingKeyring = () => {
       setError(t("Saved password is missing from the keyring. Re-enter it to reconnect."));
-      setPwUpdateOpen(true);
-      setTimeout(() => passwordInputRef.current?.focus(), 0);
+      // Only an explicit user connect pops the blocking modal. On a
+      // passive restore (app just launched, user hasn't clicked anything)
+      // we leave the inline hint above and let the splash's Connect button
+      // re-trigger this user-initiated so the dialog appears on demand.
+      if (userInitiatedBrowseRef.current) {
+        setPwUpdateOpen(true);
+        setTimeout(() => passwordInputRef.current?.focus(), 0);
+      }
     };
 
     void (async () => {
@@ -427,6 +441,7 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
         if (isCurrent()) {
           setActivating(null);
           setConnectingStep(null);
+          userInitiatedBrowseRef.current = false;
         }
       }
     })();
@@ -446,6 +461,8 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     setTunnelError("");
     setActivating(credId);
     setConnectingStep(t("Starting…"));
+    // User clicked Connect — a failed keyring resolve may pop the modal.
+    userInitiatedBrowseRef.current = true;
     updateTab(tab.id, adapter.patchFromCred(cred));
     onReset();
     // Force the auto-browse effect to re-run even if the activated
@@ -469,6 +486,7 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   function handleCredentialAdded(cred: DbCredential) {
     setActivating(cred.id);
     setConnectingStep(t("Starting…"));
+    userInitiatedBrowseRef.current = true;
     updateTab(tab.id, adapter.patchFromSaved(cred));
     onReset();
     // Mirror activateCredential: even when the saved cred id collides

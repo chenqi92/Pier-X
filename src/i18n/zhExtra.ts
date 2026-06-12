@@ -222,7 +222,7 @@ export const zhExtra: Record<string, string> = {
   "Editing": "正在编辑",
   "Editing remote": "正在编辑远程",
   "English": "英语",
-  "Enter the new password. Only the keyring entry is touched.": "输入新密码，仅更新 keyring 中的条目。",
+  "Enter the new password. Only the saved password is updated.": "输入新密码，仅更新已保存的密码。",
   "Execute": "执行",
   "Expand long edges": "展开长连线",
   "Expires in {seconds}s": "{seconds} 秒后过期",

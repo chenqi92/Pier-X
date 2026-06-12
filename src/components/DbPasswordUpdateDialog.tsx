@@ -134,7 +134,7 @@ export default function DbPasswordUpdateDialog({
         <div className="dlg-body dlg-body--form">
           <div className="dlg-form">
             <div className="status-note">
-              {t("Enter the new password. Only the keyring entry is touched.")}
+              {t("Enter the new password. Only the saved password is updated.")}
             </div>
             <label className="field-stack">
               <span className="field-label">{t("Password")}</span>

@@ -42,8 +42,12 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 
-# Cross-platform credential storage
-keyring = "3"
+# Cross-platform credential storage. The actual `keyring` dependency
+# lives in the per-target sections below: keyring 3 ships NO storage
+# backend unless a platform feature is enabled (without one it silently
+# falls back to a non-persistent in-memory mock, so every password write
+# is dropped and credentials never survive a restart). Each OS gets only
+# its own backend so no platform pulls another's system libraries.
 
 # Cross-platform paths
 directories = "6"
@@ -142,6 +146,16 @@ sysinfo = { version = "0.33", default-features = false, features = [
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# macOS Keychain backend for `keyring`.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+# Linux Secret Service backend for `keyring`. `crypto-rust` keeps the
+# encrypted D-Bus session pure-Rust (no system OpenSSL) so the
+# .deb / .rpm / .AppImage builds stay portable.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
@@ -150,6 +164,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }
+# Windows Credential Manager backend for `keyring`.
+keyring = { version = "3", features = ["windows-native"] }
 
 [dev-dependencies]
 env_logger = "0.11"

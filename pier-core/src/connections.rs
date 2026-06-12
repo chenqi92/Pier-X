@@ -850,12 +850,13 @@ pub fn resolve_db_credential(
     let password = match &cred.password {
         DbPasswordStorage::Keyring { credential_id } => credentials::get(credential_id)?,
         DbPasswordStorage::Direct { password } => {
-            // `Direct.password` is `#[serde(skip)]`, so a freshly
-            // loaded store always has an empty string here. Fall
-            // back to the process-local plaintext cache that
-            // `store_password` mirrored into when the keyring
-            // silently dropped the write. Without this the panel
-            // would silently send a missing-AUTH request and get
+            // `Direct.password` now persists to disk, so a freshly loaded
+            // store carries the plaintext here and the credential is
+            // remembered across restarts. The process-local cache remains
+            // a fallback for the rare case the on-disk field is empty —
+            // e.g. a credential saved by an older build that serde-skipped
+            // this field, before it gets re-entered once. Without a
+            // password the panel would send a missing-AUTH request and get
             // a cryptic `NOAUTH` / `Access denied` from the server.
             if !password.is_empty() {
                 Some(password.clone())

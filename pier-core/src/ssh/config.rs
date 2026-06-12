@@ -239,11 +239,16 @@ pub enum DbKind {
 
 /// How the password for a DB credential is stored.
 ///
-/// `Keyring` is the normal case. `Direct` is an opt-in fallback
-/// used when the OS keyring is unavailable (same shape as
-/// [`AuthMethod::DirectPassword`]); the field is `#[serde(skip)]`
-/// so it never touches disk. `None` is used for Redis (no AUTH
-/// configured) and SQLite (passwordless).
+/// `Keyring` is the normal case. `Direct` is the fallback used when the
+/// OS keyring is unavailable (same shape as [`AuthMethod::DirectPassword`],
+/// which it mirrors deliberately): the plaintext is persisted to the
+/// connections file so the credential is remembered across restarts on
+/// machines whose keyring silently drops writes. This is `#[serde(default)]`
+/// rather than `#[serde(skip)]` so it round-trips; the keyring is always
+/// tried first (see `connections::store_password`), so `Direct` — and the
+/// plaintext on disk — only appears when there is no secure store to use,
+/// exactly like the SSH `DirectPassword` already in the same file. `None`
+/// is used for Redis (no AUTH configured) and SQLite (passwordless).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DbPasswordStorage {
@@ -252,10 +257,13 @@ pub enum DbPasswordStorage {
         /// Opaque key used by [`crate::credentials`].
         credential_id: String,
     },
-    /// Password kept in-memory only, never persisted.
+    /// Plaintext password persisted in the connections file. Only used as
+    /// the keyring-unavailable fallback (the keyring is tried first).
     Direct {
-        /// Runtime-only plaintext. Serde-skipped to prevent disk leaks.
-        #[serde(skip)]
+        /// Plaintext password. `#[serde(default)]` keeps old files that
+        /// were written while this field was serde-skipped loading cleanly
+        /// (missing field → empty string, which then re-prompts once).
+        #[serde(default)]
         password: String,
     },
     /// Passwordless authentication (Redis with no AUTH, SQLite).
@@ -446,9 +454,11 @@ mod tests {
     }
 
     #[test]
-    fn db_credential_direct_password_is_not_serialized() {
-        // `DbPasswordStorage::Direct::password` is `#[serde(skip)]`
-        // so the runtime-only plaintext never reaches disk.
+    fn db_credential_direct_password_round_trips() {
+        // `DbPasswordStorage::Direct::password` now persists (the
+        // keyring-unavailable fallback) so the credential is remembered
+        // across restarts, mirroring the SSH `DirectPassword` already in
+        // the same file.
         let original = DbCredential {
             id: "pier-x.db.x".into(),
             kind: DbKind::Redis,
@@ -466,13 +476,33 @@ mod tests {
             egress_id: None,
         };
         let json = serde_json::to_string(&original).expect("serialize");
-        assert!(
-            !json.contains("hunter2"),
-            "serialized JSON leaked password: {json}"
-        );
         let parsed: DbCredential = serde_json::from_str(&json).expect("deserialize");
-        // Password is skipped on serialize, so the parsed side
-        // comes back as empty plaintext.
+        match parsed.password {
+            DbPasswordStorage::Direct { password } => assert_eq!(password, "hunter2"),
+            other => panic!("expected Direct, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn db_credential_direct_missing_password_field_defaults_empty() {
+        // Files written while `Direct::password` was `#[serde(skip)]` have
+        // no `password` key; `#[serde(default)]` must load them as empty
+        // (which re-prompts once) rather than failing the whole store.
+        let json = r#"{
+            "id": "pier-x.db.legacy",
+            "kind": "redis",
+            "label": "old",
+            "host": "127.0.0.1",
+            "port": 6379,
+            "user": "",
+            "database": "0",
+            "sqlite_path": null,
+            "password": { "kind": "direct" },
+            "favorite": false,
+            "source": { "kind": "manual" },
+            "egress_id": null
+        }"#;
+        let parsed: DbCredential = serde_json::from_str(json).expect("deserialize legacy");
         match parsed.password {
             DbPasswordStorage::Direct { password } => assert_eq!(password, ""),
             other => panic!("expected Direct, got {other:?}"),

@@ -109,6 +109,12 @@ function RedisPanelBody({ tab }: Props) {
   // supersede earlier ones. Replaces the `autoBrowseAttempted` flag whose
   // stale `true` swallowed every retry click.
   const browseGenRef = useRef(0);
+  // True only while the in-flight auto-browse was started by an explicit
+  // user action (Connect / save), not the passive auto-browse that fires
+  // when a tab is restored on launch. Gates the password-update MODAL so a
+  // restart never throws a blocking dialog before the user touches the
+  // panel — see useDbCredentialFlow for the same guard.
+  const userInitiatedBrowseRef = useRef(false);
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── Derived ────────────────────────────────────────────────
@@ -254,8 +260,13 @@ function RedisPanelBody({ tab }: Props) {
       setError(
         t("Saved password is missing from the keyring. Re-enter it to reconnect."),
       );
-      setPwUpdateOpen(true);
-      setTimeout(() => passwordInputRef.current?.focus(), 0);
+      // Only an explicit user connect pops the blocking modal. On a passive
+      // restore (app just launched) leave the inline hint above and let the
+      // splash's Connect button re-trigger this user-initiated on demand.
+      if (userInitiatedBrowseRef.current) {
+        setPwUpdateOpen(true);
+        setTimeout(() => passwordInputRef.current?.focus(), 0);
+      }
     };
 
     void (async () => {
@@ -298,6 +309,7 @@ function RedisPanelBody({ tab }: Props) {
         if (isCurrent()) {
           setActivating(null);
           setConnectingStep(null);
+          userInitiatedBrowseRef.current = false;
         }
       }
     })();
@@ -679,6 +691,8 @@ function RedisPanelBody({ tab }: Props) {
     setKeyName("");
     setActivating(credId);
     setConnectingStep(t("Starting…"));
+    // User clicked Connect — a failed keyring resolve may pop the modal.
+    userInitiatedBrowseRef.current = true;
     setHost(cred.host);
     setPort(String(cred.port));
     setUser(cred.user);
@@ -802,6 +816,7 @@ function RedisPanelBody({ tab }: Props) {
         onSaved={(cred) => {
           setActivating(cred.id);
           setConnectingStep(t("Starting…"));
+          userInitiatedBrowseRef.current = true;
           setState(null);
           setHost(cred.host);
           setPort(String(cred.port));

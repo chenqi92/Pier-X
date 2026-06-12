@@ -81,12 +81,18 @@ pub struct DetectedService {
 /// Returns a `Vec` sorted in the order probes fired, which is
 /// stable across runs so the UI doesn't shuffle tabs.
 pub async fn detect_all(session: &SshSession) -> Vec<DetectedService> {
-    let (mysql, redis, postgres, docker) = tokio::join!(
-        detect_mysql(session),
-        detect_redis(session),
-        detect_postgresql(session),
-        detect_docker(session),
-    );
+    // Probes run sequentially rather than via `tokio::join!`. Firing four
+    // concurrent `exec` channels the instant a connection comes up adds a
+    // burst of channel opens that races the interactive shell-channel open
+    // during a session restore — under that contention some servers close
+    // the shell channel, which is exactly the "ssh channel task has exited"
+    // failure we hardened against. One probe at a time keeps the channel
+    // pressure low; each probe is a single short exec, so on a normal link
+    // the added latency is a few round-trips, not a user-visible stall.
+    let mysql = detect_mysql(session).await;
+    let redis = detect_redis(session).await;
+    let postgres = detect_postgresql(session).await;
+    let docker = detect_docker(session).await;
 
     let mut services = Vec::new();
     if let Some(s) = mysql {

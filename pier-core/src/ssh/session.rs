@@ -106,6 +106,17 @@ impl SshSession {
         runtime::shared().block_on(Self::connect(config, verifier))
     }
 
+    /// Whether the underlying russh transport task has stopped — i.e. the
+    /// connection is dead (TCP reset, server disconnect, keepalive
+    /// timeout). The Tauri cache layer uses this to tell a genuinely dead
+    /// session (evict + reconnect) apart from a session that's alive but
+    /// where the *operation* failed (a command returned non-zero, a path
+    /// was missing); only the former should tear down the shared
+    /// connection. See `run_with_session_retry`.
+    pub fn is_closed(&self) -> bool {
+        self.handle.is_closed()
+    }
+
     /// Same contract as [`Self::connect`], but routes the underlying
     /// TCP transport through `egress` when supplied. `egress = None`
     /// is exactly equivalent to [`Self::connect`].
@@ -145,6 +156,14 @@ impl SshSession {
         let russh_config = Arc::new(client::Config {
             inactivity_timeout: Some(Duration::from_secs(300)),
             keepalive_interval: Some(Duration::from_secs(30)),
+            // russh defaults this to 3, so three unanswered keepalives
+            // (~90s) would drop an otherwise-fine session. For a terminal
+            // app that's too twitchy on a flaky link — a brief Wi-Fi blip
+            // or laptop suspend shorter than the window should survive.
+            // 6 × 30s ≈ 3 min of tolerance before we give up; a genuinely
+            // dead connection is still caught quickly at the op layer
+            // (see run_with_session_retry's is_closed eviction).
+            keepalive_max: 6,
             ..Default::default()
         });
 
@@ -792,13 +811,24 @@ impl SshSession {
     /// handed directly to [`crate::terminal::PierTerminal::with_pty`]
     /// — which is the whole point of the M2 trait design.
     pub async fn open_shell_channel(&self, cols: u16, rows: u16) -> Result<SshChannelPty> {
-        let channel = self.handle.channel_open_session().await?;
-        // Request a real PTY on the remote so TUIs like vim and
-        // htop run correctly. xterm-256color matches what
-        // terminal::pty::UnixPty pins for local shells.
+        let mut channel = self.handle.channel_open_session().await?;
+        // `want_reply = true` on both requests is load-bearing. With
+        // `false` (the old behaviour) the server's accept/reject of the
+        // PTY + shell was invisible: when a brand-new connection rejected
+        // or closed the shell channel under the channel contention of a
+        // session restore — the shell open racing the SFTP subsystem and
+        // the concurrent service-detector exec channels — this method
+        // still returned `Ok`, and the dead channel only surfaced when
+        // the first resize/write hit it ("ssh channel task has exited"),
+        // by which point the create-retry ladder had no error to act on.
+        // Asking for a reply lets `confirm_shell_started` turn a failed
+        // open into a real `Err` the caller can retry.
+        //
+        // xterm-256color matches what terminal::pty::UnixPty pins for
+        // local shells, so TUIs like vim and htop render correctly.
         channel
             .request_pty(
-                false, // no reply needed
+                true,
                 "xterm-256color",
                 cols as u32,
                 rows as u32,
@@ -807,8 +837,76 @@ impl SshSession {
                 &[],
             )
             .await?;
-        channel.request_shell(false).await?;
-        Ok(SshChannelPty::spawn(channel, cols, rows))
+        channel.request_shell(true).await?;
+        let prelude = Self::confirm_shell_started(&mut channel).await?;
+        Ok(SshChannelPty::spawn(channel, cols, rows, prelude))
+    }
+
+    /// Wait for the server to confirm the PTY + shell requests issued by
+    /// [`Self::open_shell_channel`], returning any shell output that
+    /// arrived during confirmation so the first prompt is not dropped.
+    ///
+    /// Resolves `Ok` as soon as the shell proves itself live — either
+    /// both requests are acknowledged (two `CHANNEL_SUCCESS`, which the
+    /// SSH spec delivers in request order) or the shell emits its first
+    /// byte. Resolves `Err` on an explicit `CHANNEL_FAILURE`, an early
+    /// channel close, a dropped transport, or a timeout, all of which
+    /// mean the channel is unusable and the caller should retry rather
+    /// than hand back a dead PTY.
+    async fn confirm_shell_started(
+        channel: &mut russh::Channel<russh::client::Msg>,
+    ) -> Result<Vec<u8>> {
+        use russh::ChannelMsg;
+
+        let mut prelude: Vec<u8> = Vec::new();
+        let mut acks = 0u8;
+        let wait = async {
+            loop {
+                match channel.wait().await {
+                    Some(ChannelMsg::Success) => {
+                        acks += 1;
+                        // Two acks = PTY accepted + shell started.
+                        if acks >= 2 {
+                            return Ok(());
+                        }
+                    }
+                    // Any output is definitive proof the shell is live,
+                    // regardless of how the server ordered its replies.
+                    Some(ChannelMsg::Data { data }) => {
+                        prelude.extend_from_slice(&data);
+                        return Ok(());
+                    }
+                    Some(ChannelMsg::ExtendedData { data, ext }) => {
+                        if ext == 1 {
+                            prelude.extend_from_slice(&data);
+                        }
+                        return Ok(());
+                    }
+                    Some(ChannelMsg::Failure) => {
+                        return Err(SshError::InvalidConfig(
+                            "failed to open channel: server rejected the shell request"
+                                .to_string(),
+                        ));
+                    }
+                    Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
+                        return Err(SshError::InvalidConfig(
+                            "failed to open channel: server closed the shell channel during open"
+                                .to_string(),
+                        ));
+                    }
+                    // ExitStatus / WindowAdjusted / etc. — keep waiting.
+                    Some(_) => {}
+                }
+            }
+        };
+
+        match tokio::time::timeout(Duration::from_secs(15), wait).await {
+            Ok(Ok(())) => Ok(prelude),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(SshError::InvalidConfig(
+                "failed to open channel: timed out waiting for the shell to start".to_string(),
+            )),
+        }
     }
 
     /// Sync convenience for [`Self::open_shell_channel`].

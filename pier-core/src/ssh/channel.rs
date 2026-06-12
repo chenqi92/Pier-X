@@ -89,9 +89,21 @@ impl SshChannelPty {
     /// wire up the two bridge queues. This is only called from
     /// [`super::SshSession::open_shell_channel`] — every other
     /// constructor path is either for tests or future protocols.
-    pub(super) fn spawn(channel: russh::Channel<russh::client::Msg>, cols: u16, rows: u16) -> Self {
+    pub(super) fn spawn(
+        channel: russh::Channel<russh::client::Msg>,
+        cols: u16,
+        rows: u16,
+        prelude: Vec<u8>,
+    ) -> Self {
         let (control_tx, control_rx) = unbounded_channel::<ControlMsg>();
         let (data_tx, data_rx) = unbounded_channel::<Vec<u8>>();
+
+        // Bytes the shell emitted before its channel was confirmed (see
+        // SshSession::confirm_shell_started) are replayed ahead of the
+        // live stream so the first prompt is never dropped.
+        if !prelude.is_empty() {
+            let _ = data_tx.send(prelude);
+        }
 
         // Handoff task: drives the russh channel, fans bytes into
         // data_tx, reacts to ControlMsg from the sync side.
@@ -117,6 +129,10 @@ async fn channel_loop(
     mut control_rx: UnboundedReceiver<ControlMsg>,
     data_tx: UnboundedSender<Vec<u8>>,
 ) {
+    // Recorded so the single exit log below names the cause. A silent
+    // exit is exactly what made "ssh channel task has exited" so hard
+    // to diagnose — every break now stamps why.
+    let reason: &str;
     loop {
         tokio::select! {
             biased;
@@ -127,6 +143,7 @@ async fn channel_loop(
                     Some(ControlMsg::Write(bytes)) => {
                         if let Err(e) = channel.data(&bytes[..]).await {
                             log::warn!("ssh channel write failed: {e}");
+                            reason = "write error";
                             break;
                         }
                     }
@@ -136,6 +153,7 @@ async fn channel_loop(
                             .await
                         {
                             log::warn!("ssh channel resize failed: {e}");
+                            reason = "resize error";
                             break;
                         }
                     }
@@ -144,6 +162,7 @@ async fn channel_loop(
                         // channel cleanly and exit.
                         let _ = channel.eof().await;
                         let _ = channel.close().await;
+                        reason = "pty dropped";
                         break;
                     }
                 }
@@ -156,6 +175,7 @@ async fn channel_loop(
                         if data_tx.send(data.to_vec()).is_err() {
                             // Sync side stopped reading — nothing
                             // left to do.
+                            reason = "reader gone";
                             break;
                         }
                     }
@@ -166,10 +186,12 @@ async fn channel_loop(
                         // in order — matches what every other
                         // terminal emulator does.
                         if ext == 1 && data_tx.send(data.to_vec()).is_err() {
+                            reason = "reader gone";
                             break;
                         }
                     }
                     Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) => {
+                        reason = "server closed channel";
                         break;
                     }
                     Some(ChannelMsg::ExitStatus { .. }) => {
@@ -182,11 +204,15 @@ async fn channel_loop(
                         // are handled internally by russh; nothing
                         // for us to do.
                     }
-                    None => break,
+                    None => {
+                        reason = "transport gone";
+                        break;
+                    }
                 }
             }
         }
     }
+    log::info!("ssh channel task exiting: {reason}");
 }
 
 impl Pty for SshChannelPty {
@@ -261,17 +287,25 @@ impl Pty for SshChannelPty {
 impl Drop for SshChannelPty {
     fn drop(&mut self) {
         // Dropping the sender wakes the channel loop on its
-        // control_rx.recv() branch with `None`, which runs the
-        // clean shutdown (eof + close) and exits. After that the
-        // task future is done and the JoinHandle resolves — we
-        // abort it for good measure rather than blocking the
-        // caller on join.
+        // control_rx.recv() branch with `None`, which runs the clean
+        // shutdown (eof + close) and exits.
+        //
+        // Crucially we do NOT abort the task. `JoinHandle::abort` cancels
+        // the future at its next await point, which races — and beats —
+        // the in-flight `channel.eof().await` / `channel.close().await`,
+        // so the SSH CHANNEL_CLOSE never reaches the server and the
+        // server-side session slot leaks. Over many terminal open/close
+        // cycles that exhausts the server's MaxSessions, and new shell
+        // channels are then refused with "Failed to open channel
+        // (ConnectFailed)" even though the connection (and SFTP on it) is
+        // fine. Dropping the JoinHandle simply detaches the task; it
+        // finishes eof+close on the shared runtime — both return promptly
+        // even on a dead link (the send to the transport task just errors)
+        // — and ends on its own.
         drop(std::mem::replace(
             &mut self.control_tx,
             unbounded_channel().0,
         ));
-        if let Some(handle) = self.task.take() {
-            handle.abort();
-        }
+        self.task.take();
     }
 }

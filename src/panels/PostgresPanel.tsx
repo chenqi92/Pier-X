@@ -61,6 +61,8 @@ import type {
   QueryExecutionResult,
   TabState,
 } from "../lib/types";
+import { effectiveShellUser } from "../lib/types";
+import { useSudoElevation } from "../lib/useSudoElevation";
 import { useTabStore } from "../stores/useTabStore";
 import { softwareKeyForTab, useSoftwareStore } from "../stores/useSoftwareStore";
 import { useSoftwareSnapshot } from "../lib/softwareInstall";
@@ -145,6 +147,11 @@ function PostgresPanelBody({ tab }: Props) {
   const [state, setState] = useState<PostgresBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Socket-CLI mode: browse/query via the remote `psql` as the `postgres`
+  // OS user (peer auth) over SSH — no role password or tunnel. Off by
+  // default; toggled from the splash when an SSH session exists.
+  const [socketMode, setSocketMode] = useState(false);
+  const elev = useSudoElevation(tab);
   const [readOnly, setReadOnly] = useState(true);
   const [writeConfirm, setWriteConfirm] = useState("");
   const [queryResult, setQueryResult] = useState<QueryExecutionResult | null>(null);
@@ -191,6 +198,40 @@ function PostgresPanelBody({ tab }: Props) {
     setBusy(true);
     setError("");
     try {
+      // Socket-CLI path: run the remote `psql` as the `postgres` OS user
+      // (peer auth) over SSH — no tunnel, no role password.
+      if (socketMode && flow.sshTarget) {
+        const ssh = flow.sshTarget;
+        try {
+          const s = await cmd.postgresBrowseSocket({
+            host: ssh.host,
+            port: ssh.port,
+            user: ssh.user,
+            authMode: ssh.authMode,
+            password: ssh.password,
+            keyPath: ssh.keyPath,
+            savedConnectionIndex: ssh.savedConnectionIndex,
+            database: (draft ? "" : (nextDb ?? tab.pgDatabase)).trim() || null,
+            schema: draft ? null : (nextSchema ?? schema).trim() || null,
+            table: draft ? null : (nextTable ?? state?.tableName ?? "").trim() || null,
+            sudoPassword: elev.getElevationArgs().sudoPassword,
+          });
+          setState(s);
+          setSchema(s.schemaName);
+          if (s.databaseName !== tab.pgDatabase) {
+            updateTab(tab.id, { pgDatabase: s.databaseName });
+          }
+        } catch (e) {
+          const raw = e instanceof Error ? e.message : String(e);
+          if (!elev.handlePermissionDenied(raw, () => void browse(passwordOverride, nextTable, nextDb, nextSchema, draft))) {
+            setError(formatError(e));
+          }
+        } finally {
+          setBusy(false);
+        }
+        return;
+      }
+
       const target = await flow.ensureConnectionTarget(false, draft);
       const pw = passwordOverride !== undefined ? passwordOverride : tab.pgPassword;
       const connectionUser = draft?.user ?? tab.pgUser;
@@ -279,15 +320,32 @@ function PostgresPanelBody({ tab }: Props) {
     setNotice("");
     const needsWrite = sql.trim() !== "" && !isReadOnlySql(sql);
     try {
-      const target = await flow.ensureConnectionTarget();
-      const r = await cmd.postgresExecute({
-        host: target.host,
-        port: target.port,
-        user: tab.pgUser.trim(),
-        password: tab.pgPassword,
-        database: tab.pgDatabase.trim() || null,
-        sql,
-      });
+      let r: QueryExecutionResult;
+      if (socketMode && flow.sshTarget) {
+        const ssh = flow.sshTarget;
+        r = await cmd.postgresExecuteSocket({
+          host: ssh.host,
+          port: ssh.port,
+          user: ssh.user,
+          authMode: ssh.authMode,
+          password: ssh.password,
+          keyPath: ssh.keyPath,
+          savedConnectionIndex: ssh.savedConnectionIndex,
+          database: tab.pgDatabase.trim() || null,
+          sql,
+          sudoPassword: elev.getElevationArgs().sudoPassword,
+        });
+      } else {
+        const target = await flow.ensureConnectionTarget();
+        r = await cmd.postgresExecute({
+          host: target.host,
+          port: target.port,
+          user: tab.pgUser.trim(),
+          password: tab.pgPassword,
+          database: tab.pgDatabase.trim() || null,
+          sql,
+        });
+      }
       setQueryResult(r);
       setNotice(t("{elapsed} ms", { elapsed: r.elapsedMs }));
       sqlTabs.pushHistory({
@@ -304,7 +362,10 @@ function PostgresPanelBody({ tab }: Props) {
       }
     } catch (e) {
       setQueryResult(null);
-      setQueryError(formatError(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      if (!(socketMode && elev.handlePermissionDenied(raw, () => void runQuery()))) {
+        setQueryError(formatError(e));
+      }
     } finally {
       setQueryBusy(false);
     }
@@ -455,7 +516,7 @@ function PostgresPanelBody({ tab }: Props) {
     (!needsWrite || (!readOnly && writeConfirm.trim().toUpperCase() === "WRITE"));
 
   // ── Splash rows ────────────────────────────────────────────
-  const viaLabel = flow.sshTarget ? `${flow.sshTarget.user}@${flow.sshTarget.host}` : t("direct · localhost");
+  const viaLabel = flow.sshTarget ? `${effectiveShellUser(tab, flow.sshTarget)}@${flow.sshTarget.host}` : t("direct · localhost");
   const viaKind: DbSplashRowData["via"]["kind"] = flow.hasSsh ? "tunnel" : "direct";
 
   const savedRows: DbSplashRowData[] = flow.savedForKind.map((cred) => {
@@ -495,7 +556,7 @@ function PostgresPanelBody({ tab }: Props) {
     addr: `${det.host}:${det.port}`,
     via: {
       kind: det.source === "docker" ? "local" : "remote",
-      label: det.source === "docker" ? det.image || t("docker container") : det.processName || t("systemd unit"),
+      label: det.source === "docker" ? (det.image || t("docker container")) + (det.internal ? " · " + t("internal network") : "") : det.processName || t("systemd unit"),
     },
     stats: <span className="sep">—</span>,
     lastUsed: null,
@@ -996,19 +1057,40 @@ function PostgresPanelBody({ tab }: Props) {
               : t("No SSH session on this tab — add a connection manually to connect directly.")
           }
           extraBody={
-            flow.hasSsh && postgresInstalled === false ? (
-              <InlineInstallCta
-                packageId="postgres"
-                sshParams={swSshParams}
-                swKey={swKey}
-                enableService={false}
-                hint={t("PostgreSQL client is not installed on this host.")}
-                onInstalled={() => void flow.refreshDetection()}
-              />
-            ) : undefined
+            <>
+              {flow.sshTarget && (
+                <button
+                  type="button"
+                  className="btn is-compact"
+                  style={{ marginBottom: "var(--sp-2)" }}
+                  disabled={busy}
+                  onClick={() => {
+                    // Connect by running the remote `psql` as the
+                    // `postgres` OS user (peer auth) — no role password
+                    // or tunnel.
+                    setSocketMode(true);
+                    void browse();
+                  }}
+                  title={t("Browse the local PostgreSQL as the postgres OS user (peer auth, no role password)")}
+                >
+                  {t("Connect as postgres (socket)")}
+                </button>
+              )}
+              {flow.hasSsh && postgresInstalled === false ? (
+                <InlineInstallCta
+                  packageId="postgres"
+                  sshParams={swSshParams}
+                  swKey={swKey}
+                  enableService={false}
+                  hint={t("PostgreSQL client is not installed on this host.")}
+                  onInstalled={() => void flow.refreshDetection()}
+                />
+              ) : null}
+            </>
           }
         />
         {dialogs}
+        {elev.dialog}
       </>
     );
   }
@@ -1367,6 +1449,7 @@ function PostgresPanelBody({ tab }: Props) {
           database: tab.pgDatabase || null,
         }}
       />
+      {elev.dialog}
     </>
   );
 }

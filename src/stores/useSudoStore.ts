@@ -6,12 +6,29 @@ import {
   setElevationPassword,
 } from "../lib/shellCommands";
 import type { SshParams } from "../lib/shellCommands";
+import { sshSetHostElevation } from "../lib/commands";
 
 /** Stable host key — `user@host:port`. Same host accessed under
  *  different SSH users gets a separate credential, which matches
  *  how sudoers are configured per-user. */
 export function sudoKeyFor(params: SshParams): string {
   return `${params.user}@${params.host}:${params.port}`;
+}
+
+/** Mirror an in-memory sudo password into the backend host-elevation
+ *  map so the whole right side follows it. Fire-and-forget; failures are
+ *  non-fatal (the per-command `sudoPassword` path still works). */
+function syncHostElevation(params: SshParams, password: string | null): void {
+  void sshSetHostElevation({
+    host: params.host,
+    port: params.port,
+    user: params.user,
+    authMode: params.authMode,
+    password: params.password,
+    keyPath: params.keyPath,
+    savedConnectionIndex: params.savedConnectionIndex,
+    sudoPassword: password,
+  }).catch(() => {});
 }
 
 type HydrateState = "idle" | "pending" | "done";
@@ -86,6 +103,10 @@ export const useSudoStore = create<SudoStoreState>((set, get) => ({
       }
       return { passwords: { ...s.passwords, [key]: password } };
     });
+    // Mirror to the backend host-elevation map so every right-side path
+    // (detection, monitor, panel reads/writes) follows it — not just the
+    // panels that explicitly thread `sudoPassword`.
+    void syncHostElevation(params, password || null);
   },
   setPersistent: async (params, password, remember) => {
     const key = sudoKeyFor(params);
@@ -99,6 +120,7 @@ export const useSudoStore = create<SudoStoreState>((set, get) => ({
     // Mark hydrated so subsequent hydrate() calls don't overwrite
     // what the user just typed with whatever is on disk.
     set((s) => ({ hydrateState: { ...s.hydrateState, [key]: "done" } }));
+    syncHostElevation(params, password || null);
     if (!remember) {
       // Caller chose not to persist. Best-effort: remove any
       // stale keychain entry for the same host so the next hydrate
@@ -145,6 +167,7 @@ export const useSudoStore = create<SudoStoreState>((set, get) => ({
           if (s.passwords[key]) return s;
           return { passwords: { ...s.passwords, [key]: stored } };
         });
+        syncHostElevation(params, stored);
       }
     } catch (e) {
       console.warn("hydrate elevation password failed", e);
@@ -159,6 +182,7 @@ export const useSudoStore = create<SudoStoreState>((set, get) => ({
       const { [key]: _omit, ...rest } = s.passwords;
       return { passwords: rest };
     });
+    syncHostElevation(params, null);
     if (forgetPersistent) {
       try {
         await forgetElevationPassword(params.user, params.host, params.port);

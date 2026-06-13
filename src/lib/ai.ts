@@ -86,6 +86,8 @@ export type AiChatEvent = {
   callId?: string;
   name?: string;
   summary?: string;
+  /** Model's one-line, plain-language description of the action. */
+  explanation?: string;
   host?: string;
   risk?: AiRisk;
   status?: "awaiting" | "running" | "blocked";

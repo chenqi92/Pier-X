@@ -1,7 +1,7 @@
 // ── Tauri Command Wrappers ───────────────────────────────────────
 // Typed wrappers for all invoke() calls to pier-core via Tauri IPC.
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
   CoreInfo,
   DbCredential,
@@ -917,6 +917,44 @@ export const mysqlExecute = (params: {
   sql: string;
 }) => invoke<QueryExecutionResult>("mysql_execute", params);
 
+/** Socket-CLI MySQL browse — runs the remote host's own `mysql` client
+ *  over SSH **as the terminal's effective user** (auth_socket), so the
+ *  panel follows `su root` with no DB account. Takes SSH addressing (not
+ *  the tunnel endpoint) + elevation; index/FK introspection is omitted
+ *  in this mode. */
+export const mysqlBrowseSocket = (
+  params: SshParams & {
+    database?: string | null;
+    table?: string | null;
+    offset?: number | null;
+    limit?: number | null;
+    sudoPassword?: string | null;
+    effectiveUser?: string | null;
+  },
+) =>
+  invoke<MysqlBrowserState>("mysql_browse_socket", {
+    ...params,
+    database: params.database ?? null,
+    table: params.table ?? null,
+    offset: params.offset ?? null,
+    limit: params.limit ?? null,
+  });
+
+/** Socket-CLI MySQL statement execution — counterpart to
+ *  {@link mysqlBrowseSocket} for the query editor. */
+export const mysqlExecuteSocket = (
+  params: SshParams & {
+    database?: string | null;
+    sql: string;
+    sudoPassword?: string | null;
+    effectiveUser?: string | null;
+  },
+) =>
+  invoke<QueryExecutionResult>("mysql_execute_socket", {
+    ...params,
+    database: params.database ?? null,
+  });
+
 /** One row of `information_schema.processlist` (the
  *  `SHOW FULL PROCESSLIST` data). */
 export type MysqlProcessRow = {
@@ -1070,6 +1108,44 @@ export const postgresExecute = (params: {
   sql: string;
 }) => invoke<QueryExecutionResult>("postgres_execute", params);
 
+/** Socket-CLI Postgres browse — runs the remote host's own `psql` over
+ *  SSH as a specific OS user (default `postgres`, Unix-socket **peer**
+ *  auth), so the panel browses as superuser with no role password or
+ *  tunnel. Takes SSH addressing (not the tunnel) + the sudo password +
+ *  optionally the OS user to become. Index/FK/enum introspection is
+ *  omitted in this mode. */
+export const postgresBrowseSocket = (
+  params: SshParams & {
+    database?: string | null;
+    schema?: string | null;
+    table?: string | null;
+    sudoPassword?: string | null;
+    /** OS user to `sudo -u` into for peer auth. Defaults to `postgres`. */
+    dbOsUser?: string | null;
+  },
+) =>
+  invoke<PostgresBrowserState>("postgres_browse_socket", {
+    ...params,
+    database: params.database ?? null,
+    schema: params.schema ?? null,
+    table: params.table ?? null,
+  });
+
+/** Socket-CLI Postgres statement execution — counterpart to
+ *  {@link postgresBrowseSocket}. */
+export const postgresExecuteSocket = (
+  params: SshParams & {
+    database?: string | null;
+    sql: string;
+    sudoPassword?: string | null;
+    dbOsUser?: string | null;
+  },
+) =>
+  invoke<QueryExecutionResult>("postgres_execute_socket", {
+    ...params,
+    database: params.database ?? null,
+  });
+
 /** One row of `pg_stat_activity` as returned by
  *  {@link postgresListActivity}. Camel-cased to mirror the
  *  serde-camelCase backend struct. */
@@ -1184,6 +1260,43 @@ export const dockerContainerAction = (params: {
 
 // ── SFTP ────────────────────────────────────────────────────────
 
+/** One result of {@link sshElevationPreflight}. */
+export type ElevationCheck = {
+  /** `ssh` / `login_user` / `sudo_nopasswd` / `elevate`. */
+  name: string;
+  ok: boolean;
+  detail: string;
+};
+
+/** Register (or clear, with `sudoPassword: null`) the elevation secret
+ *  for a host so **every** right-side path through its session (service
+ *  detection, monitor probe, panel reads/writes) follows the terminal's
+ *  elevation. The sudo store mirrors itself here on every change. */
+export const sshSetHostElevation = (
+  params: SshParams & { sudoPassword?: string | null },
+) => invoke<void>("ssh_set_host_elevation", params);
+
+/** Register (or clear, with `effectiveUser: null` / the login user) the
+ *  terminal's current effective OS user for a host, so the right side
+ *  follows a `sudo -i` / `su root` even when no password was captured
+ *  (NOPASSWD / cached-creds hosts fire no prompt). Arms the session for a
+ *  passwordless `sudo -n` and picks the elevation method. Mirrored from
+ *  the terminal watcher whenever the observed shell user changes. */
+export const sshSetHostEffectiveUser = (
+  params: SshParams & { effectiveUser?: string | null },
+) => invoke<void>("ssh_set_host_effective_user", params);
+
+/** Probe whether elevation works on a host before relying on it: opens
+ *  the session, reads the login user, checks NOPASSWD sudo, and exercises
+ *  the actual become-user with the given secret. Returns one row per
+ *  check so the UI can show exactly where it would break. */
+export const sshElevationPreflight = (
+  params: SshParams & {
+    sudoPassword?: string | null;
+    effectiveUser?: string | null;
+  },
+) => invoke<ElevationCheck[]>("ssh_elevation_preflight", params);
+
 export const sftpBrowse = (params: {
   host: string;
   port: number;
@@ -1193,6 +1306,10 @@ export const sftpBrowse = (params: {
   keyPath: string;
   path?: string | null;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password — when listing fails with EACCES the
+   *  backend re-lists via `sudo find`, so the panel can browse
+   *  root-only directories after the terminal has `su`'d to root. */
+  sudoPassword?: string | null;
 }) => invoke<SftpBrowseState>("sftp_browse", params);
 
 // ── Markdown ────────────────────────────────────────────────────
@@ -1648,6 +1765,11 @@ export type SoftwarePackageDetail = {
    *  or when the query produced nothing parseable. */
   latestVersion: string | null;
   installedVersion: string | null;
+  /** Whether the package manager reports a newer installable version,
+   *  computed authoritatively by the manager (so a Debian/RPM revision
+   *  suffix on the candidate isn't mistaken for an update). `null` when
+   *  it couldn't be determined. */
+  updateAvailable: boolean | null;
   variants: SoftwarePackageVariantStatus[];
 };
 
@@ -2463,15 +2585,29 @@ export async function subscribeSoftwareServiceAction(
 }
 
 export const sqliteBrowseRemote = (
-  params: SshParams & { dbPath: string; table?: string | null },
+  params: SshParams & {
+    dbPath: string;
+    table?: string | null;
+    /** Sudo password — EACCES on a root-owned `.db` runs `sqlite3` via
+     *  `sudo`/`sudo -u` so the panel follows the terminal's identity. */
+    sudoPassword?: string | null;
+    /** Terminal's effective user; maps to `sudo` (root) / `sudo -u`. */
+    effectiveUser?: string | null;
+  },
 ) =>
   invoke<SqliteBrowserState>("sqlite_browse_remote", {
     ...params,
     table: params.table ?? null,
   });
 
-export const sqliteExecuteRemote = (params: SshParams & { dbPath: string; sql: string }) =>
-  invoke<QueryExecutionResult>("sqlite_execute_remote", params);
+export const sqliteExecuteRemote = (
+  params: SshParams & {
+    dbPath: string;
+    sql: string;
+    sudoPassword?: string | null;
+    effectiveUser?: string | null;
+  },
+) => invoke<QueryExecutionResult>("sqlite_execute_remote", params);
 
 export const sqliteFindInDir = (
   params: SshParams & { directory: string; maxDepth?: number | null },
@@ -2971,6 +3107,8 @@ export const sftpMkdir = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   path: string;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password — EACCES falls back to `sudo mkdir`. */
+  sudoPassword?: string | null;
 }) => invoke<void>("sftp_mkdir", params);
 
 export const sftpRemove = (params: {
@@ -2978,6 +3116,8 @@ export const sftpRemove = (params: {
   path: string;
   isDir: boolean;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password — EACCES falls back to `sudo rmdir`/`rm -f`. */
+  sudoPassword?: string | null;
 }) => invoke<void>("sftp_remove", params);
 
 export const sftpRename = (params: {
@@ -2985,6 +3125,8 @@ export const sftpRename = (params: {
   from: string;
   to: string;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password — EACCES falls back to `sudo mv`. */
+  sudoPassword?: string | null;
 }) => invoke<void>("sftp_rename", params);
 
 export const sftpChmod = (params: {
@@ -2992,12 +3134,16 @@ export const sftpChmod = (params: {
   path: string;
   mode: number;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password — EACCES falls back to `sudo chmod`. */
+  sudoPassword?: string | null;
 }) => invoke<void>("sftp_chmod", params);
 
 export const sftpCreateFile = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   path: string;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password — EACCES falls back to `sudo touch`. */
+  sudoPassword?: string | null;
 }) => invoke<void>("sftp_create_file", params);
 
 /** Payload returned by {@link sftpReadText} — raw content plus
@@ -3033,6 +3179,114 @@ export const sftpReadText = (params: {
   sudoPassword?: string | null;
 }) => invoke<SftpTextFile>("sftp_read_text", params);
 
+/** SSH addressing shared by every SFTP command. */
+type SftpConnArgs = {
+  host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
+  savedConnectionIndex?: number | null;
+  sudoPassword?: string | null;
+};
+
+/** One base64-encoded byte window from {@link sftpReadRange}. */
+export type SftpRangeChunk = {
+  /** Base64 of the bytes in `[offset, offset + length)`. */
+  base64: string;
+  offset: number;
+  /** Bytes actually returned (fewer than requested at EOF). */
+  length: number;
+  /** True when this window reached end-of-file. */
+  eof: boolean;
+};
+
+/** Read a byte range of a remote file, base64-encoded. Backs the hex
+ *  viewer and any binary windowing — never loads the whole file. A
+ *  single request is clamped to 8 MiB on the backend. */
+export const sftpReadRange = (params: SftpConnArgs & {
+  path: string;
+  offset: number;
+  length: number;
+}) => invoke<SftpRangeChunk>("sftp_read_range", params);
+
+/** One decoded slice pushed over the {@link sftpStreamText} channel. */
+export type SftpTextChunk = {
+  /** `"text"` for content, `"binary"` for the "switch to hex" signal. */
+  kind: "text" | "binary";
+  /** Encoding the slice was decoded with (e.g. `UTF-8`, `GBK`). */
+  encoding: string;
+  text: string;
+  /** Byte offset after this slice — pass as `startOffset` to continue. */
+  nextOffset: number;
+  totalSize: number;
+  /** True on the terminal message (EOF or the binary signal). */
+  done: boolean;
+  /** True when the cap was hit before EOF. */
+  truncated: boolean;
+};
+
+/** Stream a remote file to the frontend as decoded text in windows.
+ *  The first chunk lands after one round trip regardless of file
+ *  size; `onChunk` fires per window until `done`. Cancel via
+ *  {@link sftpCancelTransfer} with the same `streamId`. */
+export const sftpStreamText = (
+  params: SftpConnArgs & {
+    path: string;
+    streamId: string;
+    startOffset?: number | null;
+    maxBytes?: number | null;
+  },
+  onChunk: (chunk: SftpTextChunk) => void,
+) => {
+  const onEvent = new Channel<SftpTextChunk>();
+  onEvent.onmessage = onChunk;
+  return invoke<void>("sftp_stream_text", { ...params, onEvent });
+};
+
+/** Normalized table returned by the spreadsheet / CSV previews. */
+export type SftpTablePreview = {
+  /** Sheet names in the workbook (`["csv"]` for CSV), for a picker. */
+  sheetNames: string[];
+  /** Index of the sheet this preview came from. */
+  sheetIndex: number;
+  columns: string[];
+  rows: string[][];
+  truncated: boolean;
+};
+
+/** Parse a remote spreadsheet (xlsx/xlsb/xls/ods) into a table. */
+export const sftpPreviewSpreadsheet = (params: SftpConnArgs & {
+  path: string;
+  sheetIndex?: number | null;
+}) => invoke<SftpTablePreview>("sftp_preview_spreadsheet", params);
+
+/** Parse a remote CSV/TSV into a table. `tab` selects the tab delimiter. */
+export const sftpPreviewCsv = (params: SftpConnArgs & {
+  path: string;
+  tab?: boolean | null;
+}) => invoke<SftpTablePreview>("sftp_preview_csv", params);
+
+/** Build a `pierfs://` URL the WebView can fetch / `<img src>` /
+ *  `<video src>` / hand to pdf.js. The connection identity rides in
+ *  the query string; the backend resolves the already-open SFTP
+ *  session from it (no secrets in the URL). */
+export const pierfsUrl = (
+  args: { host: string; port: number; user: string; authMode: string },
+  path: string,
+): string => {
+  // `convertFileSrc` gives the platform-correct origin
+  // (`pierfs://localhost/…` on macOS/Linux, `http://pierfs.localhost/…`
+  // on Windows). The remote path also rides in the query (authoritative
+  // on the backend) so percent-encoded slashes survive any path-segment
+  // normalization the platform applies.
+  const base = convertFileSrc(path, "pierfs");
+  const q = new URLSearchParams({
+    host: args.host,
+    port: String(args.port),
+    user: args.user,
+    authMode: args.authMode,
+    path,
+  });
+  return `${base}?${q.toString()}`;
+};
+
 export const sftpWriteText = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   path: string;
@@ -3052,6 +3306,9 @@ export const sftpDownload = (params: {
    *  transfer queue entry. Omit to skip events and take the
    *  whole-file fast path on the backend. */
   transferId?: string | null;
+  /** Optional sudo password — EACCES falls back to `sudo base64`
+   *  (size-capped, no streaming). */
+  sudoPassword?: string | null;
 }) => invoke<void>("sftp_download", params);
 
 export const sftpUpload = (params: {
@@ -3072,6 +3329,9 @@ export const sftpWriteBytes = (params: {
   path: string;
   contentBase64: string;
   savedConnectionIndex?: number | null;
+  /** Optional sudo password — EACCES falls back to `base64 -d | sudo tee`
+   *  (size-capped). */
+  sudoPassword?: string | null;
 }) => invoke<void>("sftp_write_bytes", params);
 
 /** Payload shape of the `sftp:progress` event emitted by the
@@ -3288,9 +3548,16 @@ export const localSystemInfo = (includeDisks: boolean) =>
 export const localProcessKill = (pid: number, force: boolean) =>
   invoke<void>("local_process_kill", { pid, force });
 
-/** Send `kill <pid>` (or `kill -9 <pid>` when `force`) over SSH. */
+/** Send `kill <pid>` (or `kill -9 <pid>` when `force`) over SSH. When
+ *  the login user can't signal the target (e.g. a root process), an
+ *  armed `sudoPassword` retries via `sudo`/`sudo -u <effectiveUser>`. */
 export const serverMonitorProcessKill = (
-  params: SshParams & { pid: number; force: boolean },
+  params: SshParams & {
+    pid: number;
+    force: boolean;
+    sudoPassword?: string | null;
+    effectiveUser?: string | null;
+  },
 ) => invoke<void>("server_monitor_process_kill", params);
 
 // ── Utility Functions ───────────────────────────────────────────

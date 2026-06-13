@@ -437,7 +437,15 @@ function DockerPanelBody({ tab }: Props) {
                   keyPath: sshArgs.keyPath,
                   all: showAll,
                   savedConnectionIndex: sshArgs.savedConnectionIndex,
-                  sudoPassword: sshArgs.sudoPassword,
+                  // Read the sudo password imperatively, same as
+                  // containerAction — the captured sshArgs.sudoPassword
+                  // can be stale/empty, which made the reconcile fetch
+                  // run unprivileged and report the wrong (pre-action)
+                  // state on sudo-gated hosts.
+                  sudoPassword:
+                    (sudoStoreKey
+                      ? useSudoStore.getState().passwords[sudoStoreKey] ?? null
+                      : null) ?? sshArgs.sudoPassword,
                 })
               : null;
           if (!overview) {
@@ -652,6 +660,15 @@ function DockerPanelBody({ tab }: Props) {
     });
 
     try {
+      // Read the sudo password imperatively at click time — the
+      // captured `sshArgs.sudoPassword` can be stale (the row's onClick
+      // closure may predate the password landing in the store, which
+      // left `docker stop` running unprivileged → silent EACCES on the
+      // root-owned daemon socket while the optimistic UI showed
+      // "stopped"). `getState()` always sees the current value.
+      const freshSudo = sudoStoreKey
+        ? useSudoStore.getState().passwords[sudoStoreKey] ?? null
+        : null;
       const result = isLocal
         ? await cmd.localDockerAction(id, action)
         : await cmd.dockerContainerAction({
@@ -664,11 +681,38 @@ function DockerPanelBody({ tab }: Props) {
             containerId: id,
             action,
             savedConnectionIndex: sshArgs.savedConnectionIndex,
-            sudoPassword: sshArgs.sudoPassword,
+            sudoPassword: freshSudo ?? sshArgs.sudoPassword,
           });
       setNotice(`${shortId(id)}: ${localizeRuntimeMessage(result, t)}`);
     } catch (e) {
       handleDockerCatch(e);
+      // Roll back the optimistic flip so the row reflects reality and
+      // its action button doesn't stay stuck disabled. (A failed
+      // `stop` left the row showing "exited" with no working button.)
+      dockerMerge(dockerKey, (prev) => ({
+        ...prev,
+        containers: prev.containers.map((c) => {
+          if (c.id !== id) return c;
+          if (action === "stop") {
+            return { ...c, running: true, state: "running", status: t("Running") };
+          }
+          if (action === "start") {
+            return { ...c, running: false, state: "exited", status: t("Exited") };
+          }
+          return c;
+        }),
+      }));
+      // On permission-denied, prompt for sudo (mirrors the listing's
+      // own flow) so a retry runs elevated.
+      const raw = e instanceof Error ? e.message : String(e);
+      if (!isLocal && sshTarget && looksLikePermissionDenied(raw)) {
+        setSudoPrompt({
+          hostLabel: `${effectiveShellUser(tab, sshTarget)}@${sshTarget.host}`,
+          errorMessage: sudoPassword
+            ? t("Saved sudo password was rejected — please re-enter.")
+            : undefined,
+        });
+      }
     } finally {
       markContainerBusy(id, false);
       // Reconcile in the background — don't block the UI on a second

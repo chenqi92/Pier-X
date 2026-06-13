@@ -2,26 +2,26 @@ use pier_core::connections::{
     self, ConnectionStore, DbCredentialPatch, NewDbCredential, ResolvedDbCredential,
 };
 use pier_core::credentials;
-use pier_core::logging as pier_logging;
 use pier_core::egress::{EgressKind, EgressProfile};
+use pier_core::logging as pier_logging;
 use pier_core::markdown;
+use pier_core::services::apache;
+use pier_core::services::caddy;
 use pier_core::services::docker;
 use pier_core::services::firewall;
 use pier_core::services::git::{CommitInfo, GitClient, StashEntry, UnpushedCommit};
 use pier_core::services::mysql::{
     self as mysql_service, MysqlClient, MysqlConfig, MysqlProcessRow,
 };
-use pier_core::services::apache;
-use pier_core::services::caddy;
 use pier_core::services::nginx;
-use pier_core::services::web_server;
-use pier_core::services::postgres::{PgActivityRow, PostgresClient, PostgresConfig};
-use pier_core::services::redis::{RedisClient, RedisConfig};
 use pier_core::services::package_manager;
 use pier_core::services::package_mirror;
+use pier_core::services::postgres::{PgActivityRow, PostgresClient, PostgresConfig};
+use pier_core::services::redis::{RedisClient, RedisConfig};
 use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
 use pier_core::services::sqlite_remote;
+use pier_core::services::web_server;
 use pier_core::ssh::config::{DbCredential, DbCredentialSource, DbKind};
 use pier_core::ssh::db_detect::{self, DbDetectionReport, DetectedDbInstance};
 use pier_core::ssh::service_detector;
@@ -168,6 +168,30 @@ struct AppState {
     /// `openvpn` / `openconnect` child. The handle's `Drop` reaps
     /// the process, so removing the entry tears the VPN down.
     vpn_processes: Mutex<HashMap<String, Arc<pier_core::egress::VpnProcess>>>,
+    /// Per-host elevation secret, keyed the same as `sftp_sessions`
+    /// (`auth_mode:user@host:port`). Set by the frontend via
+    /// [`ssh_set_host_elevation`] whenever the terminal's elevation
+    /// secret (captured at a `sudo`/`su` prompt, or entered in a dialog)
+    /// changes; removed when the terminal drops back to the login user.
+    /// [`get_or_open_ssh_session`] applies it to the shared session, so
+    /// **every** right-side path that runs through `exec_with_sudo`
+    /// (detection, monitor probe, panel reads/writes) follows the
+    /// terminal's elevation — "elevate once in the terminal, the whole
+    /// right side follows". The secret drives `sudo` first, falling back
+    /// to `su` (so a `su root` password works too). In-memory only.
+    host_elevation: Mutex<HashMap<String, String>>,
+    /// Per-host *effective OS user* observed in the terminal, keyed the
+    /// same as `host_elevation`. Set by the frontend via
+    /// [`ssh_set_host_effective_user`] whenever the terminal's current
+    /// shell user changes (`root` after `sudo -i` / `su root`, cleared on
+    /// `exit`). This is the elevation signal that does NOT depend on
+    /// capturing a password: a `sudo -i` on a NOPASSWD / cached-creds host
+    /// fires no prompt, so [`host_elevation`] stays empty, yet the right
+    /// side should still follow. [`get_or_open_ssh_session`] reads this to
+    /// *arm* the session for a passwordless `sudo -n` and to pick the
+    /// elevation method (root → `sudo`, other user → `sudo -u`). In-memory
+    /// only; never authentication material.
+    host_effective_user: Mutex<HashMap<String, String>>,
 }
 
 /// Bookkeeping for one in-flight "edit remote file with the OS
@@ -202,6 +226,8 @@ impl Default for AppState {
             transfer_cancels: Mutex::new(HashMap::new()),
             egress_forwarders: Mutex::new(HashMap::new()),
             vpn_processes: Mutex::new(HashMap::new()),
+            host_elevation: Mutex::new(HashMap::new()),
+            host_effective_user: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -549,7 +575,6 @@ struct MysqlForeignKeyView {
     on_update: String,
     on_delete: String,
 }
-
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1181,6 +1206,9 @@ struct DetectedDbInstanceView {
     version: Option<String>,
     pid: Option<u32>,
     process_name: Option<String>,
+    /// Docker container with no published host port — reachable only on
+    /// the bridge network; `host` is then the container's bridge IP.
+    internal: bool,
     signature: String,
 }
 
@@ -1764,17 +1792,430 @@ fn get_or_open_ssh_session_with_sudo(
     sudo_password: Option<String>,
 ) -> Result<Arc<SshSession>, String> {
     let session = get_or_open_ssh_session(
-        state, host, port, user, auth_mode, password, key_path, saved_index,
+        state,
+        host,
+        port,
+        user,
+        auth_mode,
+        password,
+        key_path,
+        saved_index,
     )?;
-    // Always overwrite the slot — even with None — so a tab that
-    // previously cached sudo and now wants to run without it
-    // (user toggled "Forget password") can't accidentally pick up
-    // the old value from a sibling panel still using this session.
-    session.set_sudo_password_blocking(sudo_password);
+    // `get_or_open_ssh_session` already applied the host-elevation maps
+    // (captured password + observed effective user) authoritatively. Only
+    // override when the caller threaded an explicit value: a `Some`
+    // (including `Some("")` to forget) wins, while `None` leaves the
+    // map-applied state intact — so a panel that doesn't thread the
+    // captured password still follows the terminal's `sudo -i` instead of
+    // wiping the secret the map just set. "Forget password" clears the map
+    // via `ssh_set_host_elevation(None)`, which this path then reflects.
+    if let Some(pw) = sudo_password {
+        let key = sftp_cache_key(host, port, user, auth_mode);
+        let effective_user = state
+            .host_effective_user
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&key).cloned());
+        apply_host_elevation(&session, Some(pw), effective_user.as_deref(), user);
+    }
     Ok(session)
 }
 
+/// Verbose elevation trace — gated behind Settings → Privacy → verbose
+/// diagnostics. Carries command previews / host output, so it only lands
+/// on disk when the user opts in for a bug report. Filter the Log viewer
+/// by `elevation` to follow the whole story.
+fn diag_elevation(detail: &str) {
+    pier_core::logging::write_event_verbose("DEBUG", "elevation", detail);
+}
+
+/// Always-on elevation warning — no sensitive output, just "this
+/// elevated op failed and here's the one-line reason", so a privilege
+/// bug surfaces in the default log without needing verbose mode.
+fn warn_elevation(detail: &str) {
+    pier_core::logging::write_event("WARN", "elevation", detail);
+}
+
+/// Like [`get_or_open_ssh_session_with_sudo`], but also pins the
+/// elevation method so `exec_with_sudo` follows the terminal's effective
+/// user. `effective_user` is the terminal's current shell user
+/// (`tab.currentShellUser`); when it's empty or equals the SSH login
+/// user, elevation stays plain root `sudo` (on-demand elevation still
+/// works). Otherwise it becomes `sudo -u <effective_user>` so the panel
+/// mirrors the identity the operator `su`/`sudo -u`'d into.
+#[allow(clippy::too_many_arguments)]
+fn get_or_open_ssh_session_elevated(
+    state: &tauri::State<'_, AppState>,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+    saved_index: Option<usize>,
+    sudo_password: Option<String>,
+    effective_user: Option<&str>,
+) -> Result<Arc<SshSession>, String> {
+    let session = get_or_open_ssh_session(
+        state,
+        host,
+        port,
+        user,
+        auth_mode,
+        password,
+        key_path,
+        saved_index,
+    )?;
+    let secret_armed = sudo_password
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    session.set_sudo_password_blocking(sudo_password);
+    let elevation = match effective_user {
+        Some(eu) if !eu.is_empty() && eu != user => {
+            pier_core::sudo::Elevation::become_user_via_sudo(eu)
+        }
+        _ => pier_core::sudo::Elevation::Sudo,
+    };
+    diag_elevation(&format!(
+        "session {user}@{host}:{port} login={user} effective={effective_user:?} \
+         elevation={elevation:?} secret={}",
+        if secret_armed { "armed" } else { "none" }
+    ));
+    session.set_elevation_blocking(elevation);
+    Ok(session)
+}
+
+/// One result row of [`ssh_elevation_preflight`].
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ElevationCheck {
+    /// Machine name of the check (`ssh` / `login_user` / `sudo_nopasswd`
+    /// / `elevate`).
+    name: String,
+    /// Whether the check passed.
+    ok: bool,
+    /// Human-readable detail (command output / error first line).
+    detail: String,
+}
+
+/// Probe whether elevation actually works on a host, **before** the user
+/// relies on it — the proactive half of the "avoid silent bugs" story
+/// (the reactive half is the `elevation` log trace). Runs a short battery
+/// over the SSH session and reports each check pass/fail so the user sees
+/// exactly where it would break (no sudo, requiretty, wrong become-user,
+/// bad password) rather than discovering it mid-operation.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn ssh_elevation_preflight(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+    effective_user: Option<String>,
+) -> Result<Vec<ElevationCheck>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let mut checks: Vec<ElevationCheck> = Vec::new();
+
+        let session = match get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        ) {
+            Ok(s) => {
+                checks.push(ElevationCheck {
+                    name: "ssh".into(),
+                    ok: true,
+                    detail: format!("connected to {host}:{port}"),
+                });
+                s
+            }
+            Err(e) => {
+                checks.push(ElevationCheck {
+                    name: "ssh".into(),
+                    ok: false,
+                    detail: e,
+                });
+                return Ok(checks);
+            }
+        };
+
+        let login = session
+            .exec_command_blocking("id -un")
+            .map(|(c, o)| (c, o.trim().to_string()))
+            .unwrap_or((1, String::new()));
+        checks.push(ElevationCheck {
+            name: "login_user".into(),
+            ok: login.0 == 0,
+            detail: if login.1.is_empty() {
+                "could not read `id -un`".into()
+            } else {
+                login.1
+            },
+        });
+
+        let nopw = session
+            .exec_command_blocking("sudo -n true 2>&1")
+            .unwrap_or((1, String::new()));
+        checks.push(ElevationCheck {
+            name: "sudo_nopasswd".into(),
+            ok: nopw.0 == 0,
+            detail: if nopw.0 == 0 {
+                "NOPASSWD sudo available".into()
+            } else {
+                nopw.1
+                    .lines()
+                    .next()
+                    .unwrap_or("password required")
+                    .trim()
+                    .to_string()
+            },
+        });
+
+        // Exercise the actual elevation the panels would use, with the
+        // supplied secret: become the target user and read `id -un`.
+        let elevation = match effective_user.as_deref() {
+            Some(eu) if !eu.is_empty() && eu != user => {
+                pier_core::sudo::Elevation::become_user_via_sudo(eu)
+            }
+            _ => pier_core::sudo::Elevation::Sudo,
+        };
+        let want = match &elevation {
+            pier_core::sudo::Elevation::SudoUser { target_user }
+            | pier_core::sudo::Elevation::Su { target_user } => target_user.clone(),
+            _ => "root".to_string(),
+        };
+        let (code, out) = session
+            .exec_as_effective_blocking("id -un", &elevation, sudo_password.as_deref())
+            .unwrap_or((1, String::new()));
+        let became = out.lines().last().unwrap_or("").trim().to_string();
+        let elevate_ok = code == 0 && became == want;
+        checks.push(ElevationCheck {
+            name: "elevate".into(),
+            ok: elevate_ok,
+            detail: if elevate_ok {
+                format!("became '{became}' via {elevation:?}")
+            } else if pier_core::sudo::is_permission_denied(&out) {
+                format!(
+                    "could not become '{want}' (exit {code}): {}",
+                    out.lines().next().unwrap_or("").trim()
+                )
+            } else {
+                format!("became '{became}', wanted '{want}' (exit {code})")
+            },
+        });
+
+        diag_elevation(&format!(
+            "preflight {user}@{host}: {}",
+            checks
+                .iter()
+                .map(|c| format!("{}={}", c.name, if c.ok { "ok" } else { "FAIL" }))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+        Ok(checks)
+    })
+    .await
+    .map_err(|e| format!("ssh_elevation_preflight join: {e}"))?
+}
+
+/// Obtain a cached/fresh SSH session AND apply the per-host elevation the
+/// frontend registered (via [`ssh_set_host_elevation`]). This is the
+/// single choke point every right-side path goes through, so applying the
+/// host elevation here makes detection / monitor / panel reads follow the
+/// terminal's `sudo`/`su` without each command threading a secret.
+///
+/// The applied secret is idempotent across concurrent callers (they all
+/// read the same map value), so the shared session's slot isn't clobbered.
+/// `get_or_open_ssh_session_with_sudo` still overrides with an explicit
+/// just-entered password when present.
 fn get_or_open_ssh_session(
+    state: &tauri::State<'_, AppState>,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+    saved_index: Option<usize>,
+) -> Result<Arc<SshSession>, String> {
+    let session = get_or_open_ssh_session_inner(
+        state,
+        host,
+        port,
+        user,
+        auth_mode,
+        password,
+        key_path,
+        saved_index,
+    )?;
+    let key = sftp_cache_key(host, port, user, auth_mode);
+    let elevation_secret = state
+        .host_elevation
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&key).cloned());
+    // The terminal's effective OS user (if it elevated). Drives both the
+    // elevation *method* (root → `sudo`, other user → `sudo -u <user>`)
+    // and the "armed" flag that lets `exec_with_sudo` try a passwordless
+    // `sudo -n` when no secret was captured (NOPASSWD / cached-creds host).
+    let effective_user = state
+        .host_effective_user
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&key).cloned())
+        .filter(|eu| !eu.is_empty() && eu != user);
+    apply_host_elevation(&session, elevation_secret, effective_user.as_deref(), user);
+    Ok(session)
+}
+
+/// Apply a host's elevation state to a freshly-resolved session: the
+/// captured secret (if any), the elevation method derived from the
+/// terminal's effective user, and the "armed" flag. Centralizes the
+/// `host_elevation` + `host_effective_user` → session wiring so the
+/// session-getter and the two set-commands stay in sync.
+///
+/// The two maps are the single source of truth, so this **authoritatively**
+/// reflects them onto the session every time: a `None`/empty `secret`
+/// clears a forgotten password rather than leaving a stale one, and the
+/// armed flag is set exactly when the host is elevated (a captured secret
+/// **or** an observed effective user other than the login user). Callers
+/// that want a transient per-call password (e.g.
+/// [`get_or_open_ssh_session_with_sudo`]) override afterwards.
+fn apply_host_elevation(
+    session: &Arc<SshSession>,
+    secret: Option<String>,
+    effective_user: Option<&str>,
+    login_user: &str,
+) {
+    let secret = secret.filter(|s| !s.is_empty());
+    let elevated_user = effective_user.filter(|eu| !eu.is_empty() && *eu != login_user);
+    let armed = secret.is_some() || elevated_user.is_some();
+    // Reflect the map's secret onto the slot every time — `None` clears a
+    // password the user just forgot.
+    session.set_sudo_password_blocking(secret);
+    if armed {
+        let elevation = match elevated_user {
+            Some(eu) => pier_core::sudo::Elevation::become_user_via_sudo(eu),
+            None => pier_core::sudo::Elevation::Sudo,
+        };
+        session.set_elevation_blocking(elevation);
+    }
+    session.set_elevation_armed_blocking(armed);
+}
+
+/// Register (or clear) the elevation secret for a host so every
+/// right-side path that runs through this host's session follows the
+/// terminal's elevation. The frontend mirrors its in-memory sudo store
+/// here whenever the secret changes (captured at a terminal `sudo`/`su`
+/// prompt, entered in a dialog, or forgotten). `sudo_password = None`
+/// (or empty) clears it — e.g. the terminal dropped back to the login
+/// user. Applied to any already-open session immediately so an active
+/// panel follows without a reopen.
+#[tauri::command]
+fn ssh_set_host_elevation(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    sudo_password: Option<String>,
+) -> Result<(), String> {
+    let key = sftp_cache_key(&host, port, &user, &auth_mode);
+    let value = sudo_password.filter(|p| !p.is_empty());
+    {
+        let mut m = state
+            .host_elevation
+            .lock()
+            .map_err(|_| "host_elevation poisoned".to_string())?;
+        match &value {
+            Some(p) => {
+                m.insert(key.clone(), p.clone());
+            }
+            None => {
+                m.remove(&key);
+            }
+        }
+    }
+    // Push onto a live cached session right away, preserving any
+    // effective-user arming so a password change doesn't drop the
+    // `sudo -u <user>` method or the armed flag.
+    let effective_user = state
+        .host_effective_user
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&key).cloned());
+    if let Ok(sessions) = state.sftp_sessions.lock() {
+        if let Some(sess) = sessions.get(&key) {
+            apply_host_elevation(sess, value, effective_user.as_deref(), &user);
+        }
+    }
+    Ok(())
+}
+
+/// Register (or clear) the terminal's current **effective OS user** for a
+/// host, so the right side follows a `sudo -i` / `su root` even when no
+/// password was captured (NOPASSWD / cached-credentials hosts fire no
+/// prompt). The frontend calls this from the terminal watcher whenever
+/// the observed shell user changes: `effective_user = Some("root")` after
+/// elevation, `None` (or the login user) on `exit`. This *arms* the
+/// session for a passwordless `sudo -n` and picks the elevation method
+/// (root → `sudo`, other user → `sudo -u <user>`); it is never treated as
+/// a credential. Applied to any already-open session immediately.
+#[tauri::command]
+fn ssh_set_host_effective_user(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    effective_user: Option<String>,
+) -> Result<(), String> {
+    let key = sftp_cache_key(&host, port, &user, &auth_mode);
+    // Only a *different* user counts as elevation; the login user (or an
+    // empty value) clears the entry — the terminal is back to baseline.
+    let value = effective_user.filter(|eu| !eu.is_empty() && *eu != user);
+    {
+        let mut m = state
+            .host_effective_user
+            .lock()
+            .map_err(|_| "host_effective_user poisoned".to_string())?;
+        match &value {
+            Some(eu) => {
+                m.insert(key.clone(), eu.clone());
+            }
+            None => {
+                m.remove(&key);
+            }
+        }
+    }
+    // Re-apply combined elevation to any live session: keep the captured
+    // secret (if any), update the method + armed flag from the new user.
+    let secret = state
+        .host_elevation
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&key).cloned());
+    if let Ok(sessions) = state.sftp_sessions.lock() {
+        if let Some(sess) = sessions.get(&key) {
+            apply_host_elevation(sess, secret, value.as_deref(), &user);
+        }
+    }
+    Ok(())
+}
+
+fn get_or_open_ssh_session_inner(
     state: &tauri::State<'_, AppState>,
     host: &str,
     port: u16,
@@ -1924,9 +2365,8 @@ fn get_or_open_ssh_session(
             // supplied credentials yet", not "the credentials are
             // wrong". Stamping it would just delay the legitimate
             // retry the moment the watcher captures the password.
-            let attempt_was_credential_starved = auth_mode == "password"
-                && password.is_empty()
-                && saved_index.is_none();
+            let attempt_was_credential_starved =
+                auth_mode == "password" && password.is_empty() && saved_index.is_none();
             if !attempt_was_credential_starved {
                 if let Ok(mut slot) = guard.last_fail.lock() {
                     *slot = Some((Instant::now(), e.clone(), cred_fp));
@@ -2043,9 +2483,7 @@ fn ssh_sessions_retain(state: tauri::State<'_, AppState>, active: Vec<String>) {
     // (`strong_count == 1`): a guard some thread is mid-handshake
     // through keeps its entry, preserving the singleflight invariant.
     if let Ok(mut guards) = state.session_init_guards.lock() {
-        guards.retain(|key, guard| {
-            keep.contains(&suffix_of(key)) || Arc::strong_count(guard) > 1
-        });
+        guards.retain(|key, guard| keep.contains(&suffix_of(key)) || Arc::strong_count(guard) > 1);
     }
     let to_evict: Vec<String> = match state.sftp_sessions.lock() {
         Ok(cache) => cache
@@ -2072,7 +2510,10 @@ fn ssh_sessions_retain(state: tauri::State<'_, AppState>, active: Vec<String>) {
     pier_core::logging::write_event(
         "INFO",
         "ssh.cache",
-        &format!("evicted {} idle cached session(s) on tab close", to_evict.len()),
+        &format!(
+            "evicted {} idle cached session(s) on tab close",
+            to_evict.len()
+        ),
     );
 }
 
@@ -2132,6 +2573,31 @@ fn error_warrants_reconnect(message: &str) -> bool {
         || m.contains("ssh connect") // connect failed / connect timeout
         || m.contains("keepalive")
         || m.contains("failed to open channel") // MaxSessions / channel refusal
+}
+
+/// Run a blocking command body on tokio's blocking pool so the
+/// Tauri IPC / event-loop thread stays free while it works.
+///
+/// Why this exists: pier-core's `*_blocking` helpers call
+/// `runtime::shared().block_on(...)` on a **separate** runtime.
+/// `block_on` panics if invoked on a tokio worker thread — which is
+/// where a sync fn marked `#[tauri::command(async)]` runs — so those
+/// commands either froze the UI (when left as plain sync `#[tauri::command]`,
+/// running on the IPC thread) or hung forever (when marked `(async)`).
+/// A blocking-pool thread is allowed to block, so `block_on` is legal
+/// here and the IPC thread never stalls.
+///
+/// Command bodies that need the managed `AppState` re-acquire it inside
+/// `f` via the captured `AppHandle` (`app.state::<AppState>()`), because
+/// `tauri::State<'_>` borrows the app and cannot cross the `.await`.
+async fn run_blocking<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("background task failed: {e}"))?
 }
 
 /// Run `op` against the cached session. On a first-attempt failure where
@@ -2602,6 +3068,7 @@ fn map_detected_db_instance(d: DetectedDbInstance) -> DetectedDbInstanceView {
         version: d.metadata.version,
         pid: d.metadata.pid,
         process_name: d.metadata.process_name,
+        internal: d.metadata.internal,
         signature: d.signature,
     }
 }
@@ -2741,10 +3208,7 @@ impl SshJumpContext {
         if inner.depth >= Self::MAX_DEPTH {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!(
-                    "ssh-jump chain exceeded max depth {}",
-                    Self::MAX_DEPTH
-                ),
+                format!("ssh-jump chain exceeded max depth {}", Self::MAX_DEPTH),
             ));
         }
         if !inner.visited.insert(name.to_string()) {
@@ -2792,8 +3256,8 @@ impl SshJumpContext {
         target_host: &str,
         target_port: u16,
     ) -> std::io::Result<pier_core::egress::EgressStream> {
-        let store = ConnectionStore::load_default()
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let store =
+            ConnectionStore::load_default().map_err(|e| std::io::Error::other(e.to_string()))?;
         let cfg = store
             .connections
             .iter()
@@ -2902,9 +3366,12 @@ fn create_ssh_terminal_from_config(
         (AuthMethod::Auto | AuthMethod::AutoChain { .. }, _) => {
             ("auto", String::new(), String::new())
         }
-        (AuthMethod::PublicKeyFile { private_key_path, .. }, false) => {
-            ("key", String::new(), private_key_path.clone())
-        }
+        (
+            AuthMethod::PublicKeyFile {
+                private_key_path, ..
+            },
+            false,
+        ) => ("key", String::new(), private_key_path.clone()),
         (AuthMethod::PublicKeyFile { .. }, true) => ("key", String::new(), String::new()),
         (AuthMethod::DirectPassword { password }, false) => {
             ("password", password.clone(), String::new())
@@ -2912,8 +3379,7 @@ fn create_ssh_terminal_from_config(
         // Saved profiles should be reopened from the stored SshConfig so
         // keychain passwords, encrypted-key passphrases, and egress settings
         // remain authoritative instead of being reconstructed from tab state.
-        (AuthMethod::DirectPassword { .. }, true)
-        | (AuthMethod::KeychainPassword { .. }, _) => {
+        (AuthMethod::DirectPassword { .. }, true) | (AuthMethod::KeychainPassword { .. }, _) => {
             ("password", String::new(), String::new())
         }
     };
@@ -3012,11 +3478,7 @@ fn create_ssh_terminal_from_config(
     //
     // Audit: every auto-elevate attempt lands in the log file.
     if config.auto_elevate {
-        let key = credentials::elevation_credential_id(
-            &config.user,
-            &config.host,
-            config.port,
-        );
+        let key = credentials::elevation_credential_id(&config.user, &config.host, config.port);
         match credentials::get(&key) {
             Ok(Some(pw)) if !pw.is_empty() => {
                 pier_logging::write_event(
@@ -3228,12 +3690,7 @@ fn build_terminal_lines(
             }
 
             if let Some(style) = current_style.take() {
-                push_terminal_segment(
-                    &mut segments,
-                    style,
-                    &mut current_text,
-                    &mut current_cells,
-                );
+                push_terminal_segment(&mut segments, style, &mut current_text, &mut current_cells);
             }
 
             let hash = hash_terminal_line(&segments);
@@ -3783,9 +4240,7 @@ fn git_stash_apply(path: Option<String>, index: String) -> Result<String, String
     let index = index.trim();
     reject_flaglike_ref(index, "stash index")?;
     let client = open_git_client(path)?;
-    client
-        .stash_apply(index)
-        .map_err(|error| error.to_string())
+    client.stash_apply(index).map_err(|error| error.to_string())
 }
 
 #[tauri::command(async)]
@@ -3793,9 +4248,7 @@ fn git_stash_pop(path: Option<String>, index: String) -> Result<String, String> 
     let index = index.trim();
     reject_flaglike_ref(index, "stash index")?;
     let client = open_git_client(path)?;
-    client
-        .stash_pop(index)
-        .map_err(|error| error.to_string())
+    client.stash_pop(index).map_err(|error| error.to_string())
 }
 
 #[tauri::command(async)]
@@ -3803,9 +4256,7 @@ fn git_stash_drop(path: Option<String>, index: String) -> Result<String, String>
     let index = index.trim();
     reject_flaglike_ref(index, "stash index")?;
     let client = open_git_client(path)?;
-    client
-        .stash_drop(index)
-        .map_err(|error| error.to_string())
+    client.stash_drop(index).map_err(|error| error.to_string())
 }
 
 #[tauri::command(async)]
@@ -3825,9 +4276,7 @@ fn git_stash_reword(
 #[tauri::command(async)]
 fn git_unpushed_commits(path: Option<String>) -> Result<Vec<UnpushedCommit>, String> {
     let client = open_git_client(path)?;
-    client
-        .unpushed_commits()
-        .map_err(|error| error.to_string())
+    client.unpushed_commits().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -3947,12 +4396,7 @@ async fn host_health_deep_probe(
     // tells the user to open a tab/panel to populate the cache.
     let session = {
         let state: tauri::State<'_, AppState> = app.state();
-        match peek_cached_ssh_session_any_auth(
-            &state,
-            &conn.host,
-            conn.port,
-            &conn.user,
-        ) {
+        match peek_cached_ssh_session_any_auth(&state, &conn.host, conn.port, &conn.user) {
             Some(s) => s,
             None => return Ok(None),
         }
@@ -4404,8 +4848,8 @@ fn egress_vpn_start(state: tauri::State<'_, AppState>, id: String) -> Result<(),
             }
         }
     }
-    let process = pier_core::egress::vpn_subprocess::spawn(&id, &profile.kind)
-        .map_err(|e| e.to_string())?;
+    let process =
+        pier_core::egress::vpn_subprocess::spawn(&id, &profile.kind).map_err(|e| e.to_string())?;
     if let Some(p) = process {
         if let Ok(mut procs) = state.vpn_processes.lock() {
             procs.insert(id, Arc::new(p));
@@ -4450,8 +4894,16 @@ struct EgressProbeResult {
 /// Pass an explicit target to test reachability of the actual
 /// host you care about (the DB / SSH server you're about to
 /// connect to). Probe is hard-capped at 5 seconds.
-#[tauri::command(async)]
-fn egress_profile_test(
+#[tauri::command]
+async fn egress_profile_test(
+    id: Option<String>,
+    target_host: Option<String>,
+    target_port: Option<u16>,
+) -> Result<EgressProbeResult, String> {
+    run_blocking(move || egress_profile_test_impl(id, target_host, target_port)).await
+}
+
+fn egress_profile_test_impl(
     id: Option<String>,
     target_host: Option<String>,
     target_port: Option<u16>,
@@ -4588,11 +5040,7 @@ fn set_elevation_password(
 /// caller (`useSudoStore.hydrate`) treats that as "user has not
 /// opted in yet, prompt on demand".
 #[tauri::command]
-fn get_elevation_password(
-    user: String,
-    host: String,
-    port: u16,
-) -> Result<Option<String>, String> {
+fn get_elevation_password(user: String, host: String, port: u16) -> Result<Option<String>, String> {
     if user.trim().is_empty() || host.trim().is_empty() || port == 0 {
         return Ok(None);
     }
@@ -4632,8 +5080,40 @@ fn egress_credential_ids(kind: &EgressKind) -> Vec<String> {
     }
 }
 
-#[tauri::command(async)]
-fn ssh_tunnel_open(
+#[tauri::command]
+async fn ssh_tunnel_open(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    remote_host: String,
+    remote_port: u16,
+    local_port: Option<u16>,
+    saved_connection_index: Option<usize>,
+) -> Result<TunnelInfoView, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        ssh_tunnel_open_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            remote_host,
+            remote_port,
+            local_port,
+            saved_connection_index,
+        )
+    })
+    .await
+}
+
+fn ssh_tunnel_open_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -4794,10 +5274,7 @@ fn host_key_verifier() -> HostKeyVerifier {
             let cb: HostKeyPromptCb = Arc::new(move |req: HostKeyPromptRequest| {
                 let state = state.clone();
                 Box::pin(async move {
-                    let id = format!(
-                        "khp-{}",
-                        state.next_id.fetch_add(1, Ordering::Relaxed),
-                    );
+                    let id = format!("khp-{}", state.next_id.fetch_add(1, Ordering::Relaxed),);
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     if let Ok(mut map) = state.pending.lock() {
                         map.insert(id.clone(), tx);
@@ -4843,8 +5320,48 @@ fn host_key_verifier() -> HostKeyVerifier {
 /// per query; `run_with_session_retry` evicts + retries once
 /// when the cached session went stale.
 #[allow(clippy::too_many_arguments)]
-#[tauri::command(async)]
-fn code_search(
+#[tauri::command]
+async fn code_search(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    cwd: String,
+    query: String,
+    case_insensitive: Option<bool>,
+    regex: Option<bool>,
+    whole_word: Option<bool>,
+    glob: Option<String>,
+    max_hits: Option<usize>,
+) -> Result<pier_core::services::code_search::SearchOutput, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        code_search_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            cwd,
+            query,
+            case_insensitive,
+            regex,
+            whole_word,
+            glob,
+            max_hits,
+        )
+    })
+    .await
+}
+
+fn code_search_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -5066,10 +5583,7 @@ fn mysql_browse_blocking(
             })
             .collect()
     };
-    let tables: Vec<String> = table_summaries
-        .iter()
-        .map(|s| s.name.clone())
-        .collect();
+    let tables: Vec<String> = table_summaries.iter().map(|s| s.name.clone()).collect();
     // Views + routines are pulled per-database too. Failures here
     // are non-fatal — a permission-restricted user might be unable
     // to read `information_schema.routines`; we'd rather show a
@@ -5077,7 +5591,9 @@ fn mysql_browse_blocking(
     let views = if database_name.is_empty() {
         Vec::new()
     } else {
-        client.list_views_blocking(&database_name).unwrap_or_default()
+        client
+            .list_views_blocking(&database_name)
+            .unwrap_or_default()
     };
     let routines = if database_name.is_empty() {
         Vec::new()
@@ -5216,6 +5732,238 @@ fn mysql_browse_blocking(
         total_rows,
         browse_elapsed_ms,
     })
+}
+
+/// Map the terminal's effective user to the elevation used for the
+/// socket-CLI DB path. Empty / login-equal → plain root `sudo`;
+/// otherwise `sudo -u <user>`.
+fn db_socket_elevation(
+    effective_user: Option<&str>,
+    login_user: &str,
+) -> pier_core::sudo::Elevation {
+    match effective_user {
+        Some(eu) if !eu.is_empty() && eu != login_user => {
+            pier_core::sudo::Elevation::become_user_via_sudo(eu)
+        }
+        _ => pier_core::sudo::Elevation::Sudo,
+    }
+}
+
+/// Socket-CLI MySQL browse — runs the remote host's own `mysql` client
+/// as the terminal's effective user (auth_socket), so the panel follows
+/// `su root` / `sudo -i` with no DB account. Mirrors
+/// [`mysql_browse_blocking`] but over an SSH exec channel; index /
+/// foreign-key / process introspection is omitted in this mode (the
+/// panel fail-softs to empty, same as a permission-restricted user).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn mysql_browse_socket(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    database: Option<String>,
+    table: Option<String>,
+    offset: Option<u64>,
+    limit: Option<u64>,
+    sudo_password: Option<String>,
+    effective_user: Option<String>,
+) -> Result<MysqlBrowserState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use pier_core::services::mysql_cli as cli;
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let elevation = db_socket_elevation(effective_user.as_deref(), &user);
+        diag_elevation(&format!(
+            "mysql socket-CLI {user}@{host}: elevation={elevation:?}"
+        ));
+        let secret = sudo_password.as_deref();
+
+        let databases =
+            cli::list_databases(&session, &elevation, secret).map_err(|e| e.to_string())?;
+        let database_name = choose_active_item(database, &databases);
+
+        let table_summaries: Vec<MysqlTableSummary> = if database_name.is_empty() {
+            Vec::new()
+        } else {
+            cli::list_tables_meta(&session, &elevation, secret, &database_name)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|s| MysqlTableSummary {
+                    name: s.name,
+                    row_count: s.row_count,
+                    data_bytes: s.data_bytes,
+                    index_bytes: s.index_bytes,
+                    engine: s.engine,
+                    updated_at: s.updated_at,
+                    comment: s.comment,
+                })
+                .collect()
+        };
+        let tables: Vec<String> = table_summaries.iter().map(|s| s.name.clone()).collect();
+        let views = if database_name.is_empty() {
+            Vec::new()
+        } else {
+            cli::list_views(&session, &elevation, secret, &database_name).unwrap_or_default()
+        };
+        let routines = if database_name.is_empty() {
+            Vec::new()
+        } else {
+            cli::list_routines(&session, &elevation, secret, &database_name)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| MysqlRoutineSummary {
+                    name: r.name,
+                    kind: r.kind,
+                })
+                .collect()
+        };
+        let table_name = choose_active_item(table, &tables);
+        let columns = if database_name.is_empty() || table_name.is_empty() {
+            Vec::new()
+        } else {
+            cli::list_columns(&session, &elevation, secret, &database_name, &table_name)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|c| MysqlColumnView {
+                    name: c.name,
+                    column_type: c.column_type,
+                    nullable: c.nullable,
+                    key: c.key,
+                    default_value: c.default_value.unwrap_or_default(),
+                    extra: c.extra,
+                    comment: c.comment,
+                })
+                .collect()
+        };
+
+        let effective_page_size = limit.unwrap_or(24).clamp(1, 500);
+        let effective_offset = offset.unwrap_or(0);
+        let mut browse_elapsed_ms: u64 = 0;
+        let preview = if database_name.is_empty()
+            || table_name.is_empty()
+            || !mysql_service::is_safe_ident(&database_name)
+            || !mysql_service::is_safe_ident(&table_name)
+        {
+            None
+        } else {
+            match cli::execute(
+                &session,
+                &elevation,
+                secret,
+                &format!(
+                    "SELECT * FROM `{database_name}`.`{table_name}` \
+                     LIMIT {effective_page_size} OFFSET {effective_offset}"
+                ),
+                None,
+            ) {
+                Ok(r) => {
+                    browse_elapsed_ms = r.elapsed_ms;
+                    Some(map_mysql_preview(r))
+                }
+                Err(_) => None,
+            }
+        };
+        let total_rows: Option<u64> = if database_name.is_empty()
+            || table_name.is_empty()
+            || !mysql_service::is_safe_ident(&database_name)
+            || !mysql_service::is_safe_ident(&table_name)
+        {
+            None
+        } else {
+            cli::execute(
+                &session,
+                &elevation,
+                secret,
+                &format!("SELECT COUNT(*) AS total FROM `{database_name}`.`{table_name}`"),
+                None,
+            )
+            .ok()
+            .and_then(|r| {
+                r.rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok()))
+            })
+        };
+
+        Ok(MysqlBrowserState {
+            database_name,
+            databases,
+            table_name,
+            tables,
+            table_summaries,
+            views,
+            routines,
+            columns,
+            indexes: Vec::new(),
+            foreign_keys: Vec::new(),
+            preview,
+            page_size: effective_page_size,
+            page_offset: effective_offset,
+            total_rows,
+            browse_elapsed_ms,
+        })
+    })
+    .await
+    .map_err(|e| format!("mysql_browse_socket join: {e}"))?
+}
+
+/// Socket-CLI MySQL statement execution — counterpart to
+/// [`mysql_browse_socket`], for the query editor.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn mysql_execute_socket(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    database: Option<String>,
+    sql: String,
+    sudo_password: Option<String>,
+    effective_user: Option<String>,
+) -> Result<QueryExecutionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use pier_core::services::mysql_cli as cli;
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let elevation = db_socket_elevation(effective_user.as_deref(), &user);
+        diag_elevation(&format!(
+            "mysql socket-CLI {user}@{host}: elevation={elevation:?}"
+        ));
+        let db = database.as_deref().filter(|d| !d.trim().is_empty());
+        let r = cli::execute(&session, &elevation, sudo_password.as_deref(), &sql, db)
+            .map_err(|e| e.to_string())?;
+        Ok(map_mysql_query_result(r))
+    })
+    .await
+    .map_err(|e| format!("mysql_execute_socket join: {e}"))?
 }
 
 #[tauri::command]
@@ -5452,7 +6200,9 @@ async fn redis_rename_key(
         let from_key = from.trim();
         let to_key = to.trim();
         if from_key.is_empty() || to_key.is_empty() {
-            return Err(String::from("Both source and destination keys are required."));
+            return Err(String::from(
+                "Both source and destination keys are required.",
+            ));
         }
         if from_key == to_key {
             return Err(String::from("Source and destination keys must differ."));
@@ -5837,7 +6587,10 @@ fn terminal_resize(
 /// the `terminal_snapshot` pull command and the push path in
 /// `tauri_terminal_notify`. Caller must hold the terminals lock.
 /// NOTE: consumes the one-shot `bell_pending` flag.
-fn build_terminal_snapshot(managed: &ManagedTerminal, scrollback_offset: usize) -> TerminalSnapshot {
+fn build_terminal_snapshot(
+    managed: &ManagedTerminal,
+    scrollback_offset: usize,
+) -> TerminalSnapshot {
     let alive = managed.terminal.is_alive();
     let snapshot = managed.terminal.snapshot_view(scrollback_offset);
     TerminalSnapshot {
@@ -5871,7 +6624,10 @@ fn terminal_snapshot(
     let managed = sessions
         .get(&session_id)
         .ok_or_else(|| format!("unknown terminal session: {}", session_id))?;
-    Ok(build_terminal_snapshot(managed, scrollback_offset.unwrap_or(0)))
+    Ok(build_terminal_snapshot(
+        managed,
+        scrollback_offset.unwrap_or(0),
+    ))
 }
 
 #[tauri::command]
@@ -5920,8 +6676,28 @@ fn terminal_current_cwd(
 /// dir (those are about *what to type*, not *what files exist where*),
 /// so the user sees the same docker/git/kubectl subcommands as in a
 /// local tab.
-#[tauri::command(async)]
-fn terminal_completions_remote(
+#[tauri::command]
+async fn terminal_completions_remote(
+    app: tauri::AppHandle,
+    line: String,
+    cursor: usize,
+    cwd: Option<String>,
+    locale: Option<String>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+) -> Result<Vec<pier_core::terminal::Completion>, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        terminal_completions_remote_impl(
+            state, line, cursor, cwd, locale, host, port, user, auth_mode,
+        )
+    })
+    .await
+}
+
+fn terminal_completions_remote_impl(
     state: tauri::State<'_, AppState>,
     line: String,
     cursor: usize,
@@ -6057,14 +6833,7 @@ fn terminal_completions_remote(
         // No SFTP cached yet (tab still authenticating, mismatched
         // auth_mode, etc.). Library rows are unaffected; file rows
         // are suppressed rather than answered from the local disk.
-        complete_with_library_using(
-            &line,
-            cursor,
-            cwd_path,
-            &lib,
-            locale_str,
-            &EmptyDirReader,
-        )
+        complete_with_library_using(&line, cursor, cwd_path, &lib, locale_str, &EmptyDirReader)
     };
     Ok(rows)
 }
@@ -6145,22 +6914,20 @@ fn postgres_browse_blocking(
     } else {
         client.list_schemas_blocking().unwrap_or_default()
     };
-    let schema_name = schema
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| {
-            // Prefer "public" when available, otherwise fall back
-            // to the first user-visible schema. Roles without
-            // permission to see "public" still get a sensible
-            // default instead of a hardcoded miss.
-            if schemas.iter().any(|s| s == "public") {
-                String::from("public")
-            } else {
-                schemas
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| String::from("public"))
-            }
-        });
+    let schema_name = schema.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
+        // Prefer "public" when available, otherwise fall back
+        // to the first user-visible schema. Roles without
+        // permission to see "public" still get a sensible
+        // default instead of a hardcoded miss.
+        if schemas.iter().any(|s| s == "public") {
+            String::from("public")
+        } else {
+            schemas
+                .first()
+                .cloned()
+                .unwrap_or_else(|| String::from("public"))
+        }
+    });
     // Pull the enriched table list once and derive the bare-name
     // `tables` array from it — same pattern as the MySQL panel.
     let table_summaries: Vec<PostgresTableSummary> = if database_name.is_empty() {
@@ -6181,10 +6948,7 @@ fn postgres_browse_blocking(
             })
             .collect()
     };
-    let tables: Vec<String> = table_summaries
-        .iter()
-        .map(|s| s.name.clone())
-        .collect();
+    let tables: Vec<String> = table_summaries.iter().map(|s| s.name.clone()).collect();
     // Views + routines failsoft on permission errors — same logic
     // as MySQL.
     let views = if database_name.is_empty() {
@@ -6235,10 +6999,7 @@ fn postgres_browse_blocking(
             ))
             .ok()
     };
-    let browse_elapsed_ms = preview_query
-        .as_ref()
-        .map(|q| q.elapsed_ms)
-        .unwrap_or(0);
+    let browse_elapsed_ms = preview_query.as_ref().map(|q| q.elapsed_ms).unwrap_or(0);
     let preview = preview_query.map(map_postgres_preview);
     // Index + FK lookups for the active table — failsoft to empty
     // when the catalog tables aren't readable for the role.
@@ -6310,6 +7071,233 @@ fn postgres_browse_blocking(
         enums,
         browse_elapsed_ms,
     })
+}
+
+/// Socket-CLI Postgres browse — runs the remote host's own `psql` as a
+/// specific OS user (default `postgres`, peer auth) over SSH, so the
+/// panel browses the cluster as superuser with no password / tunnel.
+/// Index / FK / enum / pool introspection is omitted in this mode
+/// (the panel fail-softs to empty). Mirrors [`postgres_browse_blocking`].
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn postgres_browse_socket(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    database: Option<String>,
+    schema: Option<String>,
+    table: Option<String>,
+    sudo_password: Option<String>,
+    db_os_user: Option<String>,
+) -> Result<PostgresBrowserState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use pier_core::services::postgres_cli as cli;
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        // Peer auth ties the role to the OS user — become `postgres`
+        // (the superuser role's OS user) unless the caller names another.
+        let target_os_user = db_os_user
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("postgres");
+        let elevation = pier_core::sudo::Elevation::become_user_via_sudo(target_os_user);
+        diag_elevation(&format!(
+            "postgres socket-CLI {user}@{host}: become {target_os_user} elevation={elevation:?}"
+        ));
+        let secret = sudo_password.as_deref();
+        let db = database.as_deref().filter(|d| !d.trim().is_empty());
+
+        let databases =
+            cli::list_databases(&session, &elevation, secret).map_err(|e| e.to_string())?;
+        let database_name = choose_active_item(database.clone(), &databases);
+        let active_db = if database_name.is_empty() {
+            db
+        } else {
+            Some(database_name.as_str())
+        };
+        let schemas = if database_name.is_empty() {
+            Vec::new()
+        } else {
+            cli::list_schemas(&session, &elevation, secret, active_db).unwrap_or_default()
+        };
+        let schema_name = schema.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
+            if schemas.iter().any(|s| s == "public") {
+                String::from("public")
+            } else {
+                schemas
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| String::from("public"))
+            }
+        });
+        let table_summaries: Vec<PostgresTableSummary> = if database_name.is_empty() {
+            Vec::new()
+        } else {
+            cli::list_tables_meta(&session, &elevation, secret, active_db, &schema_name)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|s| PostgresTableSummary {
+                    name: s.name,
+                    row_count: s.row_count,
+                    data_bytes: s.data_bytes,
+                    index_bytes: s.index_bytes,
+                    engine: s.engine,
+                    updated_at: s.updated_at,
+                    comment: s.comment,
+                })
+                .collect()
+        };
+        let tables: Vec<String> = table_summaries.iter().map(|s| s.name.clone()).collect();
+        let views = if database_name.is_empty() {
+            Vec::new()
+        } else {
+            cli::list_views(&session, &elevation, secret, active_db, &schema_name)
+                .unwrap_or_default()
+        };
+        let routines = if database_name.is_empty() {
+            Vec::new()
+        } else {
+            cli::list_routines(&session, &elevation, secret, active_db, &schema_name)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| PostgresRoutineSummary {
+                    name: r.name,
+                    kind: r.kind,
+                })
+                .collect()
+        };
+        let table_name = choose_active_item(table, &tables);
+        let columns = if database_name.is_empty() || table_name.is_empty() {
+            Vec::new()
+        } else {
+            cli::list_columns(
+                &session,
+                &elevation,
+                secret,
+                active_db,
+                &schema_name,
+                &table_name,
+            )
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|col| PostgresColumnView {
+                name: col.name,
+                column_type: col.column_type,
+                nullable: col.nullable,
+                key: col.key,
+                default_value: col.default_value.unwrap_or_default(),
+                extra: col.extra,
+                comment: col.comment,
+            })
+            .collect()
+        };
+        let mut browse_elapsed_ms = 0u64;
+        let preview = if database_name.is_empty() || table_name.is_empty() {
+            None
+        } else {
+            let esc_schema = schema_name.replace('"', "\"\"");
+            let esc_table = table_name.replace('"', "\"\"");
+            match cli::execute(
+                &session,
+                &elevation,
+                secret,
+                &format!("SELECT * FROM \"{esc_schema}\".\"{esc_table}\" LIMIT 24"),
+                active_db,
+            ) {
+                Ok(q) => {
+                    browse_elapsed_ms = q.elapsed_ms;
+                    Some(map_postgres_preview(q))
+                }
+                Err(_) => None,
+            }
+        };
+
+        Ok(PostgresBrowserState {
+            database_name,
+            databases,
+            schema_name,
+            schemas,
+            table_name,
+            tables,
+            table_summaries,
+            views,
+            routines,
+            columns,
+            indexes: Vec::new(),
+            foreign_keys: Vec::new(),
+            preview,
+            pool: PostgresPoolView {
+                active: 0,
+                total: 0,
+            },
+            enums: Vec::new(),
+            browse_elapsed_ms,
+        })
+    })
+    .await
+    .map_err(|e| format!("postgres_browse_socket join: {e}"))?
+}
+
+/// Socket-CLI Postgres statement execution — counterpart to
+/// [`postgres_browse_socket`].
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn postgres_execute_socket(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    database: Option<String>,
+    sql: String,
+    sudo_password: Option<String>,
+    db_os_user: Option<String>,
+) -> Result<QueryExecutionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use pier_core::services::postgres_cli as cli;
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let target_os_user = db_os_user
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("postgres");
+        let elevation = pier_core::sudo::Elevation::become_user_via_sudo(target_os_user);
+        diag_elevation(&format!(
+            "postgres socket-CLI {user}@{host}: become {target_os_user} elevation={elevation:?}"
+        ));
+        let db = database.as_deref().filter(|d| !d.trim().is_empty());
+        let r = cli::execute(&session, &elevation, sudo_password.as_deref(), &sql, db)
+            .map_err(|e| e.to_string())?;
+        Ok(map_postgres_query_result(r))
+    })
+    .await
+    .map_err(|e| format!("postgres_execute_socket join: {e}"))?
 }
 
 #[tauri::command]
@@ -6509,9 +7497,17 @@ async fn db_test_connection(
                     db: 0,
                     username: {
                         let u = user.trim();
-                        if u.is_empty() { None } else { Some(u.to_string()) }
+                        if u.is_empty() {
+                            None
+                        } else {
+                            Some(u.to_string())
+                        }
                     },
-                    password: if password.is_empty() { None } else { Some(password) },
+                    password: if password.is_empty() {
+                        None
+                    } else {
+                        Some(password)
+                    },
                 })
                 .map_err(|e| e.to_string())?;
                 client.ping_blocking().map_err(|e| e.to_string())?;
@@ -7098,8 +8094,40 @@ fn docker_volume_usage_impl(
         .collect())
 }
 
-#[tauri::command(async)]
-fn docker_container_action(
+#[tauri::command]
+async fn docker_container_action(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    container_id: String,
+    action: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<String, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_container_action_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            container_id,
+            action,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn docker_container_action_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -7283,6 +8311,7 @@ async fn sftp_browse(
     key_path: String,
     path: Option<String>,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<SftpBrowseState, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
@@ -7296,6 +8325,7 @@ async fn sftp_browse(
             key_path,
             path,
             saved_connection_index,
+            sudo_password,
         )
     })
     .await
@@ -7312,6 +8342,7 @@ fn sftp_browse_impl(
     key_path: String,
     path: Option<String>,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<SftpBrowseState, String> {
     let explicit_path = path.filter(|p| !p.trim().is_empty());
 
@@ -7320,7 +8351,7 @@ fn sftp_browse_impl(
     // silently broken), evict and retry once with fresh handles.
     let mut attempt = 0;
     loop {
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_with_sudo(
             &state,
             &host,
             port,
@@ -7329,6 +8360,7 @@ fn sftp_browse_impl(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password.clone(),
         )?;
 
         let sftp = match get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode) {
@@ -7374,18 +8406,30 @@ fn sftp_browse_impl(
 
         let raw_entries = match sftp.list_dir_blocking(&canonical) {
             Ok(v) => v,
-            Err(e) if attempt == 0 => {
-                // list_dir failing on a cached SFTP client most often
-                // means the subsystem went stale (server-side idle
-                // timeout, or a dropped SSH connection). Evict both
-                // the SFTP client and the SSH session so the retry
-                // above re-handshakes from scratch.
-                evict_ssh_session(&state, &host, port, &user, &auth_mode);
-                attempt += 1;
-                let _ = e;
-                continue;
+            Err(e) => {
+                let raw = e.to_string();
+                // Permission denied is not a stale-session symptom: the
+                // SFTP channel authenticated as the SSH login user and
+                // simply lacks rights on this directory (the classic
+                // "terminal su'd to root, SFTP still the login user"
+                // case). When a sudo password is armed, re-list via
+                // `sudo find` over an exec channel rather than surfacing
+                // a bare EACCES.
+                if pier_core::sudo::is_permission_denied(&raw) && session.can_elevate_blocking() {
+                    sudo_list_dir(&session, &canonical)?
+                } else if attempt == 0 {
+                    // list_dir failing on a cached SFTP client most often
+                    // means the subsystem went stale (server-side idle
+                    // timeout, or a dropped SSH connection). Evict both
+                    // the SFTP client and the SSH session so the retry
+                    // above re-handshakes from scratch.
+                    evict_ssh_session(&state, &host, port, &user, &auth_mode);
+                    attempt += 1;
+                    continue;
+                } else {
+                    return Err(raw);
+                }
             }
-            Err(e) => return Err(e.to_string()),
         };
 
         let entries = raw_entries
@@ -7806,12 +8850,7 @@ fn ssh_cred_cache_put_passphrase(
 /// so subsequent ssh re-authenticates from scratch — this is the
 /// user-facing "log out" gesture.
 #[tauri::command]
-fn ssh_cred_cache_forget(
-    state: tauri::State<'_, AppState>,
-    host: String,
-    port: u16,
-    user: String,
-) {
+fn ssh_cred_cache_forget(state: tauri::State<'_, AppState>, host: String, port: u16, user: String) {
     state
         .ssh_cred_cache
         .forget(&TargetKey::new(&host, port, &user));
@@ -8065,8 +9104,38 @@ fn db_egress_endpoint(
     })
 }
 
-#[tauri::command(async)]
-fn docker_inspect_db_env(
+#[tauri::command]
+async fn docker_inspect_db_env(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    container_id: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<DockerDbEnvView, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_inspect_db_env_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            container_id,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn docker_inspect_db_env_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -8163,8 +9232,34 @@ struct RemoteSqliteCandidate {
     modified: Option<i64>,
 }
 
-#[tauri::command(async)]
-fn sqlite_remote_capable(
+#[tauri::command]
+async fn sqlite_remote_capable(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<RemoteSqliteCapabilityView, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sqlite_remote_capable_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+        )
+    })
+    .await
+}
+
+fn sqlite_remote_capable_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -8353,6 +9448,7 @@ struct SoftwarePackageDetailView {
     service_unit: Option<String>,
     latest_version: Option<String>,
     installed_version: Option<String>,
+    update_available: Option<bool>,
     variants: Vec<SoftwarePackageVariantStatusView>,
 }
 
@@ -8680,11 +9776,7 @@ fn fire_software_webhook(
     );
     for r in reports {
         if !r.error.is_empty() {
-            pier_core::logging::write_event(
-                "WARN",
-                "webhook",
-                &format!("{} → {}", r.url, r.error),
-            );
+            pier_core::logging::write_event("WARN", "webhook", &format!("{} → {}", r.url, r.error));
             // Look up the matching entry's label for the toast —
             // the load() call above already gave us `cfg.entries`.
             // O(N) on a tiny list; not worth caching.
@@ -8757,11 +9849,7 @@ fn fire_uninstall_webhook(
     );
     for r in reports {
         if !r.error.is_empty() {
-            pier_core::logging::write_event(
-                "WARN",
-                "webhook",
-                &format!("{} → {}", r.url, r.error),
-            );
+            pier_core::logging::write_event("WARN", "webhook", &format!("{} → {}", r.url, r.error));
             let label = cfg
                 .entries
                 .iter()
@@ -9066,12 +10154,8 @@ async fn software_versions_remote(
             &key_path,
             saved_connection_index,
         )?;
-        package_manager::available_versions_blocking(
-            &session,
-            &package_id,
-            variant_key.as_deref(),
-        )
-        .map_err(|e| e.to_string())
+        package_manager::available_versions_blocking(&session, &package_id, variant_key.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("software_versions_remote join: {e}"))?
@@ -9118,6 +10202,7 @@ async fn software_details_remote(
             service_unit: detail.service_unit,
             latest_version: detail.latest_version,
             installed_version: detail.installed_version,
+            update_available: detail.update_available,
             variants: detail
                 .variants
                 .into_iter()
@@ -9213,12 +10298,8 @@ fn webhook_view_to_core(view: &WebhookConfigView) -> pier_core::services::webhoo
                     .events
                     .iter()
                     .filter_map(|s| match s.as_str() {
-                        "install" => {
-                            Some(pier_core::services::webhook::WebhookEventKind::Install)
-                        }
-                        "update" => {
-                            Some(pier_core::services::webhook::WebhookEventKind::Update)
-                        }
+                        "install" => Some(pier_core::services::webhook::WebhookEventKind::Install),
+                        "update" => Some(pier_core::services::webhook::WebhookEventKind::Update),
                         "uninstall" => {
                             Some(pier_core::services::webhook::WebhookEventKind::Uninstall)
                         }
@@ -9236,9 +10317,7 @@ fn webhook_view_to_core(view: &WebhookConfigView) -> pier_core::services::webhoo
     }
 }
 
-fn webhook_core_to_view(
-    cfg: &pier_core::services::webhook::WebhookConfig,
-) -> WebhookConfigView {
+fn webhook_core_to_view(cfg: &pier_core::services::webhook::WebhookConfig) -> WebhookConfigView {
     WebhookConfigView {
         entries: cfg
             .entries
@@ -9259,9 +10338,7 @@ fn webhook_core_to_view(
                         pier_core::services::webhook::WebhookEventKind::Uninstall => {
                             "uninstall".to_string()
                         }
-                        pier_core::services::webhook::WebhookEventKind::Test => {
-                            "test".to_string()
-                        }
+                        pier_core::services::webhook::WebhookEventKind::Test => "test".to_string(),
                     })
                     .collect(),
                 disabled: e.disabled,
@@ -9350,11 +10427,9 @@ async fn software_webhooks_failures_list() -> Result<Vec<WebhookFailureRecordVie
 
 #[tauri::command]
 async fn software_webhooks_failures_dismiss(id: String) -> Result<bool, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        pier_core::services::webhook::dismiss_failure(&id)
-    })
-    .await
-    .map_err(|e| format!("webhooks_failures_dismiss join: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || pier_core::services::webhook::dismiss_failure(&id))
+        .await
+        .map_err(|e| format!("webhooks_failures_dismiss join: {e}"))?
 }
 
 #[tauri::command]
@@ -9420,13 +10495,10 @@ struct WebhookBatchReplayRow {
 /// drained newest-first (matching `list_failures` order) so the
 /// most recently-failed row is also the first to retry.
 #[tauri::command]
-async fn software_webhooks_replay_batch(
-    limit: u32,
-) -> Result<Vec<WebhookBatchReplayRow>, String> {
+async fn software_webhooks_replay_batch(limit: u32) -> Result<Vec<WebhookBatchReplayRow>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let n = limit.clamp(1, 50) as usize;
-        let failures = pier_core::services::webhook::list_failures()
-            .map_err(|e| e)?;
+        let failures = pier_core::services::webhook::list_failures().map_err(|e| e)?;
         let mut out = Vec::with_capacity(n.min(failures.len()));
         for f in failures.into_iter().take(n) {
             let r = pier_core::services::webhook::replay_blocking(
@@ -9672,7 +10744,13 @@ async fn postgres_create_user_remote(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
         let report = package_manager::postgres_create_user_blocking(
@@ -9704,7 +10782,13 @@ async fn postgres_create_db_remote(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
         let report = package_manager::postgres_create_db_blocking(&session, &db_name, &owner)
@@ -9729,11 +10813,17 @@ async fn postgres_open_remote_remote(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
-        let report = package_manager::postgres_open_remote_blocking(&session)
-            .map_err(|e| e.to_string())?;
+        let report =
+            package_manager::postgres_open_remote_blocking(&session).map_err(|e| e.to_string())?;
         Ok::<_, String>(pg_report_to_view(report))
     })
     .await
@@ -9778,15 +10868,20 @@ async fn software_db_metrics(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
         let metrics = match package_id.as_str() {
             "postgres" => package_manager::postgres_metrics_blocking(&session),
-            "mariadb" => package_manager::mysql_metrics_blocking(
-                &session,
-                root_password.as_deref(),
-            ),
+            "mariadb" => {
+                package_manager::mysql_metrics_blocking(&session, root_password.as_deref())
+            }
             "redis" => package_manager::redis_metrics_blocking(&session),
             _ => return Err(format!("no metrics for package {package_id}")),
         }
@@ -9838,7 +10933,13 @@ async fn software_clone_plan(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
         let env = package_manager::probe_host_env_blocking(&session);
@@ -9848,14 +10949,13 @@ async fn software_clone_plan(
                 entries: Vec::new(),
             });
         };
-        let names = package_manager::list_user_installed_blocking(&session)
-            .map_err(|e| e.to_string())?;
+        let names =
+            package_manager::list_user_installed_blocking(&session).map_err(|e| e.to_string())?;
         let entries = names
             .into_iter()
             .map(|p| {
-                let descriptor_id =
-                    package_manager::resolve_descriptor_for_package(&p, manager)
-                        .map(|s| s.to_string());
+                let descriptor_id = package_manager::resolve_descriptor_for_package(&p, manager)
+                    .map(|s| s.to_string());
                 ClonePlanEntry {
                     package: p,
                     descriptor_id,
@@ -10032,10 +11132,7 @@ fn software_compose_save_user_template(
 /// Delete a user-uploaded template by id. Idempotent — calling with
 /// an unknown id is a no-op. Built-in templates are never touched.
 #[tauri::command]
-fn software_compose_delete_user_template(
-    app: tauri::AppHandle,
-    id: String,
-) -> Result<(), String> {
+fn software_compose_delete_user_template(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let mut existing = load_compose_user_templates(&app);
     let before = existing.len();
     existing.retain(|t| t.id != id);
@@ -10063,7 +11160,13 @@ async fn software_compose_apply(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
         // Apply path: built-ins go through `compose_apply_blocking`
@@ -10114,9 +11217,7 @@ async fn software_compose_export_k8s(
     tauri::async_runtime::spawn_blocking(move || {
         // Resolve to YAML — built-ins win when an id is in both
         // tables; same precedence as the apply path.
-        let yaml: String = if let Some(t) =
-            package_manager::compose_template_by_id(&template_id)
-        {
+        let yaml: String = if let Some(t) = package_manager::compose_template_by_id(&template_id) {
             t.yaml.to_string()
         } else {
             load_compose_user_templates(&app_for_lookup)
@@ -10132,10 +11233,9 @@ async fn software_compose_export_k8s(
             tls_secret: ingress_tls_secret.unwrap_or_default(),
             lift_bind_mounts: lift_bind_mounts.unwrap_or(false),
         };
-        let summary = pier_core::services::compose_k8s::convert_with_summary_and_options(
-            &yaml, ns, &opts,
-        )
-        .map_err(|e| e)?;
+        let summary =
+            pier_core::services::compose_k8s::convert_with_summary_and_options(&yaml, ns, &opts)
+                .map_err(|e| e)?;
         Ok::<_, String>(ComposeK8sExportView {
             compose_yaml: summary.compose_yaml,
             k8s_yaml: summary.k8s_yaml,
@@ -10185,7 +11285,13 @@ async fn software_compose_down(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
         let report = package_manager::compose_down_blocking(
@@ -10220,7 +11326,13 @@ async fn mysql_create_user_remote(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
         let report = package_manager::mysql_create_user_blocking(
@@ -10253,15 +11365,18 @@ async fn mysql_create_db_remote(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
-        let report = package_manager::mysql_create_db_blocking(
-            &session,
-            &db_name,
-            root_password.as_deref(),
-        )
-        .map_err(|e| e.to_string())?;
+        let report =
+            package_manager::mysql_create_db_blocking(&session, &db_name, root_password.as_deref())
+                .map_err(|e| e.to_string())?;
         Ok::<_, String>(pg_report_to_view(report))
     })
     .await
@@ -10282,11 +11397,17 @@ async fn mysql_open_remote_remote(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
-        let report = package_manager::mysql_open_remote_blocking(&session)
-            .map_err(|e| e.to_string())?;
+        let report =
+            package_manager::mysql_open_remote_blocking(&session).map_err(|e| e.to_string())?;
         Ok::<_, String>(pg_report_to_view(report))
     })
     .await
@@ -10308,7 +11429,13 @@ async fn redis_set_password_remote(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
         let report = package_manager::redis_set_password_blocking(&session, &redis_password)
@@ -10333,11 +11460,17 @@ async fn redis_open_remote_remote(
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         let session = get_or_open_ssh_session(
-            &state, &host, port, &user, &auth_mode, &password, &key_path,
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
             saved_connection_index,
         )?;
-        let report = package_manager::redis_open_remote_blocking(&session)
-            .map_err(|e| e.to_string())?;
+        let report =
+            package_manager::redis_open_remote_blocking(&session).map_err(|e| e.to_string())?;
         Ok::<_, String>(pg_report_to_view(report))
     })
     .await
@@ -10456,7 +11589,11 @@ async fn software_install_arbitrary(
         )
         .map_err(|e| e.to_string())?;
         let view = report_to_view(report);
-        let kind = if view.status == "cancelled" { "cancelled" } else { "done" };
+        let kind = if view.status == "cancelled" {
+            "cancelled"
+        } else {
+            "done"
+        };
         let _ = app.emit(
             SOFTWARE_INSTALL_EVENT,
             SoftwareInstallEvent {
@@ -10886,13 +12023,9 @@ async fn software_mirror_set(
             .ok_or_else(|| "host has no detected package manager".to_string())?;
         let id = package_mirror::MirrorId::from_str(&mirror_id)
             .ok_or_else(|| format!("unknown mirror id: {mirror_id}"))?;
-        let report = package_mirror::set_mirror_blocking(
-            &session,
-            manager,
-            id,
-            sudo_password.as_deref(),
-        )
-        .map_err(|e| e.to_string())?;
+        let report =
+            package_mirror::set_mirror_blocking(&session, manager, id, sudo_password.as_deref())
+                .map_err(|e| e.to_string())?;
         Ok::<_, String>(mirror_action_to_view(report))
     })
     .await
@@ -10976,11 +12109,13 @@ async fn software_mirror_benchmark_client() -> Result<Vec<MirrorLatencyView>, St
         Ok::<_, String>(
             threads
                 .into_iter()
-                .map(|h| h.join().unwrap_or_else(|_| MirrorLatencyView {
-                    mirror_id: String::new(),
-                    host: String::new(),
-                    latency_ms: None,
-                }))
+                .map(|h| {
+                    h.join().unwrap_or_else(|_| MirrorLatencyView {
+                        mirror_id: String::new(),
+                        host: String::new(),
+                        latency_ms: None,
+                    })
+                })
                 .collect(),
         )
     })
@@ -11067,12 +12202,9 @@ async fn software_mirror_restore(
         let manager = env
             .package_manager
             .ok_or_else(|| "host has no detected package manager".to_string())?;
-        let report = package_mirror::restore_mirror_blocking(
-            &session,
-            manager,
-            sudo_password.as_deref(),
-        )
-        .map_err(|e| e.to_string())?;
+        let report =
+            package_mirror::restore_mirror_blocking(&session, manager, sudo_password.as_deref())
+                .map_err(|e| e.to_string())?;
         Ok::<_, String>(mirror_action_to_view(report))
     })
     .await
@@ -11394,10 +12526,7 @@ async fn software_service_logs_remote(
 /// install or an uninstall, so the cancel event is fanned out on both
 /// channels — the frontend's per-id subscription filters it back down.
 #[tauri::command]
-async fn software_install_cancel(
-    app: tauri::AppHandle,
-    install_id: String,
-) -> Result<(), String> {
+async fn software_install_cancel(app: tauri::AppHandle, install_id: String) -> Result<(), String> {
     let token = {
         let state: tauri::State<'_, AppState> = app.state();
         let map = state
@@ -11498,8 +12627,7 @@ async fn nginx_read_file(
             saved_connection_index,
             sudo_password,
         )?;
-        let content = nginx::read_file_blocking(&session, &path)
-            .map_err(|e| e.to_string())?;
+        let content = nginx::read_file_blocking(&session, &path).map_err(|e| e.to_string())?;
         let parse = nginx::parse(&content);
         Ok::<_, String>(NginxReadFileView {
             path,
@@ -11634,8 +12762,7 @@ async fn nginx_create_file(
             saved_connection_index,
             sudo_password,
         )?;
-        nginx::create_file_blocking(&session, &path, &content)
-            .map_err(|e| e.to_string())
+        nginx::create_file_blocking(&session, &path, &content).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("nginx_create_file join: {e}"))?
@@ -11668,8 +12795,7 @@ async fn nginx_toggle_site(
             saved_connection_index,
             sudo_password,
         )?;
-        nginx::toggle_site_blocking(&session, &site_name, enable)
-            .map_err(|e| e.to_string())
+        nginx::toggle_site_blocking(&session, &site_name, enable).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("nginx_toggle_site join: {e}"))?
@@ -11899,8 +13025,7 @@ async fn web_server_save_files_batch(
             saved_connection_index,
             sudo_password,
         )?;
-        web_server::save_files_batch_blocking(&session, kind, &entries)
-            .map_err(|e| e.to_string())
+        web_server::save_files_batch_blocking(&session, kind, &entries).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("web_server_save_files_batch join: {e}"))?
@@ -12046,8 +13171,42 @@ struct NginxReadFileView {
     parse: nginx::NginxParseResult,
 }
 
-#[tauri::command(async)]
-fn sqlite_browse_remote(
+#[tauri::command]
+async fn sqlite_browse_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    db_path: String,
+    table: Option<String>,
+    sudo_password: Option<String>,
+    effective_user: Option<String>,
+) -> Result<RemoteSqliteBrowserState, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sqlite_browse_remote_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            db_path,
+            table,
+            sudo_password,
+            effective_user,
+        )
+    })
+    .await
+}
+
+fn sqlite_browse_remote_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12058,12 +13217,14 @@ fn sqlite_browse_remote(
     saved_connection_index: Option<usize>,
     db_path: String,
     table: Option<String>,
+    sudo_password: Option<String>,
+    effective_user: Option<String>,
 ) -> Result<RemoteSqliteBrowserState, String> {
     let trimmed = db_path.trim();
     if trimmed.is_empty() {
         return Err(String::from("remote SQLite path must not be empty"));
     }
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_elevated(
         &state,
         &host,
         port,
@@ -12072,6 +13233,8 @@ fn sqlite_browse_remote(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
+        effective_user.as_deref(),
     )?;
     let tables =
         sqlite_remote::list_tables_blocking(&session, trimmed).map_err(|e| e.to_string())?;
@@ -12119,8 +13282,42 @@ fn sqlite_browse_remote(
     })
 }
 
-#[tauri::command(async)]
-fn sqlite_execute_remote(
+#[tauri::command]
+async fn sqlite_execute_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    db_path: String,
+    sql: String,
+    sudo_password: Option<String>,
+    effective_user: Option<String>,
+) -> Result<QueryExecutionResult, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sqlite_execute_remote_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            db_path,
+            sql,
+            sudo_password,
+            effective_user,
+        )
+    })
+    .await
+}
+
+fn sqlite_execute_remote_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12131,6 +13328,8 @@ fn sqlite_execute_remote(
     saved_connection_index: Option<usize>,
     db_path: String,
     sql: String,
+    sudo_password: Option<String>,
+    effective_user: Option<String>,
 ) -> Result<QueryExecutionResult, String> {
     let trimmed_path = db_path.trim();
     let trimmed_sql = sql.trim();
@@ -12140,7 +13339,7 @@ fn sqlite_execute_remote(
     if trimmed_sql.is_empty() {
         return Err(String::from("SQL must not be empty"));
     }
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_elevated(
         &state,
         &host,
         port,
@@ -12149,6 +13348,8 @@ fn sqlite_execute_remote(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
+        effective_user.as_deref(),
     )?;
     let result = sqlite_remote::execute_blocking(&session, trimmed_path, trimmed_sql)
         .map_err(|e| e.to_string())?;
@@ -12170,8 +13371,38 @@ fn sqlite_execute_remote(
     })
 }
 
-#[tauri::command(async)]
-fn sqlite_find_in_dir(
+#[tauri::command]
+async fn sqlite_find_in_dir(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    directory: String,
+    max_depth: Option<u32>,
+) -> Result<Vec<RemoteSqliteCandidate>, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sqlite_find_in_dir_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            directory,
+            max_depth,
+        )
+    })
+    .await
+}
+
+fn sqlite_find_in_dir_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12212,8 +13443,12 @@ printf '%s\\t%s\\t%s\\n' \"$p\" \"${{sz:-0}}\" \"${{m:-0}}\"; \
 done"
     );
     let rt = pier_core::ssh::runtime::shared();
+    // Discover via `exec_with_sudo` so that when the session follows a
+    // terminal `sudo -i`/`su` (captured password or armed NOPASSWD) the
+    // walk can see root-only directories — matching the elevated sqlite
+    // read path. Degrades to the login user otherwise.
     let (exit, stdout) = rt
-        .block_on(session.exec_command(&cmd))
+        .block_on(session.exec_with_sudo(&cmd))
         .map_err(|e| e.to_string())?;
     if exit != 0 && stdout.trim().is_empty() {
         // non-zero with no output usually means `find` hit a
@@ -12268,14 +13503,11 @@ fn shell_quote_dir(dir: &str) -> String {
 /// fallback path. Inputs here are small (editor cap is well under
 /// 100 KB) so the per-byte loop is fine.
 fn encode_base64(input: &[u8]) -> String {
-    const ALPH: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPH: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
     let mut i = 0;
     while i + 3 <= input.len() {
-        let n = ((input[i] as u32) << 16)
-            | ((input[i + 1] as u32) << 8)
-            | (input[i + 2] as u32);
+        let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8) | (input[i + 2] as u32);
         out.push(ALPH[((n >> 18) & 0x3f) as usize] as char);
         out.push(ALPH[((n >> 12) & 0x3f) as usize] as char);
         out.push(ALPH[((n >> 6) & 0x3f) as usize] as char);
@@ -12433,8 +13665,38 @@ fn shell_single_quote(s: &str) -> String {
 
 // ── Docker Extended ─────────────────────────────────────────────
 
-#[tauri::command(async)]
-fn docker_inspect(
+#[tauri::command]
+async fn docker_inspect(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    container_id: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<String, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_inspect_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            container_id,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn docker_inspect_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12462,8 +13724,40 @@ fn docker_inspect(
     )
 }
 
-#[tauri::command(async)]
-fn docker_remove_image(
+#[tauri::command]
+async fn docker_remove_image(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    image_id: String,
+    force: bool,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_remove_image_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            image_id,
+            force,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn docker_remove_image_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12492,8 +13786,38 @@ fn docker_remove_image(
     )
 }
 
-#[tauri::command(async)]
-fn docker_remove_volume(
+#[tauri::command]
+async fn docker_remove_volume(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    volume_name: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_remove_volume_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            volume_name,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn docker_remove_volume_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12519,8 +13843,38 @@ fn docker_remove_volume(
     )
 }
 
-#[tauri::command(async)]
-fn docker_remove_network(
+#[tauri::command]
+async fn docker_remove_network(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    network_name: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_remove_network_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            network_name,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn docker_remove_network_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12580,8 +13934,38 @@ impl From<DockerRunOptionsView> for docker::RunContainerOptions {
     }
 }
 
-#[tauri::command(async)]
-fn docker_run_container(
+#[tauri::command]
+async fn docker_run_container(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    options: DockerRunOptionsView,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<String, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_run_container_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            options,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn docker_run_container_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12608,8 +13992,36 @@ fn docker_run_container(
     )
 }
 
-#[tauri::command(async)]
-fn docker_prune_volumes(
+#[tauri::command]
+async fn docker_prune_volumes(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<String, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_prune_volumes_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn docker_prune_volumes_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12634,8 +14046,36 @@ fn docker_prune_volumes(
     )
 }
 
-#[tauri::command(async)]
-fn docker_prune_images(
+#[tauri::command]
+async fn docker_prune_images(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<String, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_prune_images_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn docker_prune_images_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12660,8 +14100,42 @@ fn docker_prune_images(
     )
 }
 
-#[tauri::command(async)]
-fn docker_pull_image(
+#[tauri::command]
+async fn docker_pull_image(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    image_ref: String,
+    // `env_prefix`: optional env overrides (e.g. HTTPS_PROXY) applied only
+    // to this `docker pull`; does not modify the remote daemon config.
+    env_prefix: Option<Vec<(String, String)>>,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<String, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_pull_image_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            image_ref,
+            env_prefix,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn docker_pull_image_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12716,8 +14190,38 @@ async fn local_docker_pull_image(
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-#[tauri::command(async)]
-fn docker_volume_files(
+#[tauri::command]
+async fn docker_volume_files(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    mountpoint: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<String, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        docker_volume_files_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            mountpoint,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn docker_volume_files_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12849,8 +14353,223 @@ async fn local_docker_volume_files(mountpoint: String) -> Result<String, String>
 
 // ── SFTP Extended ───────────────────────────────────────────────
 
-#[tauri::command(async)]
-fn sftp_mkdir(
+/// List a directory the SFTP subsystem can't read (EACCES) by shelling
+/// out to `sudo find` over an exec channel. Used as the permission-denied
+/// fallback for [`sftp_browse_impl`] when a sudo password is armed.
+///
+/// Output is one entry per line, tab-separated, with the basename LAST so
+/// names containing tabs still parse via `splitn(7, '\t')`. Fields:
+/// `%y` type, `%s` size, `%m` octal perm bits, `%T@` mtime epoch,
+/// `%u` owner, `%g` group, `%f` basename. Requires GNU `find` — the same
+/// coreutils assumption the editor's `stat -c` fallback already makes.
+/// Names containing a literal newline are not represented (rare; the
+/// entry is skipped rather than corrupting the listing).
+fn sudo_list_dir(
+    session: &pier_core::ssh::SshSession,
+    dir: &str,
+) -> Result<Vec<pier_core::ssh::sftp::RemoteFileEntry>, String> {
+    let cmd = format!(
+        "find {dir} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%m\\t%T@\\t%u\\t%g\\t%f\\n'",
+        dir = shell_single_quote(dir),
+    );
+    diag_elevation(&format!("sftp browse fallback: sudo find {dir}"));
+    let (code, out) = session
+        .exec_with_sudo_blocking(&cmd)
+        .map_err(|e| e.to_string())?;
+    if code != 0 {
+        let first = out.lines().next().unwrap_or("").trim();
+        warn_elevation(&format!(
+            "sftp browse fallback failed: sudo find {dir} exited {code}: {first}"
+        ));
+        return Err(format!("sudo find exited {code}: {first}"));
+    }
+    let base = dir.trim_end_matches('/');
+    let mut entries = Vec::new();
+    for line in out.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let mut f = line.splitn(7, '\t');
+        let ty = f.next().unwrap_or("");
+        let size = f.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        let perms = f.next().and_then(|s| u32::from_str_radix(s, 8).ok());
+        let mtime = f
+            .next()
+            .and_then(|s| s.split('.').next())
+            .and_then(|s| s.parse::<u64>().ok());
+        let owner = f.next().unwrap_or("").to_string();
+        let group = f.next().unwrap_or("").to_string();
+        let name = match f.next() {
+            Some(n) if !n.is_empty() => n.to_string(),
+            _ => continue,
+        };
+        let is_link = ty == "l";
+        // `find %y` reports the link itself as `l`; resolve link targets
+        // so a symlink-to-directory is still navigable in the browser.
+        let is_dir = if is_link {
+            let probe = format!(
+                "test -d {} && echo d",
+                shell_single_quote(&format!("{base}/{name}"))
+            );
+            session
+                .exec_with_sudo_blocking(&probe)
+                .map(|(_, o)| o.trim() == "d")
+                .unwrap_or(false)
+        } else {
+            ty == "d"
+        };
+        let path = format!("{base}/{name}");
+        entries.push(pier_core::ssh::sftp::RemoteFileEntry {
+            name,
+            path,
+            is_dir,
+            is_link,
+            size,
+            modified: mtime,
+            permissions: perms,
+            owner: Some(owner),
+            group: Some(group),
+        });
+    }
+    Ok(entries)
+}
+
+/// Run an SFTP mutation, falling back to an equivalent `sudo` shell
+/// command on EACCES when a sudo password is armed. `sftp_op` is the
+/// native SFTP attempt; `sudo_cmd` is the privileged equivalent run via
+/// `exec_with_sudo` (already wrapped in `sudo -S -p '' bash -c`).
+fn sftp_mutate_with_sudo<F>(
+    session: &pier_core::ssh::SshSession,
+    sftp_op: F,
+    sudo_cmd: &str,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    match sftp_op() {
+        Ok(()) => Ok(()),
+        Err(raw) => {
+            if pier_core::sudo::is_permission_denied(&raw) && session.can_elevate_blocking() {
+                diag_elevation(&format!("sftp mutate fallback: {sudo_cmd}"));
+                let (code, out) = session
+                    .exec_with_sudo_blocking(sudo_cmd)
+                    .map_err(|e| e.to_string())?;
+                if code != 0 {
+                    let first = out.lines().next().unwrap_or("").trim();
+                    warn_elevation(&format!("sftp mutate fallback failed ({code}): {first}"));
+                    return Err(format!("sudo failed ({code}): {first}"));
+                }
+                Ok(())
+            } else {
+                Err(raw)
+            }
+        }
+    }
+}
+
+/// Hard cap for the sudo download/upload fallbacks. They shuttle the
+/// whole file through a base64'd exec channel (no streaming / resume),
+/// so they're bounded to avoid OOM and `ARG_MAX` blowups; larger
+/// root-owned files should be `chmod`'d or server-side copied instead.
+const SFTP_SUDO_XFER_MAX: u64 = 32 * 1024 * 1024;
+
+/// Download a file the SFTP user can't read by `sudo base64`-ing it over
+/// an exec channel and decoding locally. Size-capped — see
+/// [`SFTP_SUDO_XFER_MAX`].
+fn sudo_download_file(
+    session: &pier_core::ssh::SshSession,
+    remote: &str,
+    local: &std::path::Path,
+) -> Result<(), String> {
+    let q = shell_single_quote(remote);
+    if let Ok((0, out)) = session.exec_with_sudo_blocking(&format!("stat -c %s {q}")) {
+        if let Ok(sz) = out.trim().parse::<u64>() {
+            if sz > SFTP_SUDO_XFER_MAX {
+                return Err(format!(
+                    "File is {sz} bytes; sudo download is capped at {SFTP_SUDO_XFER_MAX} bytes"
+                ));
+            }
+        }
+    }
+    let (code, out) = session
+        .exec_with_sudo_blocking(&format!("base64 {q}"))
+        .map_err(|e| e.to_string())?;
+    if code != 0 {
+        return Err(format!(
+            "sudo base64 exited {code}: {}",
+            out.lines().next().unwrap_or("").trim()
+        ));
+    }
+    let mut compact = out;
+    compact.retain(|c| !c.is_whitespace());
+    let bytes = decode_base64(&compact)?;
+    std::fs::write(local, bytes).map_err(|e| e.to_string())
+}
+
+/// Upload `bytes` to a path the SFTP user can't write by piping
+/// `base64 -d | sudo tee`. Size-capped — see [`SFTP_SUDO_XFER_MAX`].
+fn sudo_upload_bytes(
+    session: &pier_core::ssh::SshSession,
+    remote: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    if bytes.len() as u64 > SFTP_SUDO_XFER_MAX {
+        return Err(format!(
+            "File is {} bytes; sudo upload is capped at {} bytes",
+            bytes.len(),
+            SFTP_SUDO_XFER_MAX
+        ));
+    }
+    let b64 = encode_base64(bytes);
+    let cmd = format!(
+        "echo {} | base64 -d | tee {} >/dev/null",
+        shell_single_quote(&b64),
+        shell_single_quote(remote),
+    );
+    let (code, out) = session
+        .exec_with_sudo_blocking(&cmd)
+        .map_err(|e| e.to_string())?;
+    if code != 0 {
+        return Err(format!(
+            "sudo tee exited {code}: {}",
+            out.lines().next().unwrap_or("").trim()
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn sftp_mkdir(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_mkdir_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            path,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn sftp_mkdir_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12860,8 +14579,9 @@ fn sftp_mkdir(
     key_path: String,
     path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -12870,13 +14590,50 @@ fn sftp_mkdir(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
-    sftp.create_dir_blocking(&path).map_err(|e| e.to_string())
+    sftp_mutate_with_sudo(
+        &session,
+        || sftp.create_dir_blocking(&path).map_err(|e| e.to_string()),
+        &format!("mkdir {}", shell_single_quote(&path)),
+    )
 }
 
-#[tauri::command(async)]
-fn sftp_remove(
+#[tauri::command]
+async fn sftp_remove(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    is_dir: bool,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_remove_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            path,
+            is_dir,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn sftp_remove_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12887,8 +14644,9 @@ fn sftp_remove(
     path: String,
     is_dir: bool,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -12897,17 +14655,62 @@ fn sftp_remove(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
+    // Match the native SFTP semantics on the sudo fallback: directory
+    // removal is non-recursive (`rmdir` — empty only, like the SFTP
+    // RMDIR op), file removal is `rm -f`.
+    let quoted = shell_single_quote(&path);
     if is_dir {
-        sftp.remove_dir_blocking(&path).map_err(|e| e.to_string())
+        sftp_mutate_with_sudo(
+            &session,
+            || sftp.remove_dir_blocking(&path).map_err(|e| e.to_string()),
+            &format!("rmdir {quoted}"),
+        )
     } else {
-        sftp.remove_file_blocking(&path).map_err(|e| e.to_string())
+        sftp_mutate_with_sudo(
+            &session,
+            || sftp.remove_file_blocking(&path).map_err(|e| e.to_string()),
+            &format!("rm -f {quoted}"),
+        )
     }
 }
 
-#[tauri::command(async)]
-fn sftp_rename(
+#[tauri::command]
+async fn sftp_rename(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    from: String,
+    to: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_rename_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            from,
+            to,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn sftp_rename_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12918,8 +14721,9 @@ fn sftp_rename(
     from: String,
     to: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -12928,14 +14732,55 @@ fn sftp_rename(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
-    sftp.rename_blocking(&from, &to).map_err(|e| e.to_string())
+    sftp_mutate_with_sudo(
+        &session,
+        || sftp.rename_blocking(&from, &to).map_err(|e| e.to_string()),
+        &format!(
+            "mv -- {} {}",
+            shell_single_quote(&from),
+            shell_single_quote(&to)
+        ),
+    )
 }
 
 /// Change POSIX permissions on a remote file or directory.
-#[tauri::command(async)]
-fn sftp_chmod(
+#[tauri::command]
+async fn sftp_chmod(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    mode: u32,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_chmod_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            path,
+            mode,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn sftp_chmod_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12946,8 +14791,9 @@ fn sftp_chmod(
     path: String,
     mode: u32,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -12956,15 +14802,53 @@ fn sftp_chmod(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
-    sftp.set_permissions_blocking(&path, mode)
-        .map_err(|e| e.to_string())
+    sftp_mutate_with_sudo(
+        &session,
+        || {
+            sftp.set_permissions_blocking(&path, mode)
+                .map_err(|e| e.to_string())
+        },
+        // `mode` carries only the low permission bits; render as octal.
+        &format!("chmod {:o} {}", mode & 0o7777, shell_single_quote(&path)),
+    )
 }
 
 /// Create an empty remote file (touch semantic — truncates if exists).
-#[tauri::command(async)]
-fn sftp_create_file(
+#[tauri::command]
+async fn sftp_create_file(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_create_file_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            path,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn sftp_create_file_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -12974,8 +14858,9 @@ fn sftp_create_file(
     key_path: String,
     path: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -12984,9 +14869,16 @@ fn sftp_create_file(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
-    sftp.create_file_blocking(&path).map_err(|e| e.to_string())
+    sftp_mutate_with_sudo(
+        &session,
+        || sftp.create_file_blocking(&path).map_err(|e| e.to_string()),
+        // New-file dialog only fires on a non-existent path, so `touch`
+        // (create-if-absent) matches the intent without truncating.
+        &format!("touch {}", shell_single_quote(&path)),
+    )
 }
 
 /// Metadata + UTF-8 content returned by [`sftp_read_text`]. The
@@ -13033,8 +14925,40 @@ const SFTP_TEXT_READ_MAX: u64 = 5 * 1024 * 1024;
 /// Read a remote file as UTF-8 text for the editor dialog. Rejects
 /// anything larger than `max_bytes` (capped by [`SFTP_TEXT_READ_MAX`])
 /// before pulling bytes across the wire.
-#[tauri::command(async)]
-fn sftp_read_text(
+#[tauri::command]
+async fn sftp_read_text(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    max_bytes: Option<u64>,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<SftpTextFile, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_read_text_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            path,
+            max_bytes,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn sftp_read_text_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -13068,16 +14992,11 @@ fn sftp_read_text(
         Ok(m) => m,
         Err(e) => {
             let raw = e.to_string();
-            if pier_core::sudo::is_permission_denied(&raw)
-                && session.has_sudo_password_blocking()
-            {
+            if pier_core::sudo::is_permission_denied(&raw) && session.can_elevate_blocking() {
                 // `%s\t%a\t%Y` → size, octal perms, mtime epoch.
                 // Not all coreutils expose the same -c format, but
                 // GNU coreutils + busybox both accept these three.
-                let cmd = format!(
-                    "stat -c '%s\\t%a\\t%Y' {}",
-                    shell_single_quote(&path),
-                );
+                let cmd = format!("stat -c '%s\\t%a\\t%Y' {}", shell_single_quote(&path),);
                 let (code, out) = session
                     .exec_with_sudo_blocking(&cmd)
                     .map_err(|e2| e2.to_string())?;
@@ -13089,18 +15008,10 @@ fn sftp_read_text(
                     .next()
                     .and_then(|s| s.parse::<u64>().ok())
                     .unwrap_or(0);
-                let perms = parts
-                    .next()
-                    .and_then(|s| u32::from_str_radix(s, 8).ok());
-                let mtime = parts
-                    .next()
-                    .and_then(|s| s.parse::<u64>().ok());
+                let perms = parts.next().and_then(|s| u32::from_str_radix(s, 8).ok());
+                let mtime = parts.next().and_then(|s| s.parse::<u64>().ok());
                 pier_core::ssh::sftp::RemoteFileEntry {
-                    name: path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&path)
-                        .to_string(),
+                    name: path.rsplit('/').next().unwrap_or(&path).to_string(),
                     path: path.clone(),
                     is_dir: false,
                     is_link: false,
@@ -13128,9 +15039,7 @@ fn sftp_read_text(
         Ok(b) => b,
         Err(e) => {
             let raw = e.to_string();
-            if pier_core::sudo::is_permission_denied(&raw)
-                && session.has_sudo_password_blocking()
-            {
+            if pier_core::sudo::is_permission_denied(&raw) && session.can_elevate_blocking() {
                 // Fall back to `cat <path>` via sudo. The editor's
                 // size cap was already enforced above.
                 let cmd = format!("cat {}", shell_single_quote(&path));
@@ -13138,10 +15047,15 @@ fn sftp_read_text(
                     .exec_with_sudo_blocking(&cmd)
                     .map_err(|e2| e2.to_string())?;
                 if code != 0 {
-                    return Err(format!(
-                        "sudo cat exited {code}: {}",
-                        out.lines().next().unwrap_or("").trim()
-                    ));
+                    // Surface the first meaningful line (the elevation/auth
+                    // error), skipping the blank line the password prompt
+                    // leaves behind, so the editor shows a real cause.
+                    let detail = out
+                        .lines()
+                        .map(str::trim)
+                        .find(|l| !l.is_empty())
+                        .unwrap_or("permission denied");
+                    return Err(format!("Could not read file with elevation: {detail}"));
                 }
                 out.into_bytes()
             } else {
@@ -13254,8 +15168,40 @@ fn detect_eol(text: &str) -> String {
 
 /// Write UTF-8 text back to a remote file, overwriting. The editor
 /// dialog calls this when the user saves.
-#[tauri::command(async)]
-fn sftp_write_text(
+#[tauri::command]
+async fn sftp_write_text(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    content: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_write_text_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            path,
+            content,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+}
+
+fn sftp_write_text_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -13295,9 +15241,7 @@ fn sftp_write_text(
         Ok(()) => Ok(()),
         Err(e) => {
             let raw = e.to_string();
-            if pier_core::sudo::is_permission_denied(&raw)
-                && session.has_sudo_password_blocking()
-            {
+            if pier_core::sudo::is_permission_denied(&raw) && session.can_elevate_blocking() {
                 // Fall back to `base64 -d | tee <path>` via sudo so
                 // root-owned config files (sshd_config, /etc/hosts,
                 // /etc/sudoers.d/*) save without the user having to
@@ -13321,6 +15265,586 @@ fn sftp_write_text(
             } else {
                 Err(raw)
             }
+        }
+    }
+}
+
+// ── Multi-format preview ────────────────────────────────────────
+//
+// The SFTP panel's double-click previewer fetches content through
+// these commands instead of the whole-file `sftp_read_text` editor
+// path. Streaming text + hex window the file (no size cap, instant
+// first screen); the tabular parsers download once under a soft cap.
+// Images / PDF / video stream their bytes through the `pierfs://`
+// range protocol registered on the Tauri builder, not these
+// commands.
+
+/// Soft ceiling for one-shot tabular parses (spreadsheet / CSV). A
+/// file larger than this is rejected before download so a mis-click
+/// on a multi-GB dump doesn't buffer it into backend RAM.
+const SFTP_PREVIEW_PARSE_MAX: u64 = 64 * 1024 * 1024;
+
+/// Max rows a tabular preview returns before truncating.
+const SFTP_PREVIEW_MAX_ROWS: usize = 5000;
+
+/// Bytes the streaming text reader ships per chunk — one round trip
+/// per chunk, so the first one paints the first screen immediately.
+const SFTP_TEXT_STREAM_CHUNK: usize = 256 * 1024;
+
+/// Default cap on how much of a text file the streaming viewer pulls
+/// before pausing with a "load more" affordance. The frontend can
+/// pass a larger `max_bytes` to continue from `next_offset`.
+const SFTP_TEXT_STREAM_DEFAULT_MAX: u64 = 64 * 1024 * 1024;
+
+/// One base64-encoded byte window, returned by [`sftp_read_range`].
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SftpRangeChunk {
+    /// Base64 of the bytes in `[offset, offset + length)`.
+    base64: String,
+    /// Offset the window started at.
+    offset: u64,
+    /// Bytes actually returned (fewer than requested at EOF).
+    length: u64,
+    /// True when the window reached end-of-file.
+    eof: bool,
+}
+
+/// Read a byte range of a remote file, base64-encoded. Powers the
+/// hex viewer (16-byte rows fetched on demand) and any binary
+/// windowing — never loads the whole file. A single request is
+/// clamped to 8 MiB; callers page for more.
+#[tauri::command]
+async fn sftp_read_range(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    offset: u64,
+    length: u64,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<SftpRangeChunk, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session_with_sudo(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+            sudo_password,
+        )?;
+        let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
+        let want = length.min(8 * 1024 * 1024) as usize;
+        let bytes = sftp
+            .read_range_blocking(&path, offset, want)
+            .map_err(|e| e.to_string())?;
+        let n = bytes.len() as u64;
+        Ok(SftpRangeChunk {
+            base64: encode_base64(&bytes),
+            offset,
+            length: n,
+            eof: (n as usize) < want,
+        })
+    })
+    .await
+    .map_err(|error| format!("sftp_read_range join: {error}"))?
+}
+
+/// One decoded slice pushed over the [`sftp_stream_text`] channel.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SftpTextChunk {
+    /// `"text"` for content, `"binary"` for the "switch to hex" signal.
+    kind: String,
+    /// Encoding the slice was decoded with (e.g. `UTF-8`, `GBK`).
+    encoding: String,
+    /// Decoded UTF-8 text for this slice.
+    text: String,
+    /// Byte offset after this slice — feed back as `start_offset` to
+    /// continue past a truncation cap.
+    next_offset: u64,
+    /// Total file size, for the viewer's progress math.
+    total_size: u64,
+    /// True on the terminal message (EOF, or the binary signal).
+    done: bool,
+    /// True when the cap was hit before EOF.
+    truncated: bool,
+}
+
+/// Stream a remote file to the frontend as decoded text in windows.
+/// The first window — and the first screen of text — lands after one
+/// round trip regardless of file size; subsequent windows push until
+/// EOF or the `max_bytes` cap. Charset is sniffed from the first
+/// window (binary files emit a single `kind: "binary"` chunk so the
+/// viewer falls back to hex). Cancellable via `sftp_cancel_transfer`
+/// with the same `stream_id`.
+#[tauri::command]
+async fn sftp_stream_text(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    start_offset: Option<u64>,
+    max_bytes: Option<u64>,
+    stream_id: String,
+    on_event: tauri::ipc::Channel<SftpTextChunk>,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session_with_sudo(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+            sudo_password,
+        )?;
+        let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
+        let total = sftp.stat_blocking(&path).map(|m| m.size).unwrap_or(0);
+        let start = start_offset.unwrap_or(0);
+        let cap = max_bytes.unwrap_or(SFTP_TEXT_STREAM_DEFAULT_MAX);
+        let cancel = register_transfer_cancel(&state, &stream_id);
+        let result = pier_core::preview::stream_remote_text_blocking(
+            &sftp,
+            &path,
+            start,
+            cap,
+            SFTP_TEXT_STREAM_CHUNK,
+            total,
+            |chunk| {
+                let _ = on_event.send(SftpTextChunk {
+                    kind: chunk.kind,
+                    encoding: chunk.encoding,
+                    text: chunk.text,
+                    next_offset: chunk.next_offset,
+                    total_size: chunk.total_size,
+                    done: chunk.done,
+                    truncated: chunk.truncated,
+                });
+            },
+            Some(&cancel),
+        );
+        unregister_transfer_cancel(&state, &stream_id);
+        result.map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|error| format!("sftp_stream_text join: {error}"))?
+}
+
+/// Normalized table for the spreadsheet / CSV previews.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SftpTablePreview {
+    /// Sheet names in the workbook (`["csv"]` for CSV) for a picker.
+    sheet_names: Vec<String>,
+    /// Index of the sheet this preview came from.
+    sheet_index: usize,
+    /// Header row.
+    columns: Vec<String>,
+    /// Body rows, padded to `columns.len()`.
+    rows: Vec<Vec<String>>,
+    /// True when rows were capped.
+    truncated: bool,
+}
+
+impl From<pier_core::preview::TablePreview> for SftpTablePreview {
+    fn from(t: pier_core::preview::TablePreview) -> Self {
+        Self {
+            sheet_names: t.sheet_names,
+            sheet_index: t.sheet_index,
+            columns: t.columns,
+            rows: t.rows,
+            truncated: t.truncated,
+        }
+    }
+}
+
+/// Download (under a soft size cap) and parse a remote spreadsheet
+/// (`xlsx` / `xlsb` / `xls` / `ods`) into a table the frontend
+/// renders in its shared preview table. `sheet_index` selects the
+/// sheet.
+#[tauri::command]
+async fn sftp_preview_spreadsheet(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    sheet_index: Option<usize>,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<SftpTablePreview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let bytes = sftp_preview_fetch_bytes(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            &path,
+            saved_connection_index,
+            sudo_password,
+        )?;
+        pier_core::preview::parse_spreadsheet(
+            bytes,
+            sheet_index.unwrap_or(0),
+            SFTP_PREVIEW_MAX_ROWS,
+        )
+        .map(SftpTablePreview::from)
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|error| format!("sftp_preview_spreadsheet join: {error}"))?
+}
+
+/// Download (under a soft size cap) and parse a remote CSV/TSV into a
+/// table. `tab` selects the tab delimiter.
+#[tauri::command]
+async fn sftp_preview_csv(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    tab: Option<bool>,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<SftpTablePreview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let bytes = sftp_preview_fetch_bytes(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            &path,
+            saved_connection_index,
+            sudo_password,
+        )?;
+        pier_core::preview::parse_csv(bytes, tab.unwrap_or(false), SFTP_PREVIEW_MAX_ROWS)
+            .map(SftpTablePreview::from)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|error| format!("sftp_preview_csv join: {error}"))?
+}
+
+/// Shared helper for the tabular previews: open the session, reject
+/// files over [`SFTP_PREVIEW_PARSE_MAX`] before transfer, then read
+/// the whole file into memory for parsing.
+#[allow(clippy::too_many_arguments)]
+fn sftp_preview_fetch_bytes(
+    state: &tauri::State<'_, AppState>,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+    path: &str,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<Vec<u8>, String> {
+    let session = get_or_open_ssh_session_with_sudo(
+        state,
+        host,
+        port,
+        user,
+        auth_mode,
+        password,
+        key_path,
+        saved_connection_index,
+        sudo_password,
+    )?;
+    let sftp = get_or_open_sftp_client(state, &session, host, port, user, auth_mode)?;
+    if let Ok(meta) = sftp.stat_blocking(path) {
+        if meta.size > SFTP_PREVIEW_PARSE_MAX {
+            return Err(format!(
+                "File is {} bytes; preview limit is {} bytes — download to open",
+                meta.size, SFTP_PREVIEW_PARSE_MAX
+            ));
+        }
+    }
+    sftp.read_file_blocking(path).map_err(|e| e.to_string())
+}
+
+// ── pierfs:// range protocol ────────────────────────────────────
+//
+// Serves remote file bytes to the WebView at a URL it can `fetch`,
+// `<img src>`, `<video src>`, or hand to pdf.js — with HTTP Range
+// support so large binaries stream (only the requested/visible bytes
+// transfer). The frontend builds URLs via `convertFileSrc(path,
+// "pierfs")` plus a `?host=&port=&user=&authMode=` query; the
+// connection must already be open (the panel has browsed it), so we
+// look up the cached SftpClient and never re-authenticate here.
+
+/// Largest slice returned for a single ranged request — clients
+/// (pdf.js, `<video>`) re-request as they scroll/seek.
+const PIERFS_RANGE_CHUNK_MAX: u64 = 8 * 1024 * 1024;
+
+/// Largest whole-file response for a no-Range request (e.g. `<img>`).
+/// Bigger files fall back to a first-chunk 206.
+const PIERFS_NO_RANGE_MAX: u64 = 64 * 1024 * 1024;
+
+/// Decode `%XX` escapes produced by the frontend's `encodeURIComponent`.
+fn pierfs_percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 3 <= bytes.len() {
+            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Parse an HTTP `Range: bytes=…` header into an inclusive
+/// `[start, end]` clamped to `size`. Supports `start-end`, `start-`,
+/// and `-suffix`. Returns `None` when absent or unparseable.
+fn pierfs_parse_range(header: Option<&str>, size: u64) -> Option<(u64, u64)> {
+    let raw = header?.trim();
+    let spec = raw.strip_prefix("bytes=")?;
+    // Single range only — first entry if a list was sent.
+    let spec = spec.split(',').next()?.trim();
+    let (a, b) = spec.split_once('-')?;
+    if size == 0 {
+        return None;
+    }
+    let last = size - 1;
+    let (start, end) = if a.is_empty() {
+        // suffix: last `b` bytes
+        let suffix: u64 = b.trim().parse().ok()?;
+        let suffix = suffix.min(size);
+        (size - suffix, last)
+    } else {
+        let start: u64 = a.trim().parse().ok()?;
+        let end = if b.trim().is_empty() {
+            last
+        } else {
+            b.trim().parse::<u64>().ok()?.min(last)
+        };
+        (start, end)
+    };
+    if start > end {
+        return None;
+    }
+    Some((start, end))
+}
+
+/// Best-effort MIME type from a path's extension, for the bytes the
+/// `pierfs` protocol serves. Falls back to `application/octet-stream`.
+fn pierfs_mime_for_path(path: &str) -> &'static str {
+    let ext = path
+        .rsplit('.')
+        .next()
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        "pdf" => "application/pdf",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "ogv" => "video/ogg",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" | "oga" => "audio/ogg",
+        "flac" => "audio/flac",
+        "m4a" => "audio/mp4",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Build the actual `pierfs://` response (runs on a worker thread so
+/// the SFTP I/O never blocks the UI thread).
+fn pierfs_respond(
+    app: &tauri::AppHandle,
+    request: &tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{Response, StatusCode};
+
+    let err = |code: StatusCode| -> Response<Vec<u8>> {
+        Response::builder()
+            .status(code)
+            .header("Access-Control-Allow-Origin", "*")
+            .body(Vec::new())
+            .expect("static error response builds")
+    };
+
+    let uri = request.uri();
+
+    // Connection identity + remote path from the query string. The
+    // path is authoritative here (not the URL path segment) so
+    // percent-encoded slashes survive platform URL normalization.
+    let mut host = String::new();
+    let mut port: u16 = 22;
+    let mut user = String::new();
+    let mut auth_mode = String::from("password");
+    let mut remote_path = String::new();
+    for pair in uri.query().unwrap_or("").split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            // Query values are form-encoded: `+` means space.
+            let val = pierfs_percent_decode(&v.replace('+', " "));
+            match k {
+                "host" => host = val,
+                "port" => port = val.parse().unwrap_or(22),
+                "user" => user = val,
+                "authMode" => auth_mode = val,
+                "path" => remote_path = val,
+                _ => {}
+            }
+        }
+    }
+    // Fall back to the path segment if the query omitted `path`.
+    if remote_path.is_empty() {
+        remote_path = pierfs_percent_decode(uri.path().trim_start_matches('/'));
+    }
+    if remote_path.is_empty() || host.is_empty() || user.is_empty() {
+        return err(StatusCode::BAD_REQUEST);
+    }
+
+    let state: tauri::State<'_, AppState> = app.state();
+    let key = sftp_cache_key(&host, port, &user, &auth_mode);
+    let sftp = match state.sftp_clients.lock() {
+        Ok(cache) => cache.get(&key).cloned(),
+        Err(_) => None,
+    };
+    // No live session — the panel must browse the host first. 503 so
+    // the frontend can surface "reconnect" rather than a hard 404.
+    let Some(sftp) = sftp else {
+        return err(StatusCode::SERVICE_UNAVAILABLE);
+    };
+
+    let size = match sftp.stat_blocking(&remote_path) {
+        Ok(meta) => meta.size,
+        Err(_) => return err(StatusCode::NOT_FOUND),
+    };
+    // Formats the WebView can't decode natively (TIFF) are
+    // transcoded to PNG here and served whole — they're images, so
+    // no Range. Bounded by the no-range ceiling.
+    let ext_lower = remote_path
+        .rsplit('.')
+        .next()
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext_lower == "tif" || ext_lower == "tiff" {
+        if size > PIERFS_NO_RANGE_MAX {
+            return err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+        let raw = match sftp.read_range_blocking(&remote_path, 0, size as usize) {
+            Ok(b) => b,
+            Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+        let png = match pier_core::preview::decode_image_to_png(&raw) {
+            Ok(p) => p,
+            Err(_) => return err(StatusCode::UNSUPPORTED_MEDIA_TYPE),
+        };
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "image/png")
+            .header("Access-Control-Allow-Origin", "*")
+            .header("Content-Length", png.len().to_string())
+            .body(png)
+            .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR));
+    }
+
+    let mime = pierfs_mime_for_path(&remote_path);
+    let range = pierfs_parse_range(
+        request.headers().get("range").and_then(|v| v.to_str().ok()),
+        size,
+    );
+
+    match range {
+        Some((start, raw_end)) => {
+            let end = raw_end.min(start + PIERFS_RANGE_CHUNK_MAX - 1);
+            let len = (end - start + 1) as usize;
+            let bytes = match sftp.read_range_blocking(&remote_path, start, len) {
+                Ok(b) => b,
+                Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR),
+            };
+            let got = bytes.len() as u64;
+            let real_end = if got == 0 { start } else { start + got - 1 };
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header("Content-Type", mime)
+                .header("Accept-Ranges", "bytes")
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Content-Range", format!("bytes {start}-{real_end}/{size}"))
+                .header("Content-Length", got.to_string())
+                .body(bytes)
+                .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR))
+        }
+        None => {
+            // No Range. Return the whole file when it's small enough;
+            // otherwise a first chunk (clients that care send Range).
+            let len = size.min(PIERFS_NO_RANGE_MAX) as usize;
+            let bytes = match sftp.read_range_blocking(&remote_path, 0, len) {
+                Ok(b) => b,
+                Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR),
+            };
+            let status = if (bytes.len() as u64) < size {
+                StatusCode::PARTIAL_CONTENT
+            } else {
+                StatusCode::OK
+            };
+            let mut builder = Response::builder()
+                .status(status)
+                .header("Content-Type", mime)
+                .header("Accept-Ranges", "bytes")
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Content-Length", bytes.len().to_string());
+            if status == StatusCode::PARTIAL_CONTENT {
+                let real_end = bytes.len().saturating_sub(1) as u64;
+                builder = builder.header("Content-Range", format!("bytes 0-{real_end}/{size}"));
+            }
+            builder
+                .body(bytes)
+                .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR))
         }
     }
 }
@@ -13401,6 +15925,7 @@ async fn sftp_download(
     local_path: String,
     saved_connection_index: Option<usize>,
     transfer_id: Option<String>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
@@ -13417,6 +15942,7 @@ async fn sftp_download(
             local_path,
             saved_connection_index,
             transfer_id,
+            sudo_password,
         )
     })
     .await
@@ -13436,8 +15962,9 @@ fn sftp_download_impl(
     local_path: String,
     saved_connection_index: Option<usize>,
     transfer_id: Option<String>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -13446,6 +15973,7 @@ fn sftp_download_impl(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let resolved_local = expand_local_path(&local_path);
     let id = transfer_id.clone().unwrap_or_default();
@@ -13456,11 +15984,26 @@ fn sftp_download_impl(
     // plumbing landed.
     if transfer_id.is_none() {
         let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
-        return sftp
-            .download_to_blocking(&remote_path, &resolved_local)
-            .map_err(|e| e.to_string());
+        return match sftp.download_to_blocking(&remote_path, &resolved_local) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let raw = e.to_string();
+                if pier_core::sudo::is_permission_denied(&raw) && session.can_elevate_blocking() {
+                    sudo_download_file(
+                        &session,
+                        &remote_path,
+                        std::path::Path::new(&resolved_local),
+                    )
+                } else {
+                    Err(raw)
+                }
+            }
+        };
     }
 
+    // Keep an Arc clone for the permission-denied fallback — the chunked
+    // entry point consumes `session` by value.
+    let session_for_fallback = session.clone();
     let cancel = register_transfer_cancel(&state, &id);
 
     let app_for_cb = app.clone();
@@ -13510,6 +16053,47 @@ fn sftp_download_impl(
         }
         Err(e) => {
             let msg = e.to_string();
+            // Permission-denied on the chunked path: retry the whole
+            // file via `sudo base64` (size-capped, single done marker).
+            if pier_core::sudo::is_permission_denied(&msg)
+                && session_for_fallback.can_elevate_blocking()
+            {
+                match sudo_download_file(
+                    &session_for_fallback,
+                    &remote_path,
+                    std::path::Path::new(&resolved_local),
+                ) {
+                    Ok(()) => {
+                        let total = std::fs::metadata(&resolved_local)
+                            .map(|m| m.len())
+                            .unwrap_or(0);
+                        emit_sftp_progress(
+                            &app,
+                            SftpProgressEvent {
+                                id,
+                                bytes: total,
+                                total,
+                                done: true,
+                                error: None,
+                            },
+                        );
+                        return Ok(());
+                    }
+                    Err(se) => {
+                        emit_sftp_progress(
+                            &app,
+                            SftpProgressEvent {
+                                id,
+                                bytes: 0,
+                                total: 0,
+                                done: true,
+                                error: Some(se.clone()),
+                            },
+                        );
+                        return Err(se);
+                    }
+                }
+            }
             emit_sftp_progress(
                 &app,
                 SftpProgressEvent {
@@ -13547,6 +16131,7 @@ async fn sftp_write_bytes(
     path: String,
     content_base64: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
@@ -13561,6 +16146,7 @@ async fn sftp_write_bytes(
             path,
             content_base64,
             saved_connection_index,
+            sudo_password,
         )
     })
     .await
@@ -13578,6 +16164,7 @@ fn sftp_write_bytes_impl(
     path: String,
     content_base64: String,
     saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
     // Cheap pre-check on the encoded length before allocating the
     // decode buffer (base64 is ~4/3 of the raw size).
@@ -13595,7 +16182,7 @@ fn sftp_write_bytes_impl(
             SFTP_DROP_UPLOAD_MAX
         ));
     }
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -13604,10 +16191,20 @@ fn sftp_write_bytes_impl(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
-    sftp.write_file_blocking(&path, &bytes)
-        .map_err(|e| e.to_string())
+    match sftp.write_file_blocking(&path, &bytes) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let raw = e.to_string();
+            if pier_core::sudo::is_permission_denied(&raw) && session.can_elevate_blocking() {
+                sudo_upload_bytes(&session, &path, &bytes)
+            } else {
+                Err(raw)
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -13815,9 +16412,8 @@ fn sftp_upload_tree_impl(
     let id_for_cb = id.clone();
     let should_emit = !transfer_id.as_deref().unwrap_or("").is_empty();
     let opts = ParallelOpts {
-        concurrency: concurrency.unwrap_or(
-            pier_core::ssh::sftp_parallel::DEFAULT_PARALLEL_CONCURRENCY,
-        ),
+        concurrency: concurrency
+            .unwrap_or(pier_core::ssh::sftp_parallel::DEFAULT_PARALLEL_CONCURRENCY),
     };
     let cancel = if should_emit {
         Some(register_transfer_cancel(&state, &id))
@@ -14188,9 +16784,8 @@ fn sftp_download_tree_impl(
     let id_for_cb = id.clone();
     let should_emit = !transfer_id.as_deref().unwrap_or("").is_empty();
     let opts = ParallelOpts {
-        concurrency: concurrency.unwrap_or(
-            pier_core::ssh::sftp_parallel::DEFAULT_PARALLEL_CONCURRENCY,
-        ),
+        concurrency: concurrency
+            .unwrap_or(pier_core::ssh::sftp_parallel::DEFAULT_PARALLEL_CONCURRENCY),
     };
     let cancel = if should_emit {
         Some(register_transfer_cancel(&state, &id))
@@ -14317,7 +16912,13 @@ fn emit_external_edit_event(app: &tauri::AppHandle, evt: SftpExternalEditEvent) 
 fn sanitize_temp_basename(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if matches!(c, '/' | '\\' | '\0') { '_' } else { c })
+        .map(|c| {
+            if matches!(c, '/' | '\\' | '\0') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let trimmed = cleaned.trim_matches('.').trim();
     if trimmed.is_empty() {
@@ -14544,8 +17145,7 @@ fn sftp_open_external_impl(
     let temp_root = std::env::temp_dir()
         .join("pierx-sftp-edit")
         .join(&watcher_id);
-    std::fs::create_dir_all(&temp_root)
-        .map_err(|e| format!("create temp dir: {e}"))?;
+    std::fs::create_dir_all(&temp_root).map_err(|e| format!("create temp dir: {e}"))?;
 
     let basename = path.rsplit('/').next().unwrap_or("file");
     let local_path = temp_root.join(sanitize_temp_basename(basename));
@@ -14553,13 +17153,12 @@ fn sftp_open_external_impl(
     sftp.download_to_blocking(&path, &local_path)
         .map_err(|e| format!("download: {e}"))?;
 
-    let post_download_meta = std::fs::metadata(&local_path)
-        .map_err(|e| format!("stat temp file: {e}"))?;
+    let post_download_meta =
+        std::fs::metadata(&local_path).map_err(|e| format!("stat temp file: {e}"))?;
     let last_mtime = post_download_meta.modified().ok();
     let last_size = post_download_meta.len();
 
-    open_with_default_app(&local_path)
-        .map_err(|e| format!("opener failed: {e}"))?;
+    open_with_default_app(&local_path).map_err(|e| format!("opener failed: {e}"))?;
 
     let stop_token = CancellationToken::new();
     {
@@ -14621,7 +17220,9 @@ fn sftp_external_edit_stop(
             .map_err(|_| "external editors state poisoned".to_string())?;
         map.remove(&watcher_id)
     };
-    let Some(h) = handle else { return Ok(()); };
+    let Some(h) = handle else {
+        return Ok(());
+    };
     h.stop_token.cancel();
     if h.cleanup_temp_dir {
         if let Some(dir) = h.local_path.parent() {
@@ -14664,10 +17265,7 @@ struct WebServerExternalEditOpen {
     local_path: String,
 }
 
-fn emit_web_server_external_edit_event(
-    app: &tauri::AppHandle,
-    evt: WebServerExternalEditEvent,
-) {
+fn emit_web_server_external_edit_event(app: &tauri::AppHandle, evt: WebServerExternalEditEvent) {
     use tauri::Emitter;
     let _ = app.emit(WEB_SERVER_EXTERNAL_EDIT_EVENT, evt);
 }
@@ -14876,8 +17474,39 @@ fn web_server_external_edit_watch_loop(
 /// `save_file_validate_reload_blocking` (backup → write → validate
 /// → restore-on-fail → reload). Returns a watcher id the frontend
 /// passes to [`web_server_external_edit_stop`] when done.
-#[tauri::command(async)]
-fn web_server_open_external(
+#[tauri::command]
+async fn web_server_open_external(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    kind: web_server::WebServerKind,
+    path: String,
+) -> Result<WebServerExternalEditOpen, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        web_server_open_external_impl(
+            app.clone(),
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            kind,
+            path,
+        )
+    })
+    .await
+}
+
+fn web_server_open_external_impl(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     host: String,
@@ -14927,11 +17556,9 @@ fn web_server_open_external(
     let basename = path.rsplit('/').next().unwrap_or("file");
     let local_path = temp_root.join(sanitize_temp_basename(basename));
 
-    std::fs::write(&local_path, initial.as_bytes())
-        .map_err(|e| format!("write temp file: {e}"))?;
+    std::fs::write(&local_path, initial.as_bytes()).map_err(|e| format!("write temp file: {e}"))?;
 
-    let post_meta =
-        std::fs::metadata(&local_path).map_err(|e| format!("stat temp file: {e}"))?;
+    let post_meta = std::fs::metadata(&local_path).map_err(|e| format!("stat temp file: {e}"))?;
     let last_mtime = post_meta.modified().ok();
     let last_size = post_meta.len();
 
@@ -15012,7 +17639,9 @@ fn web_server_external_edit_stop(
             .map_err(|_| "external editors state poisoned".to_string())?;
         map.remove(&watcher_id)
     };
-    let Some(h) = handle else { return Ok(()); };
+    let Some(h) = handle else {
+        return Ok(());
+    };
     h.stop_token.cancel();
     if h.cleanup_temp_dir {
         if let Some(dir) = h.local_path.parent() {
@@ -15024,8 +17653,36 @@ fn web_server_external_edit_stop(
 
 // ── Log Stream ──────────────────────────────────────────────────
 
-#[tauri::command(async)]
-fn log_stream_start(
+#[tauri::command]
+async fn log_stream_start(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    command: String,
+    saved_connection_index: Option<usize>,
+) -> Result<String, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        log_stream_start_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            command,
+            saved_connection_index,
+        )
+    })
+    .await
+}
+
+fn log_stream_start_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -15050,8 +17707,13 @@ fn log_stream_start(
         &key_path,
         saved_connection_index,
         |session| {
+            // Follow the host elevation (applied to the session by
+            // `get_or_open_ssh_session`): `docker logs -f` on a
+            // root-owned daemon socket runs via `sudo -S` when the
+            // terminal is elevated, instead of silently hanging on
+            // permission denied.
             session
-                .spawn_exec_stream_blocking(&command)
+                .spawn_exec_stream_following_blocking(&command)
                 .map_err(|e| e.to_string())
         },
     )?;
@@ -15060,10 +17722,7 @@ fn log_stream_start(
     // the same millisecond (a rapid stop→start on a log-source switch)
     // produced the same key, so the second insert dropped the first
     // stream and left the frontend with a dangling handle.
-    let id = format!(
-        "log-{}",
-        state.next_log_id.fetch_add(1, Ordering::Relaxed)
-    );
+    let id = format!("log-{}", state.next_log_id.fetch_add(1, Ordering::Relaxed));
 
     state
         .log_streams
@@ -15480,10 +18139,12 @@ async fn server_monitor_process_kill(
     saved_connection_index: Option<usize>,
     pid: u32,
     force: bool,
+    sudo_password: Option<String>,
+    effective_user: Option<String>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
+        let session = get_or_open_ssh_session_elevated(
             &state,
             &host,
             port,
@@ -15492,29 +18153,38 @@ async fn server_monitor_process_kill(
             &password,
             &key_path,
             saved_connection_index,
+            sudo_password,
+            effective_user.as_deref(),
         )?;
-        // The shell-side `kill` returns non-zero on permission /
-        // already-exited / unknown-pid; surface its stderr verbatim
-        // so the user sees actual context rather than "ssh exit 1".
-        let cmd = if force {
-            format!("kill -9 {pid} 2>&1")
-        } else {
-            format!("kill {pid} 2>&1")
-        };
+        let signal = if force { "kill -9" } else { "kill" };
         let runtime = pier_core::ssh::runtime::shared();
+        // First try unprivileged (matches the login user's own
+        // processes). `2>&1` folds stderr in so the user sees real
+        // context rather than "ssh exit 1".
         let (code, output) = runtime
-            .block_on(session.exec_command(&cmd))
+            .block_on(session.exec_command(&format!("{signal} {pid} 2>&1")))
             .map_err(|e| e.to_string())?;
         if code == 0 {
-            Ok(())
-        } else {
-            Err(output.trim().to_string())
+            return Ok(());
         }
+        // Permission-denied killing another user's (e.g. root's)
+        // process: retry elevated when a sudo password is armed.
+        // `exec_with_sudo` follows the session's elevation method
+        // (root `sudo`, or `sudo -u <effective_user>`).
+        if pier_core::sudo::is_permission_denied(&output) && session.can_elevate_blocking() {
+            let (code2, out2) = runtime
+                .block_on(session.exec_with_sudo(&format!("{signal} {pid}")))
+                .map_err(|e| e.to_string())?;
+            if code2 == 0 {
+                return Ok(());
+            }
+            return Err(out2.trim().to_string());
+        }
+        Err(output.trim().to_string())
     })
     .await
     .map_err(|e| format!("server_monitor_process_kill join: {e}"))?
 }
-
 
 /// Append a single line to the shared file logger. Called from the
 /// frontend's console-capture wrapper so browser-side diagnostics land
@@ -15693,6 +18363,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        // Serves remote file bytes (image / PDF / video / docx) to the
+        // WebView with HTTP Range support, backed by the already-open
+        // SFTP session. SFTP I/O is blocking, so each request is
+        // handled on a worker thread and responded to asynchronously.
+        .register_asynchronous_uri_scheme_protocol("pierfs", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            std::thread::spawn(move || {
+                let response = pierfs_respond(&app, &request);
+                responder.respond(response);
+            });
+        })
         .setup(|app| {
             // Capture an AppHandle for the host-key prompt
             // callback. Anything constructed before this point
@@ -15764,7 +18445,11 @@ pub fn run() {
                     pier_core::logging::write_event(
                         "WARN",
                         "software.extras",
-                        &format!("could not create config dir {}: {}", config_dir.display(), e),
+                        &format!(
+                            "could not create config dir {}: {}",
+                            config_dir.display(),
+                            e
+                        ),
                     );
                 }
                 let _ = package_manager::set_user_extras_path(extras);
@@ -15918,8 +18603,15 @@ pub fn run() {
             git_conflicts_list,
             git_conflict_accept_all,
             git_conflict_mark_resolved,
+            ssh_elevation_preflight,
+            ssh_set_host_elevation,
+            ssh_set_host_effective_user,
             mysql_browse,
             mysql_execute,
+            mysql_browse_socket,
+            mysql_execute_socket,
+            postgres_browse_socket,
+            postgres_execute_socket,
             mysql_list_processes,
             mysql_kill_query,
             mysql_kill_connection,
@@ -16118,6 +18810,10 @@ pub fn run() {
             sftp_chmod,
             sftp_create_file,
             sftp_read_text,
+            sftp_read_range,
+            sftp_stream_text,
+            sftp_preview_spreadsheet,
+            sftp_preview_csv,
             sftp_write_text,
             sftp_write_bytes,
             sftp_download,

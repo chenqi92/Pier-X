@@ -54,6 +54,13 @@ type SettingsState = {
    *  but the safest stance is opt-in. In-memory ring still works
    *  for the current session regardless of this setting. */
   terminalHistoryPersist: boolean;
+  /** Auto-capture the password typed at a terminal `sudo`/`su` prompt and
+   *  reuse it (in-memory, this session only — never the keychain) so the
+   *  right-side panels follow the terminal's elevation without a second
+   *  prompt. The backend tries `sudo` then `su` with the captured secret,
+   *  so a `sudo` (own) or `su` (root) password both work. A wrong capture
+   *  self-heals via the panels' own permission-denied re-prompt. */
+  followTerminalSudo: boolean;
   // SFTP file editor
   /** Default state of the wrap toggle in the SFTP editor dialog. */
   editorWrapDefault: boolean;
@@ -102,6 +109,10 @@ type SettingsState = {
   aiRedact: boolean;
   /** Ask even for read-only (L0) operations. */
   aiAskReadOnly: boolean;
+  /** Skip the type-the-first-word gate on L2 high-risk cards, so the
+   *  Execute button is clickable directly. Default off — L3 red-line
+   *  commands stay blocked regardless. */
+  aiSkipL2Confirm: boolean;
   /** Save AI conversation history to disk (`ai-history/`). Off =
    *  memory-only, same stance as terminalHistoryPersist. */
   aiPersistHistory: boolean;
@@ -128,6 +139,7 @@ type SettingsState = {
   setTerminalCopyOnSelect: (on: boolean) => void;
   setTerminalSmartMode: (on: boolean) => void;
   setTerminalHistoryPersist: (on: boolean) => void;
+  setFollowTerminalSudo: (on: boolean) => void;
   setEditorWrapDefault: (on: boolean) => void;
   setEditorLineNumbersDefault: (on: boolean) => void;
   setEditorTabSize: (n: number) => void;
@@ -144,6 +156,7 @@ type SettingsState = {
   setAiAutoContext: (on: boolean) => void;
   setAiRedact: (on: boolean) => void;
   setAiAskReadOnly: (on: boolean) => void;
+  setAiSkipL2Confirm: (on: boolean) => void;
   setAiPersistHistory: (on: boolean) => void;
   /** Snapshot the current working fields as a profile (dedupes on
    *  vendor+baseUrl+model) and mark it active. */
@@ -190,6 +203,7 @@ type PersistedSettings = Partial<{
   terminalCopyOnSelect: boolean;
   terminalSmartMode: boolean;
   terminalHistoryPersist: boolean;
+  followTerminalSudo: boolean;
   editorWrapDefault: boolean;
   editorLineNumbersDefault: boolean;
   editorTabSize: number;
@@ -206,6 +220,7 @@ type PersistedSettings = Partial<{
   aiAutoContext: boolean;
   aiRedact: boolean;
   aiAskReadOnly: boolean;
+  aiSkipL2Confirm: boolean;
   aiPersistHistory: boolean;
   aiProfiles: AiProfile[];
   aiActiveProfileId: string | null;
@@ -231,6 +246,10 @@ const DEFAULTS = {
   // secrets typed at password prompts) to disk without consent.
   terminalSmartMode: false,
   terminalHistoryPersist: false,
+  // On by default: the captured value (sudo = own password, su = root
+  // password) is kept in memory for the session and never persisted —
+  // the friendly "panels follow the terminal" behavior the user expects.
+  followTerminalSudo: true,
   editorWrapDefault: false,
   editorLineNumbersDefault: true,
   editorTabSize: 2,
@@ -249,6 +268,7 @@ const DEFAULTS = {
   aiAutoContext: true,
   aiRedact: true,
   aiAskReadOnly: false,
+  aiSkipL2Confirm: false,
   aiPersistHistory: true,
   aiProfiles: [] as AiProfile[],
   aiActiveProfileId: null as string | null,
@@ -338,6 +358,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       stored.terminalSmartMode ?? DEFAULTS.terminalSmartMode,
     terminalHistoryPersist:
       stored.terminalHistoryPersist ?? DEFAULTS.terminalHistoryPersist,
+    followTerminalSudo:
+      stored.followTerminalSudo ?? DEFAULTS.followTerminalSudo,
     editorWrapDefault: stored.editorWrapDefault ?? DEFAULTS.editorWrapDefault,
     editorLineNumbersDefault:
       stored.editorLineNumbersDefault ?? DEFAULTS.editorLineNumbersDefault,
@@ -361,6 +383,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     aiAutoContext: stored.aiAutoContext ?? DEFAULTS.aiAutoContext,
     aiRedact: stored.aiRedact ?? DEFAULTS.aiRedact,
     aiAskReadOnly: stored.aiAskReadOnly ?? DEFAULTS.aiAskReadOnly,
+    aiSkipL2Confirm: stored.aiSkipL2Confirm ?? DEFAULTS.aiSkipL2Confirm,
     aiPersistHistory: stored.aiPersistHistory ?? DEFAULTS.aiPersistHistory,
     aiProfiles: stored.aiProfiles ?? DEFAULTS.aiProfiles,
     aiActiveProfileId: stored.aiActiveProfileId ?? DEFAULTS.aiActiveProfileId,
@@ -404,6 +427,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       terminalCopyOnSelect: s.terminalCopyOnSelect,
       terminalSmartMode: s.terminalSmartMode,
       terminalHistoryPersist: s.terminalHistoryPersist,
+      followTerminalSudo: s.followTerminalSudo,
       editorWrapDefault: s.editorWrapDefault,
       editorLineNumbersDefault: s.editorLineNumbersDefault,
       editorTabSize: s.editorTabSize,
@@ -420,6 +444,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       aiAutoContext: s.aiAutoContext,
       aiRedact: s.aiRedact,
       aiAskReadOnly: s.aiAskReadOnly,
+      aiSkipL2Confirm: s.aiSkipL2Confirm,
       aiPersistHistory: s.aiPersistHistory,
       aiProfiles: s.aiProfiles,
       aiActiveProfileId: s.aiActiveProfileId,
@@ -505,6 +530,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       set({ terminalSmartMode });
       persist();
     },
+    setFollowTerminalSudo: (followTerminalSudo) => {
+      set({ followTerminalSudo });
+      persist();
+    },
     setTerminalHistoryPersist: (terminalHistoryPersist) => {
       set({ terminalHistoryPersist });
       persist();
@@ -580,6 +609,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     },
     setAiAskReadOnly: (aiAskReadOnly) => {
       set({ aiAskReadOnly });
+      persist();
+    },
+    setAiSkipL2Confirm: (aiSkipL2Confirm) => {
+      set({ aiSkipL2Confirm });
       persist();
     },
     setAiPersistHistory: (aiPersistHistory) => {

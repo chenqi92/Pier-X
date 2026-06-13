@@ -91,6 +91,9 @@ html, body {
 .dk-table,
 .git-diff-code,
 .preview-list,
+.spv-scroll,
+.spv-docx,
+.spv-table-scroll,
 .dk-inspect-pre,
 .install-log,
 .sw-logs__pre,
@@ -199,7 +202,7 @@ button,
   position: relative;
   display: grid;
   grid-template-rows: var(--titlebar-h) var(--tabbar-h) 1fr var(--statusbar-h);
-  grid-template-columns: var(--sidebar-w) 1fr calc(var(--rightpanel-w) + var(--toolstrip-w));
+  grid-template-columns: var(--sidebar-w) minmax(var(--center-min-w, 0px), 1fr) calc(var(--rightpanel-w) + var(--toolstrip-w));
   grid-template-areas:
     "title  title   title"
     "side   tabs    tabs"
@@ -243,7 +246,8 @@ button,
 }
 .app-shell.is-right-collapsed .resize-handle--right { display: none; }
 .resize-handle:hover::before,
-.resize-handle:active::before { background: var(--accent); }
+.resize-handle:active::before,
+.resize-handle:focus-visible::before { background: var(--accent); }
 
 /* ── Context Menu (shared popover) ───────────────────────── */
 
@@ -1056,12 +1060,12 @@ button,
   align-items: center;
   justify-content: center;
   color: var(--dim);
-  opacity: 0;
+  opacity: 0.3;
   cursor: grab;
   transition: opacity var(--dur-fast) var(--easing);
 }
 .srv-row:hover .srv-grip,
-.srv-group-head:hover .srv-grip { opacity: 0.7; }
+.srv-group-head:hover .srv-grip { opacity: 0.75; }
 .srv-group-head .srv-grip { margin-right: -2px; }
 
 .srv-item.dragging > .srv-row,

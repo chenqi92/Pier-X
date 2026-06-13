@@ -50,6 +50,46 @@ export function isEditableFilename(name: string): boolean {
   return TEXT_EXTENSIONS.has(ext);
 }
 
+/** How the SFTP double-click previewer should render a file. `text`
+ *  covers everything not matched below — the streaming text viewer
+ *  auto-detects binary content and falls back to a hex view, so
+ *  unknown/extension-less files still open instantly and gracefully. */
+export type PreviewKind =
+  | "image"
+  | "svg"
+  | "tiff"
+  | "pdf"
+  | "spreadsheet"
+  | "csv"
+  | "docx"
+  | "video"
+  | "audio"
+  | "text";
+
+const IMAGE_EXTENSIONS = new Set([
+  "png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "avif",
+]);
+const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "webm", "ogv", "mov"]);
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "oga", "flac", "m4a", "aac"]);
+const SPREADSHEET_EXTENSIONS = new Set(["xlsx", "xlsm", "xlsb", "xls", "ods"]);
+
+/** Classify a filename into a {@link PreviewKind} for the double-click
+ *  previewer. Pure extension match; content sniffing happens in the
+ *  backend for the `text` path. */
+export function previewKindOf(name: string): PreviewKind {
+  const ext = extensionOf(name);
+  if (ext === "svg") return "svg";
+  if (ext === "tif" || ext === "tiff") return "tiff";
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  if (ext === "pdf") return "pdf";
+  if (SPREADSHEET_EXTENSIONS.has(ext)) return "spreadsheet";
+  if (ext === "csv" || ext === "tsv") return "csv";
+  if (ext === "docx") return "docx";
+  if (VIDEO_EXTENSIONS.has(ext)) return "video";
+  if (AUDIO_EXTENSIONS.has(ext)) return "audio";
+  return "text";
+}
+
 /** Short human label of the detected language, shown in the status bar. */
 export function languageLabel(name: string): string {
   const lower = name.toLowerCase();

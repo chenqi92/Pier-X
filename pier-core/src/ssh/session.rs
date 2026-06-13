@@ -38,7 +38,6 @@ use super::config::{AuthMethod, SshConfig};
 use super::error::{Result, SshError};
 use super::known_hosts::HostKeyVerifier;
 use super::runtime;
-use crate::sudo;
 
 /// Sentinel exit code returned by [`SshSession::exec_command_streaming`]
 /// when a caller-supplied [`CancellationToken`] fires before the remote
@@ -73,6 +72,23 @@ pub struct SshSession {
     /// password without re-prompting; different SSH users still
     /// get distinct sessions and therefore distinct slots.
     sudo_password: Arc<RwLock<Option<String>>>,
+    /// Privilege-escalation method paired with `sudo_password` for
+    /// [`Self::exec_with_sudo`]. Defaults to [`Elevation::Sudo`] so the
+    /// legacy "password set → `sudo -S` as root" behavior is preserved;
+    /// the Tauri layer overrides it via [`Self::set_elevation`] to follow
+    /// the terminal's effective user (e.g. `sudo -u deploy` after the
+    /// operator `su - deploy`'d in the terminal). `exec_with_sudo` runs
+    /// `exec_as_effective(cmd, &this, password)`.
+    elevation: Arc<RwLock<crate::sudo::Elevation>>,
+    /// Whether this host is known to be elevated in the terminal even
+    /// though no secret was captured — e.g. the operator ran `sudo -i` on
+    /// a NOPASSWD / cached-credentials host, so there was no password
+    /// prompt to capture. When `true` and `sudo_password` is empty,
+    /// [`Self::exec_with_sudo`] attempts a passwordless `sudo -n` and
+    /// degrades to an unprivileged run if the host actually needs a
+    /// password (rather than failing the operation). Set by the Tauri
+    /// layer from the terminal's observed effective user.
+    elevation_armed: Arc<RwLock<bool>>,
 }
 
 // Manual Debug — the russh Handle itself isn't Debug, and even
@@ -242,6 +258,8 @@ impl SshSession {
         let mut session = Self {
             handle: Arc::new(handle),
             sudo_password: Arc::new(RwLock::new(None)),
+            elevation: Arc::new(RwLock::new(crate::sudo::Elevation::Sudo)),
+            elevation_armed: Arc::new(RwLock::new(false)),
         };
 
         // Apply the same connect timeout to authentication. Without
@@ -1009,6 +1027,71 @@ impl SshSession {
         runtime::shared().block_on(self.set_sudo_password(password));
     }
 
+    /// Set the privilege-escalation method paired with the sudo password
+    /// for [`Self::exec_with_sudo`]. The Tauri layer calls this to make
+    /// the exec-panel surface follow the terminal's effective user
+    /// (`Elevation::Sudo` for root, `Elevation::SudoUser{user}` to become
+    /// a specific user). Defaults to `Sudo` if never called.
+    pub async fn set_elevation(&self, elevation: crate::sudo::Elevation) {
+        let mut slot = self.elevation.write().await;
+        *slot = elevation;
+    }
+
+    /// Sync wrapper for [`Self::set_elevation`].
+    pub fn set_elevation_blocking(&self, elevation: crate::sudo::Elevation) {
+        runtime::shared().block_on(self.set_elevation(elevation));
+    }
+
+    /// Mark (or clear) this session as elevated-without-a-captured-secret.
+    /// See [`Self::elevation_armed`]. When `true`, [`Self::exec_with_sudo`]
+    /// attempts a passwordless `sudo -n` for commands that have no secret,
+    /// so a terminal `sudo -i` on a NOPASSWD host is followed.
+    pub async fn set_elevation_armed(&self, armed: bool) {
+        let mut slot = self.elevation_armed.write().await;
+        *slot = armed;
+    }
+
+    /// Sync wrapper for [`Self::set_elevation_armed`].
+    pub fn set_elevation_armed_blocking(&self, armed: bool) {
+        runtime::shared().block_on(self.set_elevation_armed(armed));
+    }
+
+    /// Whether this session is currently armed for passwordless elevation.
+    pub fn is_elevation_armed_blocking(&self) -> bool {
+        runtime::shared().block_on(async { *self.elevation_armed.read().await })
+    }
+
+    /// Async read of the armed flag — for callers already in an async
+    /// context (blocking variants would deadlock the shared runtime).
+    pub async fn is_elevation_armed(&self) -> bool {
+        *self.elevation_armed.read().await
+    }
+
+    /// Run a command that needs root, following the session's elevation,
+    /// given a precomputed `is_root` (callers probe `id -u` once and reuse
+    /// it). This is the single correct primitive for service modules
+    /// (nginx / web_server / …) that used to hand-build a `sudo -n` prefix
+    /// and then — buggily — run it through plain [`Self::exec_command`],
+    /// which left an *empty* prefix unelevated (the command silently ran as
+    /// the login user). Routing through [`Self::exec_with_sudo`] instead
+    /// pipes the password via stdin (`sudo -S`, never the command line) or
+    /// uses a passwordless `sudo -n` when the terminal is armed:
+    ///
+    /// - already root → run directly, no sudo.
+    /// - captured password OR armed (terminal `sudo -i`/`su`) →
+    ///   [`Self::exec_with_sudo`] (sudo -S / sudo -n, degrades cleanly).
+    /// - otherwise → best-effort `sudo -n` so a NOPASSWD host the operator
+    ///   hasn't elevated on still works (the legacy default).
+    pub async fn exec_maybe_sudo(&self, command: &str, is_root: bool) -> Result<(i32, String)> {
+        if is_root {
+            return self.exec_command(command).await;
+        }
+        if self.has_sudo_password().await || self.is_elevation_armed().await {
+            return self.exec_with_sudo(command).await;
+        }
+        self.exec_command(&format!("LC_ALL=C sudo -n {command}")).await
+    }
+
     /// True when this session has a non-empty sudo password attached.
     /// Used by service modules (nginx, web_server) to decide whether
     /// they should still prepend `sudo -n ` to commands as a NOPASSWD
@@ -1028,6 +1111,23 @@ impl SshSession {
         runtime::shared().block_on(self.has_sudo_password())
     }
 
+    /// True when this session can plausibly run a command elevated —
+    /// either a secret is attached (`sudo -S` / `su`) **or** the host is
+    /// armed for passwordless `sudo -n` (terminal `sudo -i` on a NOPASSWD
+    /// / cached-creds host, no secret to capture). Panels gate their
+    /// permission-denied → sudo fallback on this so the right side follows
+    /// the terminal even when nothing was captured.
+    pub fn can_elevate_blocking(&self) -> bool {
+        self.has_sudo_password_blocking() || self.is_elevation_armed_blocking()
+    }
+
+    /// Snapshot the armed elevation secret. Lets the streaming-exec
+    /// wrapper (in a sibling module that can't see the private slot)
+    /// follow the session's elevation. `None` when nothing is armed.
+    pub async fn sudo_password_snapshot(&self) -> Option<String> {
+        self.sudo_password.read().await.clone()
+    }
+
     /// Run `command` remotely. If a sudo password has been
     /// attached via [`Self::set_sudo_password`], the command is
     /// wrapped in `sudo -S -p ''` and the password is piped via
@@ -1044,21 +1144,290 @@ impl SshSession {
         let pw = { self.sudo_password.read().await.clone() };
         match pw {
             Some(pw) if !pw.is_empty() => {
-                // Audit: log only the first 80 chars of the wrapped
-                // command and never the password. Goes to the log
-                // file the user can inspect via Settings → Privacy.
-                let preview: String = command.chars().take(80).collect();
-                log::info!("[audit] exec_with_sudo: {preview}");
-                let (wrapped, stdin) = sudo::wrap_command(command, &pw);
-                self.exec_command_with_stdin(&wrapped, &stdin).await
+                // Dispatch through the per-call primitive using the
+                // session's stored elevation method (defaults to
+                // `Sudo`, so this stays `sudo -S` as before; the Tauri
+                // layer can switch it to `sudo -u <user>` to follow the
+                // terminal's effective user). Audit logging lives in
+                // `exec_as_effective`.
+                let elevation = { self.elevation.read().await.clone() };
+                self.exec_as_effective(command, &elevation, Some(&pw)).await
             }
-            _ => self.exec_command(command).await,
+            _ => {
+                // No captured secret. If the host is *armed* (the operator
+                // elevated in the terminal on a NOPASSWD / cached-creds
+                // host, so there was no prompt to capture) try a
+                // passwordless `sudo -n`; on a host that really needs a
+                // password it fails fast (no prompt, no hang) and we
+                // degrade to an unprivileged run rather than failing the
+                // op. Not armed → plain exec as before.
+                let armed = { *self.elevation_armed.read().await };
+                if !armed {
+                    return self.exec_command(command).await;
+                }
+                let elevation = { self.elevation.read().await.clone() };
+                match crate::sudo::wrap_command_nopasswd(command, &elevation) {
+                    Some(wrapped) => {
+                        let res = self.exec_command(&wrapped).await?;
+                        if res.0 == 0 {
+                            return Ok(res);
+                        }
+                        // `sudo -n` refused (needs a password / not a
+                        // sudoer) → run unprivileged. A non-zero exit with
+                        // *other* output is the inner command failing on
+                        // its own, so pass that through unchanged.
+                        if crate::sudo::is_elevation_auth_failure(&res.1)
+                            || crate::sudo::is_permission_denied(&res.1)
+                        {
+                            log::info!(
+                                "[audit] passwordless sudo -n unavailable, running unprivileged"
+                            );
+                            self.exec_command(command).await
+                        } else {
+                            Ok(res)
+                        }
+                    }
+                    None => self.exec_command(command).await,
+                }
+            }
         }
     }
 
     /// Sync convenience for [`Self::exec_with_sudo`].
     pub fn exec_with_sudo_blocking(&self, command: &str) -> Result<(i32, String)> {
         runtime::shared().block_on(self.exec_with_sudo(command))
+    }
+
+    /// Run `command` at the given privilege level, deciding elevation
+    /// **per-call**. Unlike [`Self::exec_with_sudo`] this neither reads
+    /// nor writes the session's sudo-password slot, so concurrent
+    /// callers on a shared SSH session can run at different privilege
+    /// levels without clobbering each other's elevation state — the
+    /// cross-panel leak the slot mechanism is prone to.
+    ///
+    /// `secret` is the password for [`Elevation::Sudo`] (caller's own)
+    /// and [`Elevation::Su`] (the target user's); it is ignored for
+    /// [`Elevation::None`]. The secret is piped via stdin, never placed
+    /// on the command line.
+    pub async fn exec_as_effective(
+        &self,
+        command: &str,
+        elevation: &crate::sudo::Elevation,
+        secret: Option<&str>,
+    ) -> Result<(i32, String)> {
+        use crate::sudo::Elevation;
+        if !matches!(elevation, Elevation::None) {
+            // Audit: log the elevation method + first 80 chars of the
+            // command, never the secret. Mirrors `exec_with_sudo`'s audit
+            // trail so consolidating onto this primitive doesn't lose it.
+            let preview: String = command.chars().take(80).collect();
+            log::info!("[audit] exec_as_effective ({elevation:?}): {preview}");
+        }
+        match elevation {
+            Elevation::None => self.exec_command(command).await,
+            Elevation::Sudo => {
+                let (wrapped, stdin) = crate::sudo::wrap_command(command, secret.unwrap_or(""));
+                let res = self.exec_command_with_stdin(&wrapped, &stdin).await?;
+                // The secret may actually be a *root* password (operator
+                // `su`'d in the terminal), which `sudo` rejects. Fall back
+                // to `su - root` over a PTY with the same secret so the
+                // panel still follows the terminal's elevation.
+                self.su_fallback_if_auth_failed(res, "root", command, secret).await
+            }
+            Elevation::SudoUser { target_user } => {
+                let (wrapped, stdin) =
+                    crate::sudo::wrap_command_sudo_u(command, target_user, secret.unwrap_or(""));
+                let res = self.exec_command_with_stdin(&wrapped, &stdin).await?;
+                self.su_fallback_if_auth_failed(res, target_user, command, secret)
+                    .await
+            }
+            Elevation::Su { target_user } => {
+                self.exec_su_pty(target_user, secret.unwrap_or(""), command).await
+            }
+        }
+    }
+
+    /// If a `sudo` attempt failed at the auth/authorization stage (wrong
+    /// password / not a sudoer / needs a tty), retry the same command as
+    /// `su - <target_user>` over a PTY with the same secret. Otherwise
+    /// pass the sudo result through unchanged. This makes the panels
+    /// follow a terminal `su root` (where the captured secret is root's
+    /// password) without a per-command "method" flag.
+    async fn su_fallback_if_auth_failed(
+        &self,
+        sudo_result: (i32, String),
+        target_user: &str,
+        command: &str,
+        secret: Option<&str>,
+    ) -> Result<(i32, String)> {
+        let (code, ref out) = sudo_result;
+        let preview: String = out.chars().take(160).collect();
+        log::info!(
+            "[audit] sudo attempt exit={code} out_len={} out_preview={preview:?}",
+            out.len()
+        );
+        // Fall back to `su` when sudo failed to *authorize* — either an
+        // explicit auth-failure string, or a non-zero exit with no output
+        // (some sudo configs reject silently). A non-zero exit *with*
+        // real output is the elevated command itself failing → don't
+        // re-run it via su (avoids double-executing a mutation).
+        let looks_auth = crate::sudo::is_elevation_auth_failure(out);
+        let silent = code != 0 && out.trim().is_empty();
+        if code != 0 && (looks_auth || silent) {
+            log::info!(
+                "[audit] sudo did not authorize (auth={looks_auth} silent={silent}), falling back to su - {target_user}"
+            );
+            let su_res = self.exec_su_pty(target_user, secret.unwrap_or(""), command).await?;
+            log::info!(
+                "[audit] su fallback exit={} out_len={}",
+                su_res.0,
+                su_res.1.len()
+            );
+            return Ok(su_res);
+        }
+        Ok(sudo_result)
+    }
+
+    /// Run `command` as `su - <target_user> -c` over a **PTY** channel,
+    /// feeding `password` when the `Password:` prompt appears — the only
+    /// way to drive `su` non-interactively (it reads from `/dev/tty`, not
+    /// stdin). A sentinel `echo` brackets the real output so the password
+    /// prompt + shell noise can be stripped; CRLF (from the PTY) is
+    /// normalized to LF. Returns `(exit_code, clean_output)`.
+    async fn exec_su_pty(
+        &self,
+        target_user: &str,
+        password: &str,
+        command: &str,
+    ) -> Result<(i32, String)> {
+        let user = if target_user.is_empty() {
+            "root"
+        } else {
+            target_user
+        };
+        // Sentinel marks where the real command output begins, so the
+        // `Password:` prompt and any login noise are dropped.
+        const SENTINEL: &str = "__PIERX_SU_BEGIN__";
+        let inner = format!("echo {SENTINEL}; {command}");
+        let escaped = inner.replace('\'', r"'\''");
+        // Force a C locale on `su` itself so its prompt is always the ASCII
+        // `Password: ` (a zh_CN remote prints `密码：`, which our matcher
+        // can't see — su then parks waiting for input that never comes) and
+        // so failure strings like `Authentication failure` stay matchable.
+        // `su -` still resets the env for the inner login shell, so the
+        // command runs under the target user's normal locale.
+        let full = format!("LC_ALL=C su - {user} -c '{escaped}'");
+
+        let mut channel = self.handle.channel_open_session().await?;
+        // A minimal PTY: `dumb` term keeps escape sequences out of the
+        // output, small fixed size, no special modes. `want_reply=true`
+        // so the PTY is confirmed allocated before we exec `su`.
+        channel
+            .request_pty(true, "dumb", 80, 24, 0, 0, &[])
+            .await?;
+        channel.exec(true, full.as_bytes()).await?;
+
+        let mut full_out: Vec<u8> = Vec::new();
+        // su re-prompts up to 3× on a wrong entry; feed on each fresh
+        // prompt (matched on newly-arrived bytes, not the cumulative buffer)
+        // and stop once the sentinel proves we're past auth. Without this a
+        // single feed leaves the 2nd prompt unanswered and the channel hangs.
+        const MAX_PW_ATTEMPTS: u8 = 3;
+        let mut pw_attempts: u8 = 0;
+        let mut exit_code: i32 = -1;
+        // Idle timeout: if `su` blocks waiting for input we never recognised
+        // (an unmatched prompt locale, a password we never fed, a hung PAM
+        // module) the channel never closes and `channel.wait()` parks
+        // forever. Bound each wait so a stuck prompt surfaces as an error the
+        // caller can show, instead of an infinite "loading" spinner.
+        const SU_IDLE: Duration = Duration::from_secs(20);
+        loop {
+            let msg = match tokio::time::timeout(SU_IDLE, channel.wait()).await {
+                Ok(Some(msg)) => msg,
+                Ok(None) => break, // channel closed — normal completion
+                Err(_) => {
+                    let _ = channel.close().await;
+                    let preview: String =
+                        String::from_utf8_lossy(&full_out).chars().take(160).collect();
+                    log::warn!(
+                        "[audit] su - {user} timed out after {SU_IDLE:?} idle pw_attempts={pw_attempts} raw_len={} raw_preview={preview:?}",
+                        full_out.len()
+                    );
+                    return Err(SshError::InvalidConfig(format!(
+                        "su - {user} timed out waiting for the password prompt \
+                         (no response in {}s). Check that the elevation password \
+                         is correct and that `su` is permitted for this account.",
+                        SU_IDLE.as_secs()
+                    )));
+                }
+            };
+            match msg {
+                russh::ChannelMsg::Data { data } => {
+                    full_out.extend_from_slice(&data);
+                    let seen = String::from_utf8_lossy(&full_out);
+                    // Bail the moment su reports a bad password rather than
+                    // waiting on the idle timeout — su would otherwise emit a
+                    // fresh prompt that, once we exhaust our attempts, nobody
+                    // answers.
+                    if !seen.contains(SENTINEL)
+                        && crate::sudo::is_elevation_auth_failure(&seen)
+                    {
+                        let _ = channel.close().await;
+                        break;
+                    }
+                    // su's prompt is `Password: ` (no echo). Match the
+                    // freshly-arrived chunk so a stale cumulative match doesn't
+                    // suppress a re-prompt, and cap the attempts.
+                    let chunk = String::from_utf8_lossy(&data);
+                    if !seen.contains(SENTINEL)
+                        && pw_attempts < MAX_PW_ATTEMPTS
+                        && (chunk.contains("assword") || chunk.contains("Password"))
+                    {
+                        let _ = channel.data(format!("{password}\n").as_bytes()).await;
+                        pw_attempts += 1;
+                    }
+                }
+                russh::ChannelMsg::ExtendedData { data, ext: _ } => {
+                    full_out.extend_from_slice(&data);
+                }
+                russh::ChannelMsg::ExitStatus { exit_status } => {
+                    exit_code = exit_status as i32;
+                }
+                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {}
+                _ => {}
+            }
+        }
+
+        let text = String::from_utf8_lossy(&full_out).replace("\r\n", "\n");
+        let sentinel_found = text.contains(SENTINEL);
+        // Everything from the sentinel onward is the real output. If the
+        // sentinel never appeared, auth failed (su exits before running
+        // the command) — return the raw text so the caller can surface it.
+        let cleaned = match text.find(SENTINEL) {
+            Some(idx) => {
+                let after = &text[idx + SENTINEL.len()..];
+                after.strip_prefix('\n').unwrap_or(after).to_string()
+            }
+            None => text.clone(),
+        };
+        // Diagnostics (no secret): how many prompts we answered, did su
+        // authenticate (sentinel reached), what came back?
+        let raw_preview: String = text.chars().take(160).collect();
+        log::info!(
+            "[audit] su - {user} exit={exit_code} pw_attempts={pw_attempts} sentinel={sentinel_found} raw_len={} raw_preview={raw_preview:?}",
+            text.len()
+        );
+        Ok((exit_code, cleaned))
+    }
+
+    /// Sync convenience for [`Self::exec_as_effective`].
+    pub fn exec_as_effective_blocking(
+        &self,
+        command: &str,
+        elevation: &crate::sudo::Elevation,
+        secret: Option<&str>,
+    ) -> Result<(i32, String)> {
+        runtime::shared().block_on(self.exec_as_effective(command, elevation, secret))
     }
 
     /// Run `command` remotely, sending `stdin` as standard input

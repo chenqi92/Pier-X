@@ -71,6 +71,13 @@
   border-bottom: 1px solid var(--line);
   flex: none;
 }
+.ftp-pathbar > .lg-ic,
+.ftp-bookmark-wrap {
+  flex: none;
+}
+.ftp-bookmark-wrap {
+  position: relative;
+}
 .ftp-path-input {
   flex: 1;
   min-width: 120px;
@@ -162,10 +169,12 @@
   padding: var(--sp-1) var(--sp-2);
   border-bottom: 1px solid var(--line);
   background: var(--surface-2);
+  min-width: 0;
 }
 .ftp-filter-icon { color: var(--muted); flex: 0 0 auto; }
 .ftp-filter-input {
   flex: 1;
+  min-width: 0;
   background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--line);
@@ -176,6 +185,33 @@
 .ftp-filter-count {
   font-size: var(--size-micro);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container ftp-panel (max-width: 360px) {
+  .ftp-pathbar {
+    flex-wrap: wrap;
+    row-gap: var(--sp-1);
+  }
+
+  .ftp-pathbar > .lg-ic,
+  .ftp-bookmark-wrap {
+    order: 1;
+  }
+
+  .ftp-crumb,
+  .ftp-path-input {
+    order: 2;
+    flex: 1 0 100%;
+    min-width: 0;
+  }
+}
+
+@container ftp-panel (max-width: 300px) {
+  .ftp-filter-count {
+    display: none;
+  }
 }
 
 .ftp-col-head {

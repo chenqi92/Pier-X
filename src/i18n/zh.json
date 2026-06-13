@@ -666,6 +666,8 @@
   "Execution": "执行",
   "Ask for read-only actions too": "只读操作也询问",
   "By default L0 read-only commands auto-run (visible in the chat). Turn on to approve every action.": "默认 L0 只读命令自动执行（在会话中可见）。开启后每个动作都需审批。",
+  "One-click high-risk confirm": "高危一键确认",
+  "L2 high-risk commands normally make you type the command's first word before Execute unlocks. Turn on to run them with a single click. L3 red-line commands stay blocked either way.": "L2 高危命令默认需输入命令首词才能解锁「执行」。开启后只需点击一次即可执行。L3 红线命令无论如何都被拒绝。",
   "Allow list": "白名单",
   "Commands granted “Always allow”. L2 high-risk and L3 red-line actions can never be listed here.": "通过「总是允许」加入的命令。L2 高危与 L3 红线操作永远不能进入白名单。",
   "(empty)": "（空）",

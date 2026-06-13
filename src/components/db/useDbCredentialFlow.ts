@@ -12,7 +12,7 @@ import type {
   TabState,
 } from "../../lib/types";
 import type { DbConnectionDraft } from "../DbAddCredentialDialog";
-import { effectiveSshTarget, isSshTargetReady } from "../../lib/types";
+import { effectiveSshTarget, effectiveShellUser, isSshTargetReady } from "../../lib/types";
 import { useConnectionStore } from "../../stores/useConnectionStore";
 import { useDetectedServicesStore } from "../../stores/useDetectedServicesStore";
 import { useTabStore } from "../../stores/useTabStore";
@@ -235,7 +235,12 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     return all.filter((d) => d.kind === kind && !adopted.has(d.signature));
   }, [instancesEntry, kind, savedForKind]);
 
-  const probeTarget = sshTarget ? `${sshTarget.user}@${sshTarget.host}` : null;
+  // Show the terminal's *effective* user (root after `sudo -i` / `su`), so
+  // the "Probe via" line reflects the identity the backend probe actually
+  // runs as once elevation is followed — not the bare SSH login user.
+  const probeTarget = sshTarget
+    ? `${effectiveShellUser(tab, sshTarget)}@${sshTarget.host}`
+    : null;
   const probeState: "idle" | "scanning" | "error" =
     instancesEntry?.status === "pending"
       ? "scanning"

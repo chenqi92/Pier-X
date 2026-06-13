@@ -1,0 +1,278 @@
+/* SFTP multi-format preview dialog. Double-click a file → instant,
+ * read-only viewer (image / PDF / spreadsheet / Word / video / audio
+ * / streaming text / hex). Editing stays on the editor dialog.
+ *
+ * Tokens only — no color / size / font literals (see tokens.css). */
+
+.dlg--preview {
+  width: min(1100px, 92vw);
+  height: min(820px, 88vh);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.spv-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+.spv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  height: var(--sp-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--size-micro);
+  white-space: nowrap;
+}
+
+.spv-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+
+/* Centered loading / empty / error states. */
+.spv-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-6);
+  color: var(--muted);
+  text-align: center;
+  font-size: var(--ui-fs-sm);
+}
+
+.spv-center.is-error {
+  color: var(--neg);
+}
+
+.spv-spin {
+  animation: spv-spin 0.9s linear infinite;
+}
+
+@keyframes spv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Image / SVG / TIFF. */
+.spv-image-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  /* Checkerboard so transparency is obvious. */
+  background-color: var(--surface);
+  background-image:
+    linear-gradient(45deg, var(--surface-2) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--surface-2) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--surface-2) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--surface-2) 75%);
+  background-size: var(--sp-5) var(--sp-5);
+  background-position: 0 0, 0 var(--sp-3), var(--sp-3) calc(-1 * var(--sp-3)), calc(-1 * var(--sp-3)) 0;
+}
+
+.spv-image {
+  display: block;
+  image-rendering: auto;
+}
+
+.spv-image.is-fit {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.spv-image.is-actual {
+  max-width: none;
+  max-height: none;
+}
+
+/* Audio / video. */
+.spv-media {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-5);
+  background: var(--bg);
+}
+
+.spv-media video {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.spv-media audio {
+  width: min(560px, 90%);
+}
+
+/* Word (.docx) → sanitized HTML. */
+.spv-docx-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-7) var(--sp-6);
+  background: var(--surface);
+}
+
+.spv-docx {
+  max-width: 820px;
+  margin: 0 auto;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: var(--ui-fs);
+  line-height: 1.7;
+}
+
+.spv-docx h1,
+.spv-docx h2,
+.spv-docx h3 {
+  font-family: var(--sans);
+  color: var(--ink);
+  margin: var(--sp-5) 0 var(--sp-2);
+  line-height: 1.3;
+}
+
+.spv-docx p {
+  margin: 0 0 var(--sp-3);
+}
+
+.spv-docx img {
+  max-width: 100%;
+}
+
+.spv-docx table {
+  border-collapse: collapse;
+  margin: var(--sp-3) 0;
+}
+
+.spv-docx td,
+.spv-docx th {
+  border: 1px solid var(--line-2);
+  padding: var(--sp-1) var(--sp-2);
+}
+
+/* Read-only CodeMirror viewer for small text files — syntax
+   highlighting + selectable text + find. CM's theme sets height:100%
+   on its own root; this just gives it a flex box to fill. */
+.spv-code {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.spv-warn {
+  color: var(--warn);
+}
+
+/* Streaming text + hex share the virtualized scroller. */
+.spv-scroll {
+  flex: 1;
+  min-height: 0;
+  background: var(--panel);
+}
+
+.spv-text-row {
+  display: flex;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  line-height: 1.55;
+}
+
+.spv-ln {
+  flex: 0 0 auto;
+  min-width: var(--sp-9);
+  padding: 0 var(--sp-3);
+  text-align: right;
+  color: var(--dim);
+  user-select: none;
+  border-right: 1px solid var(--line);
+}
+
+.spv-text {
+  flex: 1;
+  padding: 0 var(--sp-4);
+  white-space: pre;
+  color: var(--ink);
+  overflow-wrap: normal;
+}
+
+/* Hex dump rows: offset · 16 bytes · ASCII gutter. */
+.spv-hex-row {
+  display: flex;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-4);
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.spv-hex-offset {
+  color: var(--accent);
+}
+
+.spv-hex-bytes {
+  color: var(--ink);
+}
+
+.spv-hex-ascii {
+  color: var(--ink-2);
+}
+
+/* Bottom status strip (encoding, progress, load-more). */
+.spv-statusbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: var(--size-micro);
+}
+
+.spv-statusbar .spv-grow {
+  flex: 1;
+}
+
+/* Sheet picker bar for spreadsheets. */
+.spv-table-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+}
+
+.spv-table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}

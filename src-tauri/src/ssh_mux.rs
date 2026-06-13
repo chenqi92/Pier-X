@@ -265,11 +265,7 @@ fn write_config(
     // accidentally killing unrelated dotfiles a user might drop
     // into /tmp/com.pier-x.ssh.
     let socket_template = socket_dir.join("cm-%C");
-    let cm_directive = if settings.enabled {
-        "auto"
-    } else {
-        "no"
-    };
+    let cm_directive = if settings.enabled { "auto" } else { "no" };
 
     let mut body = String::new();
     body.push_str("# Pier-X — auto-generated SSH config for terminal-side ControlMaster.\n");
@@ -277,10 +273,7 @@ fn write_config(
     body.push_str("# overwritten on every app launch and on every settings change.\n");
     body.push_str("Host *\n");
     body.push_str(&format!("    ControlMaster {cm_directive}\n"));
-    body.push_str(&format!(
-        "    ControlPath {}\n",
-        socket_template.display()
-    ));
+    body.push_str(&format!("    ControlPath {}\n", socket_template.display()));
     body.push_str(&format!(
         "    ControlPersist {}\n",
         settings.persist_seconds
@@ -289,11 +282,7 @@ fn write_config(
     write_atomic(config_path, body.as_bytes())
 }
 
-fn write_wrapper(
-    wrapper_dir: &Path,
-    config_path: &Path,
-    socket_dir: &Path,
-) -> std::io::Result<()> {
+fn write_wrapper(wrapper_dir: &Path, config_path: &Path, socket_dir: &Path) -> std::io::Result<()> {
     let wrapper_path = wrapper_dir.join("ssh");
     // POSIX shell, not bash — the system /bin/sh exists everywhere
     // we ship. `exec` replaces the wrapper process so $? and

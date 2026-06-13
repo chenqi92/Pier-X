@@ -1,5 +1,5 @@
 import type { RightTool, TabState } from "../lib/types";
-import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
+import { effectiveSshTarget, effectiveShellUser, isSshTargetReady } from "../lib/types";
 import { isBrowsableRepoPath } from "../lib/browserPath";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as cmd from "../lib/shellCommands";
@@ -201,6 +201,10 @@ export default function RightSidebar({
   // mirror after `ssh user@host`, or the nested-ssh overlay set
   // when `ssh user@host` is typed inside an existing SSH session.
   const activeSshTarget = activeTab ? effectiveSshTarget(activeTab) : null;
+  // The terminal's effective OS user (root after `sudo -i` / `su`). Folded
+  // into the detection fingerprint + deps so probes re-run — and re-label —
+  // when the operator elevates or drops back, not just on host/user change.
+  const activeShellUser = activeTab ? effectiveShellUser(activeTab, activeSshTarget) : "";
   const hasRemoteContext = activeSshTarget !== null;
   const activeSshReady = isSshTargetReady(activeSshTarget);
   const unknownTool = t("Unknown tool.");
@@ -249,6 +253,9 @@ export default function RightSidebar({
         activeSshTarget.port,
         activeSshTarget.authMode,
         activeSshTarget.password ? "pw" : "no-pw",
+        // Re-detect when the terminal elevates / drops back so chips and
+        // DB instances reflect what's visible at the new privilege level.
+        activeShellUser,
       ].join("|")
     : "";
   const lastFingerprintRef = useRef<{ tabId: string; fp: string } | null>(null);
@@ -323,6 +330,7 @@ export default function RightSidebar({
     activeSshTarget?.port,
     activeSshTarget?.user,
     activeSshTarget?.authMode,
+    activeShellUser,
     activeSshReady,
     (activeSshTarget?.password.length ?? 0) > 0,
     detectedEntry,
@@ -389,6 +397,7 @@ export default function RightSidebar({
     activeSshTarget?.port,
     activeSshTarget?.user,
     activeSshTarget?.authMode,
+    activeShellUser,
     activeSshReady,
     (activeSshTarget?.password.length ?? 0) > 0,
     activeTool,

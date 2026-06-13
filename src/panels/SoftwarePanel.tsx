@@ -8111,11 +8111,11 @@ function SoftwareRowDetails({
   const installed = details.installed;
   const latestKnown = details.latestVersion;
   const installedVersion = details.installedVersion ?? status?.version ?? null;
-  const updateAvailable =
-    !!installed &&
-    !!latestKnown &&
-    !!installedVersion &&
-    latestKnown !== installedVersion;
+  // Trust the backend's authoritative comparison (dpkg --compare-versions
+  // / dnf check-update / upstream-normalized fallback). It correctly
+  // treats e.g. installed 1.28.3 vs candidate 1.28.3-2ubuntu1.4 as "no
+  // update" instead of the old naive string `!==`.
+  const updateAvailable = !!installed && details.updateAvailable === true;
   return (
     <div className="sw-row__details mono">
       <div className="sw-row__details-row">

@@ -29,6 +29,7 @@ export type AiUiMessage =
       callId: string;
       name: string;
       summary: string;
+      explanation?: string;
       host: string;
       risk: AiRisk;
       status: AiToolStatus;
@@ -135,6 +136,7 @@ function reduceEvent(c: AiConversation, ev: AiChatEvent, replay: boolean): AiCon
         callId,
         name: ev.name ?? "",
         summary: ev.summary ?? "",
+        explanation: ev.explanation,
         host: ev.host ?? "",
         risk: ev.risk ?? { level: "l2", reasons: [], asRoot: false },
         status,

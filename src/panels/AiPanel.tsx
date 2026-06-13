@@ -123,6 +123,7 @@ export default function AiPanel({ tab, isActive }: Props) {
 
   const settings = useSettingsStore();
   const requestOpenSettings = useUiActionsStore((s) => s.requestOpenSettings);
+  const requestFocusTerminal = useUiActionsStore((s) => s.requestFocusTerminal);
   const detectedTools = useDetectedServicesStore((s) =>
     tab ? s.byTab[tab.id]?.tools : undefined,
   );
@@ -162,6 +163,10 @@ export default function AiPanel({ tab, isActive }: Props) {
     try {
       if (!text.includes("\n")) {
         await cmd.terminalWrite(terminalSessionId, text);
+        // Return keyboard focus to the terminal so Enter / Ctrl+C land
+        // there — otherwise focus stays on this button and the terminal
+        // reads as "stuck" until the user clicks it.
+        requestFocusTerminal(terminalSessionId);
         flashNote(t("Inserted — review it in the terminal and press Enter to run."));
         return;
       }
@@ -171,6 +176,7 @@ export default function AiPanel({ tab, isActive }: Props) {
           terminalSessionId,
           "\x1b[200~" + text.replace(/\r?\n/g, "\r") + "\x1b[201~",
         );
+        requestFocusTerminal(terminalSessionId);
         flashNote(t("Inserted — review it in the terminal and press Enter to run."));
         return;
       }
@@ -559,9 +565,10 @@ function ToolCard({
   onDecide: (callId: string, decision: AiToolDecision) => void;
 }) {
   const [confirmText, setConfirmText] = useState("");
+  const skipL2Confirm = useSettingsStore((s) => s.aiSkipL2Confirm);
   const level = m.risk.level;
   const headToken = m.summary.trim().split(/\s+/)[0] ?? "";
-  const l2Unlocked = level !== "l2" || confirmText.trim() === headToken;
+  const l2Unlocked = level !== "l2" || skipL2Confirm || confirmText.trim() === headToken;
 
   return (
     <div className={`ai-tool ${riskClass(level)}`}>
@@ -581,6 +588,8 @@ function ToolCard({
           {m.auto === "session" && ` · ${t("session grant")}`}
         </span>
       </div>
+
+      {m.explanation && <div className="ai-tool__explain">{m.explanation}</div>}
 
       {m.summary && <pre className="ai-tool__cmd">{m.summary}</pre>}
 
@@ -626,7 +635,7 @@ function ToolCard({
 
       {m.status === "awaiting" && (level === "l2" || level === "l0") && (
         <div className="ai-tool__actions">
-          {level === "l2" && (
+          {level === "l2" && !skipL2Confirm && (
             <input
               className="ai-confirm-input"
               placeholder={`${t("Enter the first word to unlock:")} ${headToken}`}

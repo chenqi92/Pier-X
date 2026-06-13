@@ -2320,6 +2320,12 @@ function AiSettingsPanel() {
         <Toggle checked={settings.aiAskReadOnly} onChange={settings.setAiAskReadOnly} />
       </SettingRow>
       <SettingRow
+        label={t("One-click high-risk confirm")}
+        description={t("L2 high-risk commands normally make you type the command's first word before Execute unlocks. Turn on to run them with a single click. L3 red-line commands stay blocked either way.")}
+      >
+        <Toggle checked={settings.aiSkipL2Confirm} onChange={settings.setAiSkipL2Confirm} />
+      </SettingRow>
+      <SettingRow
         label={t("Allow list")}
         description={t("Commands granted “Always allow”. L2 high-risk and L3 red-line actions can never be listed here.")}
       >
@@ -2654,6 +2660,15 @@ export default function SettingsDialog({
                   <Toggle
                     checked={settings.terminalHistoryPersist}
                     onChange={settings.setTerminalHistoryPersist}
+                  />
+                </SettingRow>
+                <SettingRow
+                  label={t("Follow terminal elevation")}
+                  description={t("When you elevate in the terminal (sudo or su) and type the password, reuse it for the right-side panels (SFTP, DB, Docker…) so they follow your elevation without a second prompt. Kept in memory for this session only — never written to the keychain. The captured value is your own password (sudo) or root's (su); the backend tries sudo then su.")}
+                >
+                  <Toggle
+                    checked={settings.followTerminalSudo}
+                    onChange={settings.setFollowTerminalSudo}
                   />
                 </SettingRow>
 

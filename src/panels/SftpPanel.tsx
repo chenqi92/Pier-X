@@ -40,6 +40,7 @@ import { useConnectionStore } from "../stores/useConnectionStore";
 import ChmodDialog from "../components/ChmodDialog";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DismissibleNote from "../components/DismissibleNote";
+import SudoPasswordDialog from "../components/SudoPasswordDialog";
 import SftpNewEntryDialog from "../components/SftpNewEntryDialog";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import { writeClipboardText } from "../lib/clipboard";
@@ -50,7 +51,7 @@ import {
 } from "../stores/useSftpBookmarksStore";
 import { useTabStore } from "../stores/useTabStore";
 import { sudoKeyFor, useSudoStore } from "../stores/useSudoStore";
-import { isEditableFilename, MAX_EDITOR_BYTES, modeToSymbolic } from "../lib/sftpEditorMeta";
+import { previewKindOf, type PreviewKind, MAX_EDITOR_BYTES, modeToSymbolic } from "../lib/sftpEditorMeta";
 import {
   DT_LOCAL_FILE,
   DT_SFTP_FILE,
@@ -68,6 +69,7 @@ import "../styles/sftp-panel.css";
 // and React flags an infinite update loop.
 const EMPTY_BOOKMARKS: SftpBookmark[] = [];
 const SftpEditorDialog = lazy(() => import("../components/SftpEditorDialog"));
+const SftpPreviewDialog = lazy(() => import("../components/SftpPreviewDialog"));
 
 /** Row height for virtualized entries. Single-line rows follow the
  *  density-aware `--tree-row-h` metric (same as the sidebar file
@@ -243,6 +245,24 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** Best-effort "this failed because the SFTP login user lacks
+ *  privilege" detector — mirrors the backend `sudo::is_permission_denied`
+ *  patterns. Drives the sudo-password prompt so a panel that's browsing
+ *  as the login user (while the terminal has `su`'d to root) can elevate
+ *  rather than dead-ending on a bare "Permission denied". */
+function sftpLooksLikePermissionDenied(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("permission denied") ||
+    m.includes("eacces") ||
+    m.includes("eperm") ||
+    m.includes("operation not permitted") ||
+    m.includes("is not in the sudoers file") ||
+    m.includes("must be run from a terminal") ||
+    m.includes("you must have a tty")
+  );
+}
+
 export default function SftpPanel(props: Props) {
   const ready = useDeferredMount();
   return (
@@ -260,6 +280,21 @@ function SftpPanelBody({ tab }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  // Sudo prompt state — mirrors the Firewall / Docker pattern. When an
+  // SFTP op fails with permission-denied (login user can't read a
+  // root-only dir even though the terminal `su`'d to root), we pop the
+  // dialog, persist the password (in-memory + optional keychain), and
+  // let the backend's `sudo` fallback retry the op as root.
+  const [sudoPrompt, setSudoPrompt] = useState<{
+    hostLabel: string;
+    errorMessage?: string;
+  } | null>(null);
+  // Path to re-browse once a sudo password lands in the store + React
+  // re-renders (so the next `browse` closure captures the new password
+  // instead of the rendered-time null). Mirrors Firewall's deferred
+  // retry. Mutations don't need this: once the password is cached every
+  // later call picks it up via `...sshArgs`.
+  const pendingBrowseRetryRef = useRef<string | null>(null);
   // Auto-dismiss the info notice after a few seconds so it doesn't
   // linger and cover the list below. Error stays put — the user
   // should explicitly acknowledge failures.
@@ -311,6 +346,10 @@ function SftpPanelBody({ tab }: Props) {
 
   const [editorTarget, setEditorTarget] = useState<
     { path: string; name: string; size: number } | null
+  >(null);
+
+  const [previewTarget, setPreviewTarget] = useState<
+    { entry: SftpEntryView; kind: PreviewKind } | null
   >(null);
 
   const [chmodTarget, setChmodTarget] = useState<{ path: string; mode: number | null } | null>(null);
@@ -371,6 +410,50 @@ function SftpPanelBody({ tab }: Props) {
     sudoPassword: sftpSudoPassword,
   };
   const sshRequired = t("SSH connection required.");
+
+  // Stable SSH addressing for the sudo-password store (keyed by
+  // user@host:port). Built only when there's a target.
+  const sudoStoreParams = sshTarget
+    ? {
+        host: sshTarget.host,
+        port: sshTarget.port,
+        user: sshTarget.user,
+        authMode: sshTarget.authMode,
+        password: sshTarget.password,
+        keyPath: sshTarget.keyPath,
+        savedConnectionIndex: sshTarget.savedConnectionIndex,
+      }
+    : null;
+
+  // Lift any persisted sudo password from the OS keychain into the L1
+  // cache on host change, so a returning session can browse root-only
+  // dirs without re-prompting.
+  useEffect(() => {
+    if (!sudoStoreParams) return;
+    void useSudoStore.getState().hydrate(sudoStoreParams);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    sshTarget?.host,
+    sshTarget?.port,
+    sshTarget?.user,
+    sshTarget?.authMode,
+    sshTarget?.savedConnectionIndex,
+  ]);
+
+  /** Open the sudo-password dialog after an op failed with
+   *  permission-denied. `retryBrowsePath`, when given, re-browses that
+   *  path automatically once the password lands. */
+  function promptSudoForPermissionDenied(raw: string, retryBrowsePath?: string) {
+    if (!sshTarget || !sftpLooksLikePermissionDenied(raw)) return;
+    if (retryBrowsePath !== undefined) pendingBrowseRetryRef.current = retryBrowsePath;
+    setSudoPrompt({
+      hostLabel: `${effectiveShellUser(tab, sshTarget)}@${sshTarget.host}`,
+      errorMessage: sftpSudoPassword
+        ? t("Saved sudo password was rejected — please re-enter.")
+        : undefined,
+    });
+  }
+
   const bookmarkHostKey = hasSsh ? hostKey(sshArgs.user, sshArgs.host, sshArgs.port) : "";
   // Select the raw store entry (which is a stable reference —
   // either a persistent array or `undefined`) and fall back to
@@ -565,6 +648,11 @@ function SftpPanelBody({ tab }: Props) {
       // breadcrumb showing a path we never actually entered. The
       // error banner below is enough to tell them what went wrong.
       setError(formatError(e));
+      // Permission-denied on a directory the login user can't read:
+      // pop the sudo prompt and re-browse this path once the password
+      // lands, so the backend's `sudo find` fallback can list it.
+      const raw = e instanceof Error ? e.message : String(e);
+      promptSudoForPermissionDenied(raw, targetPath);
       // Snap the path input back to the real current location so
       // the breadcrumb / pathbar don't keep showing the failed
       // target after the user exits edit mode.
@@ -576,6 +664,19 @@ function SftpPanelBody({ tab }: Props) {
       setBusy(false);
     }
   }
+
+  // Deferred retry: once a sudo password lands in the store (and React
+  // re-renders, refreshing `sshArgs.sudoPassword`), re-browse the path
+  // that hit permission-denied. Guard on `sftpSudoPassword` so we only
+  // fire after the value is actually present.
+  useEffect(() => {
+    if (!sftpSudoPassword) return;
+    const retryPath = pendingBrowseRetryRef.current;
+    if (retryPath === null) return;
+    pendingBrowseRetryRef.current = null;
+    void browse(retryPath);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sftpSudoPassword]);
 
   async function goBack() {
     if (!history.length || !state) return;
@@ -622,6 +723,10 @@ function SftpPanelBody({ tab }: Props) {
       await browse(currentRemotePath);
     } catch (e) {
       setError(formatError(e));
+      // Op denied for the login user (e.g. mutating an entry inside a
+      // world-readable root dir): prompt for sudo so it caches and the
+      // next attempt routes through the backend's `sudo` fallback.
+      promptSudoForPermissionDenied(e instanceof Error ? e.message : String(e));
     } finally {
       setActionBusy(false);
     }
@@ -662,6 +767,10 @@ function SftpPanelBody({ tab }: Props) {
       if (selectedPath === current.path) setSelectedPath(nextPath);
     } catch (e) {
       setError(formatError(e));
+      // Op denied for the login user (e.g. mutating an entry inside a
+      // world-readable root dir): prompt for sudo so it caches and the
+      // next attempt routes through the backend's `sudo` fallback.
+      promptSudoForPermissionDenied(e instanceof Error ? e.message : String(e));
     } finally {
       setActionBusy(false);
     }
@@ -681,6 +790,10 @@ function SftpPanelBody({ tab }: Props) {
       await browse(currentRemotePath);
     } catch (e) {
       setError(formatError(e));
+      // Op denied for the login user (e.g. mutating an entry inside a
+      // world-readable root dir): prompt for sudo so it caches and the
+      // next attempt routes through the backend's `sudo` fallback.
+      promptSudoForPermissionDenied(e instanceof Error ? e.message : String(e));
     } finally {
       setActionBusy(false);
     }
@@ -721,6 +834,10 @@ function SftpPanelBody({ tab }: Props) {
       await browse(currentRemotePath);
     } catch (e) {
       setError(formatError(e));
+      // Op denied for the login user (e.g. mutating an entry inside a
+      // world-readable root dir): prompt for sudo so it caches and the
+      // next attempt routes through the backend's `sudo` fallback.
+      promptSudoForPermissionDenied(e instanceof Error ? e.message : String(e));
     } finally {
       setActionBusy(false);
     }
@@ -742,6 +859,10 @@ function SftpPanelBody({ tab }: Props) {
       await browse(currentRemotePath);
     } catch (e) {
       setError(formatError(e));
+      // Op denied for the login user (e.g. mutating an entry inside a
+      // world-readable root dir): prompt for sudo so it caches and the
+      // next attempt routes through the backend's `sudo` fallback.
+      promptSudoForPermissionDenied(e instanceof Error ? e.message : String(e));
     } finally {
       setActionBusy(false);
     }
@@ -764,6 +885,10 @@ function SftpPanelBody({ tab }: Props) {
       setNotice(t("Opened {name} in your system editor.", { name: entry.name }));
     } catch (e) {
       setError(formatError(e));
+      // Op denied for the login user (e.g. mutating an entry inside a
+      // world-readable root dir): prompt for sudo so it caches and the
+      // next attempt routes through the backend's `sudo` fallback.
+      promptSudoForPermissionDenied(e instanceof Error ? e.message : String(e));
     } finally {
       setActionBusy(false);
     }
@@ -833,6 +958,10 @@ function SftpPanelBody({ tab }: Props) {
       await downloadOne({ path: entry.path, name: entry.name }, picked);
     } catch (e) {
       setError(formatError(e));
+      // Op denied for the login user (e.g. mutating an entry inside a
+      // world-readable root dir): prompt for sudo so it caches and the
+      // next attempt routes through the backend's `sudo` fallback.
+      promptSudoForPermissionDenied(e instanceof Error ? e.message : String(e));
     } finally {
       setActionBusy(false);
     }
@@ -1011,18 +1140,13 @@ function SftpPanelBody({ tab }: Props) {
       void browse(entry.path, { pushHistory: true });
       return;
     }
-    // Double-click on a text-ish file → open the editor dialog. The
-    // dialog handles the size split internally: under the inline
-    // limit it mounts CodeMirror, otherwise it shows the "open with
-    // system editor / download" card. Binary-looking files stay on
-    // "select only" so a misclick doesn't dump 200MB through a
-    // UTF-8 lossy read.
-    if (isEditableFilename(entry.name)) {
-      selectEntry(entry);
-      openEditorFor(entry);
-      return;
-    }
+    // Double-click → instant read-only multi-format preview (image /
+    // PDF / spreadsheet / Word / video / audio / streaming text /
+    // hex). The viewer windows large files so opening is immediate
+    // regardless of size. Editing stays on the context-menu "Edit"
+    // action and the preview's Edit button (both open the editor).
     selectEntry(entry);
+    setPreviewTarget({ entry, kind: previewKindOf(entry.name) });
   }
 
   function buildEntryContextMenu(
@@ -1546,7 +1670,7 @@ function SftpPanelBody({ tab }: Props) {
               </button>
             </div>
           )}
-          <div style={{ position: "relative" }}>
+          <div className="ftp-bookmark-wrap">
             <button
               type="button"
               className="lg-ic"
@@ -1767,6 +1891,26 @@ function SftpPanelBody({ tab }: Props) {
           />
         )}
 
+        <SudoPasswordDialog
+          open={sudoPrompt !== null}
+          hostLabel={sudoPrompt?.hostLabel ?? ""}
+          errorMessage={sudoPrompt?.errorMessage}
+          onSubmit={(password, remember) => {
+            setSudoPrompt(null);
+            if (!sudoStoreParams) return;
+            // The `[sftpSudoPassword]` effect runs the deferred browse
+            // retry (if any) once the new password lands and re-renders.
+            void useSudoStore
+              .getState()
+              .setPersistent(sudoStoreParams, password, remember);
+            setError("");
+          }}
+          onCancel={() => {
+            pendingBrowseRetryRef.current = null;
+            setSudoPrompt(null);
+          }}
+        />
+
         {editorTarget && (
           <Suspense fallback={null}>
             <SftpEditorDialog
@@ -1778,6 +1922,27 @@ function SftpPanelBody({ tab }: Props) {
               ownerLabel={displayUser || sshArgs.user}
               onClose={() => setEditorTarget(null)}
               onSaved={() => void browse(currentRemotePath)}
+            />
+          </Suspense>
+        )}
+
+        {previewTarget && (
+          <Suspense fallback={null}>
+            <SftpPreviewDialog
+              open
+              path={previewTarget.entry.path}
+              name={previewTarget.entry.name}
+              size={previewTarget.entry.size}
+              kind={previewTarget.kind}
+              sshArgs={sshArgs}
+              onClose={() => setPreviewTarget(null)}
+              onOpenInEditor={() => {
+                const entry = previewTarget.entry;
+                setPreviewTarget(null);
+                openEditorFor(entry);
+              }}
+              onDownload={() => void downloadEntryPick(previewTarget.entry)}
+              onOpenExternal={() => void openEntryExternally(previewTarget.entry)}
             />
           </Suspense>
         )}

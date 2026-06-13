@@ -120,17 +120,46 @@ pub fn detect_all_blocking(session: &SshSession) -> Vec<DetectedService> {
 // Individual detectors
 // ─────────────────────────────────────────────────────────
 
+/// True when something is `LISTEN`ing on `port`. Catches services with
+/// no host binary — most importantly **Docker containers that publish a
+/// port** (`-p 3306:3306`), which the `which <client>` probes miss. Uses
+/// `ss` (universal on modern Linux), falling back to `netstat`. The regex
+/// anchors the port to the local-address column so `3306` doesn't match
+/// `33060` / `13306`.
+async fn port_listening(session: &SshSession, port: u16) -> bool {
+    let cmd = format!(
+        "(ss -ltnH 2>/dev/null || netstat -ltn 2>/dev/null) | grep -qE ':{port}([[:space:]]|$)' && echo yes"
+    );
+    session
+        .exec_with_sudo(&cmd)
+        .await
+        .map(|(_, o)| o.contains("yes"))
+        .unwrap_or(false)
+}
+
 async fn detect_mysql(session: &SshSession) -> Option<DetectedService> {
     let (code, _) = session
-        .exec_command("which mysql 2>/dev/null || which mysqld 2>/dev/null")
+        .exec_with_sudo("which mysql 2>/dev/null || which mysqld 2>/dev/null")
         .await
         .ok()?;
     if code != 0 {
-        return None;
+        // No host client binary — but a container may be publishing
+        // 3306. Detect by listening port so dockerized MySQL still
+        // shows up (the panel connects over a tunnel to that port).
+        return if port_listening(session, 3306).await {
+            Some(DetectedService {
+                name: "mysql".to_string(),
+                version: String::new(),
+                status: ServiceStatus::Running,
+                port: 3306,
+            })
+        } else {
+            None
+        };
     }
 
     let (_, version_out) = session
-        .exec_command("mysql --version 2>/dev/null")
+        .exec_with_sudo("mysql --version 2>/dev/null")
         .await
         .unwrap_or((-1, String::new()));
     let version = parse_version(&version_out);
@@ -154,22 +183,32 @@ async fn detect_mysql(session: &SshSession) -> Option<DetectedService> {
 
 async fn detect_redis(session: &SshSession) -> Option<DetectedService> {
     let (code, _) = session
-        .exec_command("which redis-server 2>/dev/null || which redis-cli 2>/dev/null")
+        .exec_with_sudo("which redis-server 2>/dev/null || which redis-cli 2>/dev/null")
         .await
         .ok()?;
     if code != 0 {
-        return None;
+        // Containerized Redis publishing 6379.
+        return if port_listening(session, 6379).await {
+            Some(DetectedService {
+                name: "redis".to_string(),
+                version: String::new(),
+                status: ServiceStatus::Running,
+                port: 6379,
+            })
+        } else {
+            None
+        };
     }
 
     let (_, version_out) = session
-        .exec_command("redis-cli --version 2>/dev/null")
+        .exec_with_sudo("redis-cli --version 2>/dev/null")
         .await
         .unwrap_or((-1, String::new()));
     let version = parse_version(&version_out);
 
     // Try ping first — most direct health check.
     let (ping_code, ping_out) = session
-        .exec_command("redis-cli ping 2>/dev/null")
+        .exec_with_sudo("redis-cli ping 2>/dev/null")
         .await
         .unwrap_or((-1, String::new()));
     let status = if ping_code == 0 && ping_out.contains("PONG") {
@@ -194,13 +233,23 @@ async fn detect_redis(session: &SshSession) -> Option<DetectedService> {
 }
 
 async fn detect_postgresql(session: &SshSession) -> Option<DetectedService> {
-    let (code, _) = session.exec_command("which psql 2>/dev/null").await.ok()?;
+    let (code, _) = session.exec_with_sudo("which psql 2>/dev/null").await.ok()?;
     if code != 0 {
-        return None;
+        // Containerized Postgres publishing 5432.
+        return if port_listening(session, 5432).await {
+            Some(DetectedService {
+                name: "postgresql".to_string(),
+                version: String::new(),
+                status: ServiceStatus::Running,
+                port: 5432,
+            })
+        } else {
+            None
+        };
     }
 
     let (_, version_out) = session
-        .exec_command("psql --version 2>/dev/null")
+        .exec_with_sudo("psql --version 2>/dev/null")
         .await
         .unwrap_or((-1, String::new()));
     let version = parse_version(&version_out);
@@ -224,7 +273,7 @@ async fn detect_postgresql(session: &SshSession) -> Option<DetectedService> {
 
 async fn detect_docker(session: &SshSession) -> Option<DetectedService> {
     let (code, _) = session
-        .exec_command("which docker 2>/dev/null")
+        .exec_with_sudo("which docker 2>/dev/null")
         .await
         .ok()?;
     if code != 0 {
@@ -232,7 +281,7 @@ async fn detect_docker(session: &SshSession) -> Option<DetectedService> {
     }
 
     let (_, version_out) = session
-        .exec_command("docker --version 2>/dev/null")
+        .exec_with_sudo("docker --version 2>/dev/null")
         .await
         .unwrap_or((-1, String::new()));
     let version = parse_version(&version_out);
@@ -241,7 +290,7 @@ async fn detect_docker(session: &SshSession) -> Option<DetectedService> {
     // and the user has permission to talk to it, which is the
     // health signal we want.
     let (info_code, _) = session
-        .exec_command("docker info >/dev/null 2>&1")
+        .exec_with_sudo("docker info >/dev/null 2>&1")
         .await
         .unwrap_or((-1, String::new()));
     let status = if info_code == 0 {
@@ -271,7 +320,7 @@ async fn detect_docker(session: &SshSession) -> Option<DetectedService> {
 /// explicitly detect this case.
 async fn check_service_status(session: &SshSession, commands: &[&str]) -> ServiceStatus {
     for cmd in commands {
-        if let Ok((code, output)) = session.exec_command(cmd).await {
+        if let Ok((code, output)) = session.exec_with_sudo(cmd).await {
             if code == 0 && output.contains("active") {
                 return ServiceStatus::Running;
             }

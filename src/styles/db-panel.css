@@ -155,11 +155,17 @@
   margin-top: var(--sp-0-5);
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
   flex-wrap: wrap;
   font-family: var(--mono);
 }
 .dbs-row-auth svg { flex: none; }
+.dbs-row-auth .dbs-auth-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  white-space: nowrap;
+}
 .dbs-row-auth .dbs-via {
   display: inline-flex;
   align-items: center;
@@ -2189,6 +2195,31 @@
   .db2-tablebar { padding: var(--sp-1) var(--sp-1-5); gap: var(--sp-1); }
   .db2-tablebar__db-btn { max-width: 110px; }
 }
+@container db2 (max-width: 340px) {
+  .db2-spacer,
+  .db2-tablebar__sep,
+  .db2-tablebar__table-count {
+    display: none;
+  }
+
+  .db2-stats {
+    flex-basis: 100%;
+  }
+
+  .db2-tablebar {
+    flex-wrap: wrap;
+  }
+
+  .db2-tablebar__db,
+  .db2-tablebar__tables {
+    flex: 1 0 100%;
+  }
+
+  .db2-tablebar__db-btn {
+    width: 100%;
+    max-width: none;
+  }
+}
 
 /* ── Redis panel ────────────────────────────────────────── */
 .rds {
@@ -2571,6 +2602,55 @@
     grid-auto-rows: minmax(0, 1fr);
   }
   .rds-browser { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+@container rds (max-width: 340px) {
+  .rds-head,
+  .rds-scan,
+  .rds-detail-head,
+  .rds-value-head,
+  .rds-edit-foot {
+    flex-wrap: wrap;
+  }
+
+  .rds-spacer {
+    display: none;
+  }
+
+  .rds-input:not(.rds-input--narrow) {
+    flex-basis: 100%;
+    width: 100%;
+  }
+
+  .rds-row {
+    grid-template-columns: 46px minmax(0, 1fr) auto;
+  }
+
+  .rds-row .rds-meta:last-child {
+    display: none;
+  }
+
+  .rds-kv-head,
+  .rds-kv-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: var(--sp-1);
+  }
+
+  .rds-kv-head span:first-child {
+    display: none;
+  }
+
+  .rds-kv-field {
+    grid-column: 1 / -1;
+  }
+
+  .rds-kv-row .rds-kv-actions {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .rds-value {
+    padding: var(--sp-2);
+  }
 }
 
 /* ── EXPLAIN ANALYZE plan tree ─────────────────────────────── */

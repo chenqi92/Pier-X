@@ -417,6 +417,10 @@ export type DetectedDbInstance = {
   version?: string | null;
   pid?: number | null;
   processName?: string | null;
+  /** Docker container with no published host port — reachable only on
+   *  the bridge network. `host` is then the container's bridge IP,
+   *  dialable from the docker host itself. */
+  internal?: boolean;
   /** Stable dedupe key; lines up with `detectionSignature`
    *  on saved credentials. */
   signature: string;

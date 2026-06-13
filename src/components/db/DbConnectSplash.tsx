@@ -113,7 +113,7 @@ export default function DbConnectSplash({
               <b>{probeTarget}</b>
             </span>
             <span className="sep">·</span>
-            <span>{t("ss -tlnp · systemd units · /etc/{daemon}", { daemon: theme.daemon })}</span>
+            <span>{t("ss -tlnp · docker ps · systemd units · /etc/{daemon}", { daemon: theme.daemon })}</span>
             <span className="dbs-probe-spacer" />
             {onReprobe && (
               <button

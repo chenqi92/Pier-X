@@ -208,8 +208,22 @@ export const useDockerStore = create<DockerStoreState>((set, get) => ({
   refresh: async (key, fetchers, force) => {
     const current = get().snapshots[key];
     if (current?.inFlight) {
-      // Coalesce duplicates: StrictMode re-runs, rapid clicks, etc.
-      return current.inFlight;
+      if (!force) {
+        // Coalesce duplicates: StrictMode re-runs, rapid clicks, etc.
+        return current.inFlight;
+      }
+      // A forced refresh (e.g. the post-stop/start reconcile) must
+      // reflect state AFTER the action ran. It must NOT coalesce into a
+      // fetch that was already in flight before the click — that stale
+      // snapshot would overwrite the optimistic update and bounce the
+      // row back to its pre-action state ("clicked stop, still running").
+      // Wait for the in-flight fetch to settle, then fall through to a
+      // genuinely fresh one.
+      try {
+        await current.inFlight;
+      } catch {
+        // Ignore its failure — we're about to refetch anyway.
+      }
     }
     if (!force && current?.overview && !get().isStale(key)) {
       return; // cache still fresh

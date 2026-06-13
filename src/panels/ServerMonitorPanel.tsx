@@ -22,6 +22,7 @@ import type {
   TabState,
 } from "../lib/types";
 import { effectiveShellUser, effectiveSshTarget, isSshTargetReady } from "../lib/types";
+import { useSudoElevation } from "../lib/useSudoElevation";
 import { useI18n } from "../i18n/useI18n";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
@@ -521,6 +522,9 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
   // user thinks they are looking at.
   const sshTarget = effectiveSshTarget(tab);
   const hasSsh = sshTarget !== null;
+  // Unified sudo elevation — lets "kill" signal a root-owned process by
+  // retrying via `sudo`/`sudo -u`, following the terminal's effective user.
+  const elev = useSudoElevation(tab);
   // Only treat the tab as "local probe" when there is no SSH target
   // overlay; otherwise the SSH path takes priority.
   const isLocal = tab.backend === "local" && !hasSsh;
@@ -686,6 +690,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
           savedConnectionIndex: sshTarget.savedConnectionIndex,
           pid: pidNum,
           force,
+          ...elev.getElevationArgs(),
         });
       } else {
         setError(t("No connection available."));
@@ -695,7 +700,12 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
       // moment to drop the row, so we re-probe with a small delay.
       window.setTimeout(() => void runProbe(false), 250);
     } catch (e) {
-      setError(formatError(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      // Killing a root-owned process: prompt for sudo and retry once
+      // the password lands, following the terminal's effective user.
+      if (!(!isLocal && elev.handlePermissionDenied(raw, () => void killProcess(row, force)))) {
+        setError(formatError(e));
+      }
     }
   }
 
@@ -1278,6 +1288,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
         )}
       </section>
     </div>
+    {elev.dialog}
     </>
   );
 }

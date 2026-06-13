@@ -236,6 +236,52 @@ impl SftpClient {
         runtime::shared().block_on(self.read_file(path))
     }
 
+    /// Read the byte range `[offset, offset + len)` from a remote
+    /// file without buffering the whole thing.
+    ///
+    /// Seeks from the start (cheap — no extra round trip, unlike
+    /// `SeekFrom::End`) and reads in 64 KiB chunks, staying under
+    /// russh-sftp's 255 KiB `SSH_FXP_READ` ceiling — the same
+    /// chunking the download paths use. Returns fewer than `len`
+    /// bytes when the range runs past end-of-file. This is the
+    /// primitive behind the instant-open windowed previewer (hex
+    /// view, streaming text) and the `pierfs://` range protocol the
+    /// image / PDF / video viewers fetch from.
+    pub async fn read_range(&self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
+        use std::io::SeekFrom;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+
+        let mut file = self
+            .inner
+            .open(path.to_string())
+            .await
+            .map_err(sftp_error)?;
+        if offset > 0 {
+            file.seek(SeekFrom::Start(offset))
+                .await
+                .map_err(SshError::Io)?;
+        }
+        let mut out: Vec<u8> = Vec::with_capacity(len.min(1024 * 1024));
+        let mut buf = vec![0u8; 64 * 1024];
+        while out.len() < len {
+            let want = (len - out.len()).min(buf.len());
+            let n = file.read(&mut buf[..want]).await.map_err(SshError::Io)?;
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
+        }
+        // Close the remote handle; ignore the harmless "already
+        // closed" some servers reply with.
+        let _ = file.shutdown().await;
+        Ok(out)
+    }
+
+    /// Sync wrapper for [`Self::read_range`].
+    pub fn read_range_blocking(&self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
+        runtime::shared().block_on(self.read_range(path, offset, len))
+    }
+
     /// Write `data` to `path`, overwriting any existing file.
     pub async fn write_file(&self, path: &str, data: &[u8]) -> Result<()> {
         if data.len() > 128 * 1024 * 1024 {

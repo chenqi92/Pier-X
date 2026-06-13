@@ -953,7 +953,9 @@ pub async fn git_graph_history(
         .map_err(|e| format!("git_graph_history join: {e}"))?
 }
 
-fn git_graph_history_blocking(params: GitGraphHistoryParams) -> Result<Vec<GitGraphRowView>, String> {
+fn git_graph_history_blocking(
+    params: GitGraphHistoryParams,
+) -> Result<Vec<GitGraphRowView>, String> {
     let client = open_git_client(params.path.clone())?;
     let repo_path = client.repo_path().display().to_string();
     let current_branch = client
@@ -1709,11 +1711,7 @@ pub fn git_reword_unpushed_commit(
     // Enumerate commits from target (oldest) to HEAD (newest).
     let log = run_git_at(
         &repo_path,
-        &[
-            "rev-list",
-            "--reverse",
-            &format!("{target_hash}^..HEAD"),
-        ],
+        &["rev-list", "--reverse", &format!("{target_hash}^..HEAD")],
     )?;
     let hashes: Vec<String> = log
         .lines()
@@ -1722,9 +1720,7 @@ pub fn git_reword_unpushed_commit(
         .map(String::from)
         .collect();
     if hashes.is_empty() {
-        return Err(format!(
-            "commit {target_hash} is not reachable from HEAD"
-        ));
+        return Err(format!("commit {target_hash} is not reachable from HEAD"));
     }
     if hashes[0] != target_hash {
         // The list comes back oldest-first, so the first entry must be
@@ -1758,12 +1754,7 @@ pub fn git_reword_unpushed_commit(
     // unstaged changes" error that's easy to miss in the banner.
     let outcome = run_git_at_with_env(
         &repo_path,
-        &[
-            "rebase",
-            "-i",
-            "--autostash",
-            &format!("{target_hash}^"),
-        ],
+        &["rebase", "-i", "--autostash", &format!("{target_hash}^")],
         &[
             ("GIT_SEQUENCE_EDITOR", seq_script.display().to_string()),
             ("GIT_EDITOR", msg_script.display().to_string()),

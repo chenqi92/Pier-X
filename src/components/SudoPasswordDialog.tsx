@@ -2,6 +2,7 @@ import { KeyRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import Dialog from "./Dialog";
+import type { ElevationCheck } from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 
 type Props = {
@@ -26,6 +27,10 @@ type Props = {
   hideRemember?: boolean;
   onSubmit: (password: string, remember: boolean) => void;
   onCancel: () => void;
+  /** Optional self-test — runs an elevation preflight with the typed
+   *  password and shows pass/fail per check, so the user can confirm
+   *  sudo / become-user actually works before committing. */
+  onTest?: (password: string) => Promise<ElevationCheck[]>;
 };
 
 /**
@@ -45,11 +50,14 @@ export default function SudoPasswordDialog({
   hideRemember = false,
   onSubmit,
   onCancel,
+  onTest,
 }: Props) {
   const { t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(defaultRemember);
+  const [testing, setTesting] = useState(false);
+  const [testResults, setTestResults] = useState<ElevationCheck[] | null>(null);
 
   // Reset the field every time the dialog opens — and clear
   // whatever was typed last time so a previous wrong attempt
@@ -58,6 +66,8 @@ export default function SudoPasswordDialog({
     if (open) {
       setPassword("");
       setRemember(defaultRemember);
+      setTestResults(null);
+      setTesting(false);
       // Defer one frame so Dialog's own focus logic settles first.
       requestAnimationFrame(() => inputRef.current?.focus());
     }
@@ -67,6 +77,21 @@ export default function SudoPasswordDialog({
     if (busy) return;
     if (!password) return;
     onSubmit(password, remember);
+  }
+
+  async function runTest() {
+    if (!onTest || testing || !password) return;
+    setTesting(true);
+    setTestResults(null);
+    try {
+      setTestResults(await onTest(password));
+    } catch (e) {
+      setTestResults([
+        { name: "error", ok: false, detail: e instanceof Error ? e.message : String(e) },
+      ]);
+    } finally {
+      setTesting(false);
+    }
   }
 
   return (
@@ -87,6 +112,18 @@ export default function SudoPasswordDialog({
       }}
       footer={
         <>
+          {onTest ? (
+            <button
+              type="button"
+              className="btn is-ghost"
+              style={{ marginRight: "auto" }}
+              onClick={() => void runTest()}
+              disabled={busy || testing || !password}
+              title={t("Verify sudo / become-user works with this password")}
+            >
+              {testing ? t("Testing…") : t("Test")}
+            </button>
+          ) : null}
           <button
             type="button"
             className="btn"
@@ -123,6 +160,35 @@ export default function SudoPasswordDialog({
             style={{ margin: 0 }}
           >
             {errorMessage}
+          </div>
+        ) : null}
+        {testResults ? (
+          <div
+            className="banner"
+            style={{
+              margin: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: "var(--sp-1)",
+              fontSize: "var(--ui-fs-sm)",
+            }}
+          >
+            {testResults.map((c) => (
+              <div
+                key={c.name}
+                style={{ display: "flex", gap: "var(--sp-2)", alignItems: "baseline" }}
+              >
+                <span style={{ color: c.ok ? "var(--pos)" : "var(--neg)" }}>
+                  {c.ok ? "✓" : "✗"}
+                </span>
+                <span className="mono" style={{ minWidth: "8.5em" }}>
+                  {c.name}
+                </span>
+                <span className="muted" style={{ wordBreak: "break-word" }}>
+                  {c.detail}
+                </span>
+              </div>
+            ))}
           </div>
         ) : null}
         <label

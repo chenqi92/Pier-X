@@ -98,23 +98,47 @@ pub fn detect_blocking(session: &SshSession) -> Result<WebServerDetection> {
 }
 
 async fn probe_nginx(session: &SshSession) -> Option<WebServerInfo> {
-    let (code, out) = session
-        .exec_command("command -v nginx >/dev/null 2>&1 && nginx -v 2>&1")
-        .await
-        .ok()?;
-    if code != 0 {
+    // Resolve the binary even when it lives in an sbin dir a non-login
+    // shell drops from PATH (nginx ships in /usr/sbin).
+    let bin = resolve_binary(
+        session,
+        "nginx",
+        &[
+            "/usr/sbin",
+            "/usr/local/sbin",
+            "/sbin",
+            "/usr/local/nginx/sbin",
+        ],
+    )
+    .await;
+    // Detect an installed-but-down nginx too: as long as either the
+    // binary OR the canonical config tree exists, surface it so a unit
+    // that failed to start still shows up and can be managed. The
+    // `running` field (filled below) carries the active/inactive state.
+    let has_conf = path_exists(session, "/etc/nginx").await;
+    if bin.is_none() && !has_conf {
         return None;
     }
-    let version = trim_version_line(&out);
-    let modules_summary = session
-        .exec_command("nginx -V 2>&1 | head -c 4096")
-        .await
-        .map(|(_, o)| o.trim().to_string())
-        .unwrap_or_default();
+    let version = match &bin {
+        Some(p) => session
+            .exec_command(&format!("{} -v 2>&1", shell_sq(p)))
+            .await
+            .map(|(_, o)| trim_version_line(&o))
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    let modules_summary = match &bin {
+        Some(p) => session
+            .exec_command(&format!("{} -V 2>&1 | head -c 4096", shell_sq(p)))
+            .await
+            .map(|(_, o)| o.trim().to_string())
+            .unwrap_or_default(),
+        None => String::new(),
+    };
     let running = systemctl_state(session, "nginx").await;
     Some(WebServerInfo {
         kind: WebServerKind::Nginx,
-        binary: "nginx".to_string(),
+        binary: bin.unwrap_or_else(|| "nginx".to_string()),
         version,
         config_root: "/etc/nginx".to_string(),
         modules_summary,
@@ -126,36 +150,46 @@ async fn probe_apache(session: &SshSession) -> Option<WebServerInfo> {
     // Debian/Ubuntu ships `apache2`, RHEL/Fedora ships `httpd`. Probe
     // both and pick the first that responds.
     for binary in ["apache2", "httpd"] {
-        let (code, out) = session
-            .exec_command(&format!(
-                "command -v {binary} >/dev/null 2>&1 && {binary} -v 2>&1"
-            ))
-            .await
-            .ok()?;
-        if code != 0 {
-            continue;
-        }
-        let version = trim_version_line(&out);
-        // `apachectl -M` requires a working config to load modules; on a
-        // half-configured box it can fail loudly. Cap the body length
-        // and tolerate non-zero exit codes — the user just wants a
-        // module list overview.
-        let modules_summary = session
-            .exec_command(&format!(
-                "{binary} -M 2>&1 | head -c 4096 || apachectl -M 2>&1 | head -c 4096"
-            ))
-            .await
-            .map(|(_, o)| o.trim().to_string())
-            .unwrap_or_default();
+        let bin = resolve_binary(session, binary, &["/usr/sbin", "/usr/local/sbin", "/sbin"]).await;
         let config_root = if binary == "apache2" {
             "/etc/apache2"
         } else {
             "/etc/httpd"
         };
+        // Binary OR config tree → detected. (Previously a single exec
+        // error here `?`-returned None and aborted the whole probe,
+        // hiding an installed httpd when the apache2 probe errored.)
+        let has_conf = path_exists(session, config_root).await;
+        if bin.is_none() && !has_conf {
+            continue;
+        }
+        let version = match &bin {
+            Some(p) => session
+                .exec_command(&format!("{} -v 2>&1", shell_sq(p)))
+                .await
+                .map(|(_, o)| trim_version_line(&o))
+                .unwrap_or_default(),
+            None => String::new(),
+        };
+        // `apachectl -M` requires a working config to load modules; on a
+        // half-configured box it can fail loudly. Cap the body length
+        // and tolerate non-zero exit codes — the user just wants a
+        // module list overview.
+        let modules_summary = match &bin {
+            Some(p) => session
+                .exec_command(&format!(
+                    "{0} -M 2>&1 | head -c 4096 || apachectl -M 2>&1 | head -c 4096",
+                    shell_sq(p)
+                ))
+                .await
+                .map(|(_, o)| o.trim().to_string())
+                .unwrap_or_default(),
+            None => String::new(),
+        };
         let running = systemctl_state(session, binary).await;
         return Some(WebServerInfo {
             kind: WebServerKind::Apache,
-            binary: binary.to_string(),
+            binary: bin.unwrap_or_else(|| binary.to_string()),
             version,
             config_root: config_root.to_string(),
             modules_summary,
@@ -166,23 +200,36 @@ async fn probe_apache(session: &SshSession) -> Option<WebServerInfo> {
 }
 
 async fn probe_caddy(session: &SshSession) -> Option<WebServerInfo> {
-    let (code, out) = session
-        .exec_command("command -v caddy >/dev/null 2>&1 && caddy version 2>&1")
-        .await
-        .ok()?;
-    if code != 0 {
+    let bin = resolve_binary(
+        session,
+        "caddy",
+        &["/usr/local/bin", "/usr/bin", "/usr/sbin"],
+    )
+    .await;
+    let has_conf = path_exists(session, "/etc/caddy").await;
+    if bin.is_none() && !has_conf {
         return None;
     }
-    let version = trim_version_line(&out);
-    let modules_summary = session
-        .exec_command("caddy list-modules 2>&1 | head -c 4096")
-        .await
-        .map(|(_, o)| o.trim().to_string())
-        .unwrap_or_default();
+    let version = match &bin {
+        Some(p) => session
+            .exec_command(&format!("{} version 2>&1", shell_sq(p)))
+            .await
+            .map(|(_, o)| trim_version_line(&o))
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    let modules_summary = match &bin {
+        Some(p) => session
+            .exec_command(&format!("{} list-modules 2>&1 | head -c 4096", shell_sq(p)))
+            .await
+            .map(|(_, o)| o.trim().to_string())
+            .unwrap_or_default(),
+        None => String::new(),
+    };
     let running = systemctl_state(session, "caddy").await;
     Some(WebServerInfo {
         kind: WebServerKind::Caddy,
-        binary: "caddy".to_string(),
+        binary: bin.unwrap_or_else(|| "caddy".to_string()),
         version,
         config_root: "/etc/caddy".to_string(),
         modules_summary,
@@ -216,12 +263,48 @@ fn trim_version_line(out: &str) -> String {
     out.lines().next().unwrap_or("").trim().to_string()
 }
 
+/// Single-quote a string for safe interpolation into a remote shell.
+fn shell_sq(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Locate an executable, falling back to the common `*bin` dirs that a
+/// non-login SSH shell drops from `PATH` (nginx/apache ship in
+/// `/usr/sbin`, which a bare `ssh host '…'` channel often can't see).
+/// Returns the resolved absolute path, or `None` if nothing is found.
+/// `name` and `extra_dirs` are fixed literals — no untrusted input.
+async fn resolve_binary(session: &SshSession, name: &str, extra_dirs: &[&str]) -> Option<String> {
+    let dirs = extra_dirs
+        .iter()
+        .map(|d| format!("{d}/{name}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cmd = format!(
+        "p=$(command -v {name} 2>/dev/null); \
+         if [ -z \"$p\" ]; then for c in {dirs}; do [ -x \"$c\" ] && p=\"$c\" && break; done; fi; \
+         printf '%s' \"$p\""
+    );
+    let (_, out) = session.exec_command(&cmd).await.ok()?;
+    let p = out.trim();
+    if p.is_empty() {
+        None
+    } else {
+        Some(p.to_string())
+    }
+}
+
+/// True when `path` exists on the remote (file or directory).
+async fn path_exists(session: &SshSession, path: &str) -> bool {
+    session
+        .exec_command(&format!("[ -e {} ] && echo y", shell_sq(path)))
+        .await
+        .map(|(_, o)| o.trim() == "y")
+        .unwrap_or(false)
+}
+
 // ── Validate / Reload (apache + caddy placeholder) ──────────────────
 
-pub async fn validate(
-    session: &SshSession,
-    kind: WebServerKind,
-) -> Result<WebServerActionResult> {
+pub async fn validate(session: &SshSession, kind: WebServerKind) -> Result<WebServerActionResult> {
     let cmd = match kind {
         WebServerKind::Nginx => "nginx -t 2>&1",
         WebServerKind::Apache => {
@@ -251,10 +334,7 @@ pub fn validate_blocking(
     crate::ssh::runtime::shared().block_on(validate(session, kind))
 }
 
-pub async fn reload(
-    session: &SshSession,
-    kind: WebServerKind,
-) -> Result<WebServerActionResult> {
+pub async fn reload(session: &SshSession, kind: WebServerKind) -> Result<WebServerActionResult> {
     let cmd = match kind {
         WebServerKind::Nginx => {
             "sh -c 'if command -v systemctl >/dev/null 2>&1; then \
@@ -283,10 +363,7 @@ pub async fn reload(
     run_with_sudo(session, cmd).await
 }
 
-pub fn reload_blocking(
-    session: &SshSession,
-    kind: WebServerKind,
-) -> Result<WebServerActionResult> {
+pub fn reload_blocking(session: &SshSession, kind: WebServerKind) -> Result<WebServerActionResult> {
     crate::ssh::runtime::shared().block_on(reload(session, kind))
 }
 
@@ -355,7 +432,10 @@ async fn run_with_sudo(session: &SshSession, cmd: &str) -> Result<WebServerActio
     // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
     // password. Pre-existing NOPASSWD setups keep working via the
     // `sudo -n ` fallback when no password is set.
-    let prefix = if is_root || session.has_sudo_password().await {
+    let prefix = if is_root
+        || session.has_sudo_password().await
+        || session.is_elevation_armed().await
+    {
         ""
     } else {
         "sudo -n "
@@ -386,9 +466,7 @@ pub enum WebServerFileKind {
     ConfD,
     /// Apache `sites-available/*`. `enabled` reflects whether
     /// `sites-enabled/<name>` symlinks to it.
-    SiteAvailable {
-        enabled: bool,
-    },
+    SiteAvailable { enabled: bool },
     /// Apache `mods-available/*` / `conf-available/*`.
     Other,
 }
@@ -457,10 +535,7 @@ pub struct WebServerBatchSaveResult {
     pub restore_errors: Vec<String>,
 }
 
-pub async fn list_layout(
-    session: &SshSession,
-    kind: WebServerKind,
-) -> Result<WebServerLayout> {
+pub async fn list_layout(session: &SshSession, kind: WebServerKind) -> Result<WebServerLayout> {
     let info = match kind {
         WebServerKind::Nginx => probe_nginx(session).await,
         WebServerKind::Apache => probe_apache(session).await,
@@ -515,10 +590,7 @@ pub async fn list_layout(
     })
 }
 
-pub fn list_layout_blocking(
-    session: &SshSession,
-    kind: WebServerKind,
-) -> Result<WebServerLayout> {
+pub fn list_layout_blocking(session: &SshSession, kind: WebServerKind) -> Result<WebServerLayout> {
     crate::ssh::runtime::shared().block_on(list_layout(session, kind))
 }
 
@@ -579,11 +651,7 @@ async fn collect_apache_files(
         let avail_dir = format!("{config_root}/sites-available");
         let listing = exec_listing(session, &avail_dir, "*").await;
         for path in listing {
-            let label = path
-                .rsplit('/')
-                .next()
-                .unwrap_or("")
-                .to_string();
+            let label = path.rsplit('/').next().unwrap_or("").to_string();
             let enabled = enabled_set.contains(&label);
             let size_bytes = stat_size(session, &path).await;
             out.push(WebServerFile {
@@ -617,7 +685,8 @@ async fn collect_caddy_files(
 ) {
     // Main Caddyfile.
     let main_path = format!("{config_root}/Caddyfile");
-    if let Some(file) = stat_remote(session, &main_path, "Caddyfile", WebServerFileKind::Main).await {
+    if let Some(file) = stat_remote(session, &main_path, "Caddyfile", WebServerFileKind::Main).await
+    {
         out.push(file);
     }
     // /etc/caddy/conf.d/* — convention for split configs that the
@@ -708,11 +777,7 @@ async fn exec_listing(session: &SshSession, dir: &str, glob: &str) -> Vec<String
     }
 }
 
-pub async fn read_file(
-    session: &SshSession,
-    kind: WebServerKind,
-    path: &str,
-) -> Result<String> {
+pub async fn read_file(session: &SshSession, kind: WebServerKind, path: &str) -> Result<String> {
     if !is_path_under_config_root(kind, path) {
         return Err(crate::ssh::error::SshError::InvalidConfig(format!(
             "refusing to read {path}: must live under {}",
@@ -733,11 +798,7 @@ pub async fn read_file(
     Ok(out)
 }
 
-pub fn read_file_blocking(
-    session: &SshSession,
-    kind: WebServerKind,
-    path: &str,
-) -> Result<String> {
+pub fn read_file_blocking(session: &SshSession, kind: WebServerKind, path: &str) -> Result<String> {
     crate::ssh::runtime::shared().block_on(read_file(session, kind, path))
 }
 
@@ -809,7 +870,10 @@ pub async fn save_file_validate_reload(
     // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
     // password. Pre-existing NOPASSWD setups keep working via the
     // `sudo -n ` fallback when no password is set.
-    let prefix = if is_root || session.has_sudo_password().await {
+    let prefix = if is_root
+        || session.has_sudo_password().await
+        || session.is_elevation_armed().await
+    {
         ""
     } else {
         "sudo -n "
@@ -856,7 +920,7 @@ pub async fn save_file_validate_reload(
     let (write_code, write_out) = session.exec_with_sudo(&write_cmd).await?;
     if write_code != 0 {
         let _ = session
-            .exec_command(&format!("{prefix}mv {q_backup} {q_path}"))
+            .exec_with_sudo(&format!("{prefix}mv {q_backup} {q_path}"))
             .await;
         return Err(crate::ssh::error::SshError::InvalidConfig(format!(
             "write {path} failed: {}",
@@ -871,7 +935,7 @@ pub async fn save_file_validate_reload(
         // 4) Restore on validation failure.
         let restore_cmd = format!("{prefix}mv {q_backup} {q_path}");
         let (rc, rout) = session
-            .exec_command(&restore_cmd)
+            .exec_with_sudo(&restore_cmd)
             .await
             .unwrap_or((-1, String::new()));
         let restored = rc == 0;
@@ -909,8 +973,7 @@ pub fn save_file_validate_reload_blocking(
     path: &str,
     content: &str,
 ) -> Result<WebServerSaveResult> {
-    crate::ssh::runtime::shared()
-        .block_on(save_file_validate_reload(session, kind, path, content))
+    crate::ssh::runtime::shared().block_on(save_file_validate_reload(session, kind, path, content))
 }
 
 /// Batch-save several files atomically: backup each, write each,
@@ -955,7 +1018,10 @@ pub async fn save_files_batch(
     // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
     // password. Pre-existing NOPASSWD setups keep working via the
     // `sudo -n ` fallback when no password is set.
-    let prefix = if is_root || session.has_sudo_password().await {
+    let prefix = if is_root
+        || session.has_sudo_password().await
+        || session.is_elevation_armed().await
+    {
         ""
     } else {
         "sudo -n "
@@ -981,7 +1047,7 @@ pub async fn save_files_batch(
             for prev in &backup_paths {
                 let q_prev = crate::services::nginx::shell_single_quote(prev);
                 let _ = session
-                    .exec_command(&format!("{prefix}rm -f {q_prev}"))
+                    .exec_with_sudo(&format!("{prefix}rm -f {q_prev}"))
                     .await;
             }
             return Err(crate::ssh::error::SshError::InvalidConfig(format!(
@@ -1222,7 +1288,10 @@ pub async fn create_site_file(
     // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
     // password. Pre-existing NOPASSWD setups keep working via the
     // `sudo -n ` fallback when no password is set.
-    let prefix = if is_root || session.has_sudo_password().await {
+    let prefix = if is_root
+        || session.has_sudo_password().await
+        || session.is_elevation_armed().await
+    {
         ""
     } else {
         "sudo -n "
@@ -1242,9 +1311,8 @@ pub async fn create_site_file(
 
     // Refuse to clobber.
     let q_target = crate::services::nginx::shell_single_quote(&target_path);
-    let exists_check = format!(
-        "{prefix}sh -c 'test -e {q_target} && echo EXISTS || echo MISSING' 2>&1"
-    );
+    let exists_check =
+        format!("{prefix}sh -c 'test -e {q_target} && echo EXISTS || echo MISSING' 2>&1");
     let (_, exists_out) = session.exec_with_sudo(&exists_check).await?;
     if exists_out.contains("EXISTS") {
         return Err(crate::ssh::error::SshError::InvalidConfig(format!(
@@ -1336,6 +1404,11 @@ pub fn create_site_file_blocking(
     content: &str,
     enable_after: bool,
 ) -> Result<CreateSiteResult> {
-    crate::ssh::runtime::shared()
-        .block_on(create_site_file(session, kind, leaf_name, content, enable_after))
+    crate::ssh::runtime::shared().block_on(create_site_file(
+        session,
+        kind,
+        leaf_name,
+        content,
+        enable_after,
+    ))
 }

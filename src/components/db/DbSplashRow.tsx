@@ -1,4 +1,4 @@
-import { Key, Link2, Loader2, Play, Server } from "lucide-react";
+import { Key, Link2, Loader2, Lock, Play, Server } from "lucide-react";
 import type { ReactNode } from "react";
 
 import DbEnvTag from "./DbEnvTag";
@@ -84,18 +84,14 @@ export default function DbSplashRow({
             {via.label}
           </span>
           {user ? (
-            <>
-              <span className="sep">·</span>
-              <span>
-                <Key size={9} /> {user}
-              </span>
-            </>
+            <span className="dbs-auth-seg">
+              <Key size={9} /> {user}
+            </span>
           ) : null}
           {authHint ? (
-            <>
-              <span className="sep">·</span>
-              <span className="dbs-auth-from">{authHint}</span>
-            </>
+            <span className="dbs-auth-seg dbs-auth-from">
+              <Lock size={9} /> {authHint}
+            </span>
           ) : null}
         </div>
       </div>

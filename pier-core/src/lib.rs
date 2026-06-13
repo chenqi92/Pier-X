@@ -20,6 +20,7 @@ pub mod git_graph;
 pub mod logging;
 pub mod markdown;
 pub mod paths;
+pub mod preview;
 pub(crate) mod process_util;
 pub mod services;
 pub mod ssh;

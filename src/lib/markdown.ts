@@ -151,6 +151,16 @@ function renderInline(src: string): string {
       }
     }
 
+    // Strikethrough (GFM): ~~text~~
+    if (ch === "~" && src[i + 1] === "~") {
+      const end = src.indexOf("~~", i + 2);
+      if (end > i + 1) {
+        out += `<del>${renderInline(src.slice(i + 2, end))}</del>`;
+        i = end + 2;
+        continue;
+      }
+    }
+
     // Backslash escape — emit the next character as a literal.
     if (ch === "\\" && i + 1 < n) {
       out += escapeHtml(src[i + 1]);
@@ -162,6 +172,80 @@ function renderInline(src: string): string {
     i++;
   }
   return out;
+}
+
+// ── GFM tables ──────────────────────────────────────────────────────
+// A table is a header row, a delimiter row (`---` / `:--` / `--:` /
+// `:-:` cells), then zero or more body rows. Pipes may be escaped as
+// `\|`; outer pipes are optional. Ragged rows are normalised to the
+// header's column count (GFM: extra cells dropped, missing cells empty).
+
+type CellAlign = "none" | "left" | "center" | "right";
+
+function splitTableRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  const cells: string[] = [];
+  let cur = "";
+  for (let k = 0; k < s.length; k++) {
+    const ch = s[k];
+    if (ch === "\\" && k + 1 < s.length) {
+      cur += ch + s[k + 1];
+      k++;
+      continue;
+    }
+    if (ch === "|") {
+      cells.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  cells.push(cur.trim());
+  return cells;
+}
+
+function isTableDelimiterRow(line: string): boolean {
+  // Require a pipe so a bare `---` stays a thematic break / setext rule.
+  if (!line.includes("|")) return false;
+  const cells = splitTableRow(line);
+  return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c));
+}
+
+function tableAligns(line: string): CellAlign[] {
+  return splitTableRow(line).map((c) => {
+    const left = c.startsWith(":");
+    const right = c.endsWith(":");
+    if (left && right) return "center";
+    if (right) return "right";
+    if (left) return "left";
+    return "none";
+  });
+}
+
+function renderTable(header: string[], aligns: CellAlign[], rows: string[][]): string {
+  const attr = (col: number): string => {
+    const a = aligns[col] ?? "none";
+    return a === "none" ? "" : ` style="text-align:${a}"`;
+  };
+  const head =
+    "<thead><tr>" +
+    header.map((c, col) => `<th${attr(col)}>${renderInline(c)}</th>`).join("") +
+    "</tr></thead>";
+  const body = rows.length
+    ? "<tbody>" +
+      rows
+        .map(
+          (r) =>
+            "<tr>" +
+            header.map((_, col) => `<td${attr(col)}>${renderInline(r[col] ?? "")}</td>`).join("") +
+            "</tr>",
+        )
+        .join("") +
+      "</tbody>"
+    : "";
+  return `<table>${head}${body}</table>`;
 }
 
 export function renderMarkdown(src: string): string {
@@ -201,6 +285,20 @@ export function renderMarkdown(src: string): string {
       continue;
     }
 
+    // GFM table — header row immediately followed by a delimiter row.
+    if (line.includes("|") && i + 1 < lines.length && isTableDelimiterRow(lines[i + 1])) {
+      const header = splitTableRow(line);
+      const aligns = tableAligns(lines[i + 1]);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].includes("|") && !/^\s*$/.test(lines[i])) {
+        rows.push(splitTableRow(lines[i]));
+        i++;
+      }
+      out += renderTable(header, aligns, rows);
+      continue;
+    }
+
     // Thematic break.
     if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
       out += "<hr/>";
@@ -228,11 +326,21 @@ export function renderMarkdown(src: string): string {
       continue;
     }
 
-    // Unordered list — -, *, + at start.
+    // Unordered list — -, *, + at start. GFM task items (`- [x]` /
+    // `- [ ]`) render as a disabled checkbox.
     if (/^\s*[-*+]\s+/.test(line)) {
       const buf: string[] = [];
       while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
-        buf.push(`<li>${renderInline(lines[i].replace(/^\s*[-*+]\s+/, ""))}</li>`);
+        const item = lines[i].replace(/^\s*[-*+]\s+/, "");
+        const task = /^\[([ xX])\]\s+(.*)$/.exec(item);
+        if (task) {
+          const checked = task[1].toLowerCase() === "x";
+          buf.push(
+            `<li class="task-list-item"><input type="checkbox" disabled${checked ? " checked" : ""}/> ${renderInline(task[2])}</li>`,
+          );
+        } else {
+          buf.push(`<li>${renderInline(item)}</li>`);
+        }
         i++;
       }
       out += `<ul>${buf.join("")}</ul>`;
@@ -260,7 +368,8 @@ export function renderMarkdown(src: string): string {
         /^\s*>\s?/.test(ln) ||
         /^\s*[-*+]\s+/.test(ln) ||
         /^\s*\d+\.\s+/.test(ln) ||
-        /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(ln)
+        /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(ln) ||
+        (ln.includes("|") && i + 1 < lines.length && isTableDelimiterRow(lines[i + 1]))
       ) {
         break;
       }

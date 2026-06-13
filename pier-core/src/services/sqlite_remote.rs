@@ -292,7 +292,11 @@ async fn run_select_rows(
     // common trigger and self-resolves within ~hundreds of ms.
     let mut attempt = 0;
     loop {
-        let (exit, stdout) = session.exec_command(&cmd).await?;
+        // `exec_with_sudo` follows the session's elevation slot: a plain
+        // exec when no sudo password is armed (acts as the login user),
+        // or `sudo`/`sudo -u <user>` once the panel elevates — so a
+        // root-owned `.db` becomes readable when the terminal is root.
+        let (exit, stdout) = session.exec_with_sudo(&cmd).await?;
         if exit == 0 {
             return parse_json_rows(&stdout).map_err(SshError::InvalidConfig);
         }
@@ -313,7 +317,7 @@ async fn run_query(session: &SshSession, db_path: &str, sql: &str) -> Result<Rem
     let started = std::time::Instant::now();
     let bounded_sql = bounded_read_sql(sql);
     let cmd = build_sqlite_json_command(db_path, &bounded_sql);
-    let (exit, stdout) = session.exec_command(&cmd).await?;
+    let (exit, stdout) = session.exec_with_sudo(&cmd).await?;
     let elapsed_ms = started.elapsed().as_millis() as u64;
 
     if exit != 0 {
@@ -768,7 +772,9 @@ pub fn install_blocking(session: &SshSession) -> Result<RemoteSqliteInstallRepor
 pub async fn stat_size(session: &SshSession, db_path: &str) -> Result<u64> {
     let quoted = shell_single_quote(db_path);
     let cmd = format!("stat -c %s {quoted} 2>/dev/null || stat -f %z {quoted} 2>/dev/null");
-    let (exit, stdout) = session.exec_command(&cmd).await?;
+    // Follow the session elevation so a root-owned `.db` still stats
+    // when the terminal is root (plain exec when not elevated).
+    let (exit, stdout) = session.exec_with_sudo(&cmd).await?;
     if exit != 0 {
         return Ok(0);
     }

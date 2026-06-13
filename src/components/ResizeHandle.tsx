@@ -13,9 +13,21 @@ type Props = {
   onResize: (newSize: number) => void;
   /** Extra class for positioning (e.g. "resize-handle--left") */
   className?: string;
+  /** Accessible label for keyboard and screen-reader users */
+  ariaLabel?: string;
 };
 
-export default function ResizeHandle({ direction, size, min, max, onResize, className }: Props) {
+const KEYBOARD_STEP = 16;
+
+export default function ResizeHandle({
+  direction,
+  size,
+  min,
+  max,
+  onResize,
+  className,
+  ariaLabel,
+}: Props) {
   const dragging = useRef(false);
   const startX = useRef(0);
   const startSize = useRef(0);
@@ -32,6 +44,26 @@ export default function ResizeHandle({ direction, size, min, max, onResize, clas
       document.body.classList.add("is-resizing");
     },
     [size],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      let next: number | null = null;
+      if (e.key === "Home") {
+        next = min;
+      } else if (e.key === "End") {
+        next = max;
+      } else if (e.key === "ArrowLeft") {
+        next = direction === "left" ? size - KEYBOARD_STEP : size + KEYBOARD_STEP;
+      } else if (e.key === "ArrowRight") {
+        next = direction === "left" ? size + KEYBOARD_STEP : size - KEYBOARD_STEP;
+      }
+
+      if (next === null) return;
+      e.preventDefault();
+      onResize(Math.max(min, Math.min(max, next)));
+    },
+    [direction, max, min, onResize, size],
   );
 
   useEffect(() => {
@@ -90,5 +122,18 @@ export default function ResizeHandle({ direction, size, min, max, onResize, clas
 
   // Use prototype's `.resizer` class by default; caller may override.
   const cls = className || "resizer";
-  return <div className={cls} onMouseDown={handleMouseDown} />;
+  return (
+    <div
+      className={cls}
+      role="separator"
+      aria-label={ariaLabel}
+      aria-orientation="vertical"
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={Math.round(size)}
+      tabIndex={0}
+      onMouseDown={handleMouseDown}
+      onKeyDown={handleKeyDown}
+    />
+  );
 }

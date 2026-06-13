@@ -29,6 +29,22 @@ export {
   modeToSymbolic,
 } from "./sftpEditorMeta";
 
+/** Extension-less dotfiles that are shell scripts in practice. */
+const SHELL_DOTFILES = new Set([
+  ".bashrc",
+  ".bash_profile",
+  ".bash_aliases",
+  ".bash_logout",
+  ".profile",
+  ".zshrc",
+  ".zprofile",
+  ".zlogin",
+  ".zlogout",
+  ".zshenv",
+  ".kshrc",
+  ".cshrc",
+]);
+
 /** Pick a CodeMirror language support for a filename. Returns
  *  `null` when no mode matches — the editor then falls back to
  *  plain text, which still has line numbers + search + rectangular
@@ -37,6 +53,12 @@ export function languageFromFilename(name: string): Extension | null {
   const lower = name.toLowerCase();
   if (lower === "dockerfile" || lower.endsWith(".dockerfile")) {
     return StreamLanguage.define(dockerFile);
+  }
+  // Shell rc / profile dotfiles carry no extension but are shell
+  // scripts — highlight them as shell instead of falling back to
+  // plain text.
+  if (SHELL_DOTFILES.has(lower)) {
+    return StreamLanguage.define(shell);
   }
   const ext = extensionOf(name);
   switch (ext) {

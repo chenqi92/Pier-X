@@ -139,6 +139,28 @@ sysinfo = { version = "0.33", default-features = false, features = [
     "disk",
     "network",
 ] }
+# File-preview decoding for the SFTP multi-format viewer (see
+# `preview`). All pure-Rust, no system libs — keeps the .deb/.rpm/
+# .AppImage and Windows builds portable.
+#   * `content_inspector` + `chardetng` + `encoding_rs`: sniff
+#     text-vs-binary and the charset (UTF-8/16, GBK, Shift-JIS, …)
+#     from a small prefix, then incrementally decode streamed
+#     windows to UTF-8 — so a huge log's first screen paints after
+#     one round trip and chunk splits never corrupt multibyte chars.
+#   * `calamine`: read-only xlsx/xlsb/xls/ods reader (legacy .xls
+#     included) feeding the shared preview table.
+#   * `csv`: delimited-text (csv/tsv) parsing into the same table.
+#   * `image`: decode formats the WebView can't render natively
+#     (TIFF, …) and re-encode to PNG. Only the codecs we actually
+#     fall back on are enabled to keep compile time and binary size
+#     down; png/jpeg/gif/bmp the webview handles itself, but the
+#     decoders are cheap and let exotic variants round-trip.
+content_inspector = "0.2"
+chardetng = "1"
+encoding_rs = "0.8"
+calamine = "0.35"
+csv = "1"
+image = { version = "0.25", default-features = false, features = ["tiff", "png", "bmp", "gif", "jpeg"] }
 
 # Unix PTY — forkpty + ioctl wrappers live in libc. Only pulled in on
 # Unix targets; Windows uses the ConPTY-backed implementation below.

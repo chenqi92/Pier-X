@@ -109,6 +109,12 @@ const SIDEBAR_PATH_STORAGE_KEY = "pierx:sidebar-path";
 const TOOLSTRIP_W = 42;
 const DEFAULT_SIDEBAR_W = 244;
 const DEFAULT_RIGHT_W = 360 + TOOLSTRIP_W;
+const MIN_SIDEBAR_W = 180;
+const MAX_SIDEBAR_W = 420;
+const MIN_RIGHT_PANEL_W = 260;
+const MIN_RIGHT_W = TOOLSTRIP_W + MIN_RIGHT_PANEL_W;
+const MAX_RIGHT_W = 900;
+const CENTER_RESERVED_W = 560;
 
 /** Parse a CSS <time> token ("200ms" / "0.2s") to milliseconds. */
 function cssMs(value: string): number {
@@ -120,6 +126,48 @@ function cssMs(value: string): number {
 
 function isMarkdownFile(name: string): boolean {
   return MARKDOWN_EXTENSIONS.test(name);
+}
+
+function clampPaneWidth(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function centerReserveForViewport(viewportWidth: number, rightCollapsed: boolean): number {
+  const minRightFootprint = rightCollapsed ? TOOLSTRIP_W : MIN_RIGHT_W;
+  return Math.max(
+    0,
+    Math.min(CENTER_RESERVED_W, viewportWidth - MIN_SIDEBAR_W - minRightFootprint),
+  );
+}
+
+function normalizePaneWidths(
+  sidebar: number,
+  right: number,
+  viewportWidth: number,
+  rightCollapsed: boolean,
+) {
+  const centerReserve = centerReserveForViewport(viewportWidth, rightCollapsed);
+  let nextSidebar = clampPaneWidth(sidebar, MIN_SIDEBAR_W, MAX_SIDEBAR_W);
+  let nextRight = rightCollapsed ? right : clampPaneWidth(right, MIN_RIGHT_W, MAX_RIGHT_W);
+  let overflow =
+    nextSidebar + (rightCollapsed ? TOOLSTRIP_W : nextRight) + centerReserve - viewportWidth;
+
+  if (overflow > 0 && !rightCollapsed) {
+    const rightReduction = Math.min(overflow, nextRight - MIN_RIGHT_W);
+    nextRight -= rightReduction;
+    overflow -= rightReduction;
+  }
+
+  if (overflow > 0) {
+    const sidebarReduction = Math.min(overflow, nextSidebar - MIN_SIDEBAR_W);
+    nextSidebar -= sidebarReduction;
+  }
+
+  return {
+    centerReserve,
+    sidebar: Math.round(nextSidebar),
+    right: Math.round(nextRight),
+  };
 }
 
 // Static descriptor list for the right-panel entries in the command
@@ -208,6 +256,7 @@ function App() {
       return false;
     }
   });
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth || 0);
   const [fallbackRightTool, setFallbackRightTool] = useState<RightTool>("markdown");
   const tabs = useTabStore((s) => s.tabs);
   const activeTabId = useTabStore((s) => s.activeTabId);
@@ -244,6 +293,13 @@ function App() {
   }, [activeTab]);
 
   const isDev = import.meta.env.DEV;
+
+  useEffect(() => {
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth || 0);
+    updateViewportWidth();
+    window.addEventListener("resize", updateViewportWidth);
+    return () => window.removeEventListener("resize", updateViewportWidth);
+  }, []);
 
   // Bootstrap
   useEffect(() => {
@@ -968,11 +1024,52 @@ function App() {
     };
   }, [rightCollapsed]);
 
-  const rightPanelW = rightCollapsed ? 0 : Math.max(rightWidth - TOOLSTRIP_W, 0);
+  const layoutViewportWidth =
+    viewportWidth || MIN_SIDEBAR_W + MIN_RIGHT_W + CENTER_RESERVED_W;
+  const normalizedPanes = normalizePaneWidths(
+    sidebarWidth,
+    rightWidth,
+    layoutViewportWidth,
+    rightCollapsed,
+  );
+
+  useEffect(() => {
+    if (normalizedPanes.sidebar !== sidebarWidth) {
+      setSidebarWidth(normalizedPanes.sidebar);
+    }
+    if (!rightCollapsed && normalizedPanes.right !== rightWidth) {
+      setRightWidth(normalizedPanes.right);
+    }
+  }, [
+    normalizedPanes.sidebar,
+    normalizedPanes.right,
+    rightCollapsed,
+    rightWidth,
+    sidebarWidth,
+  ]);
+
+  const rightPanelW = rightCollapsed ? 0 : Math.max(normalizedPanes.right - TOOLSTRIP_W, 0);
   const isRightCollapsed = rightCollapsed || rightPanelW === 0;
+  const sidebarResizeMax = Math.max(
+    MIN_SIDEBAR_W,
+    Math.min(
+      MAX_SIDEBAR_W,
+      layoutViewportWidth -
+        (isRightCollapsed ? TOOLSTRIP_W : normalizedPanes.right) -
+        normalizedPanes.centerReserve,
+    ),
+  );
+  const rightResizeMax = Math.max(
+    MIN_RIGHT_W,
+    Math.min(
+      MAX_RIGHT_W,
+      layoutViewportWidth - normalizedPanes.sidebar - normalizedPanes.centerReserve,
+    ),
+  );
   const appStyle: React.CSSProperties = {
-    ["--sidebar-w" as never]: `${sidebarWidth}px`,
+    ["--sidebar-w" as never]: `${normalizedPanes.sidebar}px`,
     ["--rightpanel-w" as never]: `${rightPanelW}px`,
+    ["--center-min-w" as never]: `${normalizedPanes.centerReserve}px`,
   };
 
   return (
@@ -1087,19 +1184,25 @@ function App() {
           <ResizeHandle
             className="resizer is-left"
             direction="left"
-            size={sidebarWidth}
-            min={180}
-            max={420}
-            onResize={setSidebarWidth}
+            size={normalizedPanes.sidebar}
+            min={MIN_SIDEBAR_W}
+            max={sidebarResizeMax}
+            ariaLabel={i18n.t("Resize left sidebar")}
+            onResize={(width) =>
+              setSidebarWidth(clampPaneWidth(width, MIN_SIDEBAR_W, sidebarResizeMax))
+            }
           />
           {!isRightCollapsed && (
             <ResizeHandle
               className="resizer is-right"
               direction="right"
-              size={rightWidth}
-              min={TOOLSTRIP_W + 220}
-              max={900}
-              onResize={setRightWidth}
+              size={normalizedPanes.right}
+              min={MIN_RIGHT_W}
+              max={rightResizeMax}
+              ariaLabel={i18n.t("Resize right panel")}
+              onResize={(width) =>
+                setRightWidth(clampPaneWidth(width, MIN_RIGHT_W, rightResizeMax))
+              }
             />
           )}
 

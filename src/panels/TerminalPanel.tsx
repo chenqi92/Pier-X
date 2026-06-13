@@ -43,6 +43,7 @@ import { effectiveSshTarget } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
 import { useAiStore } from "../stores/useAiStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { useSudoStore } from "../stores/useSudoStore";
 import { useStatusStore } from "../stores/useStatusStore";
 import { useThemeStore, TERMINAL_THEMES } from "../stores/useThemeStore";
 import { parseSshCommand } from "../lib/parseSshCommand";
@@ -287,6 +288,8 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   const createRetryCountRef = useRef(0);
   const [needsPasswordRecovery, setNeedsPasswordRecovery] = useState(false);
   const requestEditConnection = useUiActionsStore((s) => s.requestEditConnection);
+  const focusTerminalSeq = useUiActionsStore((s) => s.focusTerminalSeq);
+  const focusTerminalSessionId = useUiActionsStore((s) => s.focusTerminalSessionId);
   const [terminalSize, setTerminalSize] = useState<TerminalSize>({ cols: 120, rows: 26 });
   const setStatusTerminalSize = useStatusStore((s) => s.setTerminalSize);
   const [scrollbackOffset, setScrollbackOffset] = useState(0);
@@ -530,6 +533,18 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   // Distinct from `pendingPasswordCaptureRef` because we never route
   // the value anywhere — these prompts must not feed the russh slot.
   const suppressHistoryRef = useRef<{ deadline: number } | null>(null);
+
+  // Elevation-follow capture. `sudoCmdSeenAtRef` records when the user
+  // last ran `sudo` or `su`; when a secret prompt fires shortly after AND
+  // `followTerminalSudo` is on, `pendingSudoCaptureRef` arms so the next
+  // typed line (the user's own password for `sudo`, or root's for `su`)
+  // is mirrored into the session-only store — letting the right-side
+  // panels follow the terminal's elevation with no second prompt. The
+  // backend tries `sudo` then `su` with the captured secret, so either
+  // kind works. Captured values stay in memory for the session only —
+  // never the keychain.
+  const sudoCmdSeenAtRef = useRef(0);
+  const pendingSudoCaptureRef = useRef<{ deadline: number } | null>(null);
 
   // Bracketed-paste tracking for the smart line mirror. `active` is
   // true between `\e[200~` and `\e[201~`; `tainted` marks the current
@@ -891,6 +906,22 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     return () => window.cancelAnimationFrame(raf);
   }, [session, isActive]);
 
+  // Honor cross-component focus requests (AI panel "insert into
+  // terminal"). The request carries the target session id; only the
+  // matching active panel grabs focus, so a command inserted into tab
+  // A's terminal doesn't yank focus to tab B.
+  useEffect(() => {
+    if (focusTerminalSeq === 0) return;
+    if (!isActive) return;
+    if (!session || focusTerminalSessionId !== session.sessionId) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const raf = window.requestAnimationFrame(() => {
+      viewport.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [focusTerminalSeq, focusTerminalSessionId, session, isActive]);
+
   useEffect(() => {
     if (!isActive) {
       setTerminalSelection(null);
@@ -1163,6 +1194,11 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       if (shellUser && shellUser !== lastShellUserRef.current) {
         lastShellUserRef.current = shellUser;
         updateTab(tab.id, { currentShellUser: shellUser });
+        // Mirror the terminal's effective OS user to the backend so the
+        // whole right side follows a `sudo -i` / `su root` (and de-follows
+        // on `exit`) — including NOPASSWD hosts where no prompt fired and
+        // there was nothing to capture.
+        syncEffectiveUserElevation(shellUser);
       }
       // Persist last-seen cwd onto the tab record so the rehydrate path
       // can prepend a `cd …` startup command on restart.
@@ -1330,6 +1366,15 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       if (disposed) return;
       if (event.payload.sessionId !== session.sessionId) return;
       suppressHistoryRef.current = { deadline: Date.now() + 60_000 };
+      // If this secret prompt closely follows a `sudo`/`su` command and
+      // the user opted into following the terminal's elevation, arm a
+      // one-shot capture of the next line into the session-only store.
+      // Gated on a recent `sudo`/`su` so `passwd` / 2FA prompts (which
+      // don't yield a panel-usable elevation password) are never captured.
+      const sawSudoRecently = Date.now() - sudoCmdSeenAtRef.current < 15_000;
+      if (sawSudoRecently && useSettingsStore.getState().followTerminalSudo) {
+        pendingSudoCaptureRef.current = { deadline: Date.now() + 60_000 };
+      }
     })
       .then((u) => {
         if (disposed) safeUnlisten(u);
@@ -1925,6 +1970,83 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   }
 
   /**
+   * Mirror the password typed at a `sudo`/`su` prompt into the
+   * **session-only** store so the right-side panels follow the terminal's
+   * elevation with no second prompt. Armed by the secret-prompt listener
+   * only after a recent `sudo`/`su` (never `passwd` / 2FA) and only when
+   * `followTerminalSudo` is on. The backend's `exec_as_effective` tries
+   * `sudo` then `su` with this secret, so a `sudo` (own) password or a
+   * `su` (root) password both work. Stored via `set` (in-memory for the
+   * session), never `setPersistent` (keychain). A wrong capture
+   * self-heals: the panel's permission-denied flow re-prompts + overwrites.
+   */
+  function maybeCaptureSudoFromLine(line: string): void {
+    const pending = pendingSudoCaptureRef.current;
+    if (!pending) return;
+    pendingSudoCaptureRef.current = null; // one-shot
+    if (Date.now() > pending.deadline) return;
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.length > 256) return;
+    const current = useTabStore.getState().tabs.find((t) => t.id === tab.id);
+    if (!current) return;
+    // The host the panels target — primary fields, or the nested hop.
+    const host = tab.backend === "local" ? current.sshHost : current.nestedSshTarget?.host ?? "";
+    const port = tab.backend === "local" ? current.sshPort : current.nestedSshTarget?.port ?? 22;
+    const user = tab.backend === "local" ? current.sshUser : current.nestedSshTarget?.user ?? "";
+    if (!host || !user) return;
+    const authMode =
+      (tab.backend === "local" ? current.sshAuthMode : current.nestedSshTarget?.authMode) ??
+      "password";
+    // Session-only: NEVER the keychain — this is a captured credential.
+    useSudoStore.getState().set(
+      { host, port, user, authMode, password: "", keyPath: "", savedConnectionIndex: null },
+      trimmed,
+    );
+    logEvent(
+      "INFO",
+      "elevation.capture",
+      `tab=${tab.id} captured sudo password from terminal (len=${trimmed.length}) for ${user}@${host}:${port}`,
+    );
+  }
+
+  /**
+   * Mirror the terminal's current effective OS user (`tab.currentShellUser`)
+   * to the backend host-elevation state so every right-side panel follows
+   * the terminal's `sudo -i` / `su root` — and drops back on `exit`.
+   *
+   * Unlike {@link maybeCaptureSudoFromLine}, this does NOT need a captured
+   * password: on a NOPASSWD / cached-credentials host `sudo -i` fires no
+   * prompt, so there is nothing to capture, yet the operator is genuinely
+   * root. Sending the effective user arms the backend session for a
+   * passwordless `sudo -n`, so detection / monitor / DB probes run (and are
+   * labeled) as root. Gated on `followTerminalSudo`; when off, or when the
+   * shell is back at the login user, it clears the arming (`effectiveUser:
+   * null`). Uses {@link effectiveSshTarget} so the host key matches the one
+   * the panels target.
+   */
+  function syncEffectiveUserElevation(shellUser: string): void {
+    const current = useTabStore.getState().tabs.find((t) => t.id === tab.id);
+    if (!current) return;
+    const target = effectiveSshTarget(current);
+    if (!target) return;
+    const follow = useSettingsStore.getState().followTerminalSudo;
+    const trimmed = shellUser.trim();
+    const elevated = follow && !!trimmed && trimmed !== target.user;
+    void cmd
+      .sshSetHostEffectiveUser({
+        host: target.host,
+        port: target.port,
+        user: target.user,
+        authMode: target.authMode,
+        password: target.password ?? "",
+        keyPath: target.keyPath ?? "",
+        savedConnectionIndex: target.savedConnectionIndex ?? null,
+        effectiveUser: elevated ? trimmed : null,
+      })
+      .catch(() => {});
+  }
+
+  /**
    * Apply an SSH state update pushed from the backend watcher.
    *
    * This is the authoritative path for local-backend tabs: the
@@ -2087,9 +2209,19 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
    * stop-gap there.
    */
   function applySshContextFromCommand(line: string): void {
+    // Note an interactive elevation (`sudo` or `su`) so a following
+    // secret prompt can arm the follow-capture. Skip `sudo -n` (never
+    // prompts). The captured value is whatever the user types — their
+    // own password (sudo) or root's (su); the backend tries `sudo` then
+    // `su`, so either works.
+    const lead = line.trimStart();
+    if (/^(sudo|su)(\s|$)/.test(lead) && !/^sudo\s+-n\b/.test(lead)) {
+      sudoCmdSeenAtRef.current = Date.now();
+    }
     const parsed = parseSshCommand(line);
     if (!parsed) {
       maybeCapturePasswordFromLine(line);
+      maybeCaptureSudoFromLine(line);
       return;
     }
     const conns = useConnectionStore.getState().connections;

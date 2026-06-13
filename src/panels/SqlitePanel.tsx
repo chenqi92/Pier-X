@@ -38,7 +38,8 @@ import type {
   SqliteBrowserState,
   TabState,
 } from "../lib/types";
-import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
+import { effectiveSshTarget, effectiveShellUser, isSshTargetReady } from "../lib/types";
+import { useSudoElevation } from "../lib/useSudoElevation";
 import { softwareKeyForTab } from "../stores/useSoftwareStore";
 import { useSoftwareSnapshot } from "../lib/softwareInstall";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
@@ -96,6 +97,22 @@ function SqlitePanelBody({ tab }: Props) {
     ],
   );
   useSoftwareSnapshot(swKey, sshParams);
+
+  // Unified sudo elevation: lets remote SQLite read a root-owned `.db`
+  // by running `sqlite3` via `sudo`/`sudo -u <effective user>` after a
+  // permission-denied, following the terminal's `su root` / `sudo -i`.
+  const elev = useSudoElevation(tab);
+  /** SSH addressing + elevation args for every remote SQLite call. */
+  const remoteBase = () => ({
+    host: sshTarget?.host ?? "",
+    port: sshTarget?.port ?? 22,
+    user: sshTarget?.user ?? "",
+    authMode: sshTarget?.authMode ?? "password",
+    password: sshTarget?.password ?? "",
+    keyPath: sshTarget?.keyPath ?? "",
+    savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
+    ...elev.getElevationArgs(),
+  });
 
   const [path, setPath] = useState("");
   const [tableName, setTableName] = useState("");
@@ -232,13 +249,7 @@ function SqlitePanelBody({ tab }: Props) {
     try {
       if (isRemoteMode && sshTarget) {
         const s = await cmd.sqliteBrowseRemote({
-          host: sshTarget.host,
-          port: sshTarget.port,
-          user: sshTarget.user,
-          authMode: sshTarget.authMode,
-          password: sshTarget.password,
-          keyPath: sshTarget.keyPath,
-          savedConnectionIndex: sshTarget.savedConnectionIndex,
+          ...remoteBase(),
           dbPath: usePath,
           table: nextTable.trim() || null,
         });
@@ -250,7 +261,11 @@ function SqlitePanelBody({ tab }: Props) {
         setTableName(s.tableName);
       }
     } catch (e) {
-      setError(formatError(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      // Root-owned `.db`: prompt for sudo and re-browse once it lands.
+      if (!(isRemoteMode && elev.handlePermissionDenied(raw, () => void browse(nextTable, explicitPath)))) {
+        setError(formatError(e));
+      }
     } finally {
       setBusy(false);
     }
@@ -273,13 +288,7 @@ function SqlitePanelBody({ tab }: Props) {
       let r: QueryExecutionResult;
       if (isRemoteMode && sshTarget) {
         r = await cmd.sqliteExecuteRemote({
-          host: sshTarget.host,
-          port: sshTarget.port,
-          user: sshTarget.user,
-          authMode: sshTarget.authMode,
-          password: sshTarget.password,
-          keyPath: sshTarget.keyPath,
-          savedConnectionIndex: sshTarget.savedConnectionIndex,
+          ...remoteBase(),
           dbPath: path.trim(),
           sql,
         });
@@ -319,7 +328,11 @@ function SqlitePanelBody({ tab }: Props) {
       void browse(tableName);
     } catch (e) {
       setQueryResult(null);
-      setQueryError(formatError(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      // Root-owned `.db`: prompt for sudo and re-run once it lands.
+      if (!(isRemoteMode && elev.handlePermissionDenied(raw, () => void runQuery()))) {
+        setQueryError(formatError(e));
+      }
     } finally {
       setQueryBusy(false);
     }
@@ -379,7 +392,7 @@ function SqlitePanelBody({ tab }: Props) {
   }
 
   // ── Splash rows (candidates as detected; no saved creds for SQLite yet) ──
-  const probeTarget = sshTarget ? `${sshTarget.user}@${sshTarget.host}` : null;
+  const probeTarget = tab && sshTarget ? `${effectiveShellUser(tab, sshTarget)}@${sshTarget.host}` : null;
   const probeState =
     remoteStatus.kind === "unknown"
       ? "scanning"
@@ -585,13 +598,7 @@ function SqlitePanelBody({ tab }: Props) {
         );
         if (isRemoteMode && sshTarget) {
           await cmd.sqliteExecuteRemote({
-            host: sshTarget.host,
-            port: sshTarget.port,
-            user: sshTarget.user,
-            authMode: sshTarget.authMode,
-            password: sshTarget.password,
-            keyPath: sshTarget.keyPath,
-            savedConnectionIndex: sshTarget.savedConnectionIndex,
+            ...remoteBase(),
             dbPath: path.trim(),
             sql,
           });
@@ -628,13 +635,7 @@ function SqlitePanelBody({ tab }: Props) {
         const sql = ddlToSql({ dialect: "sqlite", table: tableRef }, mut);
         if (isRemoteMode && sshTarget) {
           await cmd.sqliteExecuteRemote({
-            host: sshTarget.host,
-            port: sshTarget.port,
-            user: sshTarget.user,
-            authMode: sshTarget.authMode,
-            password: sshTarget.password,
-            keyPath: sshTarget.keyPath,
-            savedConnectionIndex: sshTarget.savedConnectionIndex,
+            ...remoteBase(),
             dbPath: path.trim(),
             sql,
           });
@@ -665,13 +666,7 @@ function SqlitePanelBody({ tab }: Props) {
     const usePath = path.trim();
     if (isRemoteMode && sshTarget) {
       return cmd.sqliteExecuteRemote({
-        host: sshTarget.host,
-        port: sshTarget.port,
-        user: sshTarget.user,
-        authMode: sshTarget.authMode,
-        password: sshTarget.password,
-        keyPath: sshTarget.keyPath,
-        savedConnectionIndex: sshTarget.savedConnectionIndex,
+        ...remoteBase(),
         dbPath: usePath,
         sql,
       });
@@ -987,13 +982,7 @@ function SqlitePanelBody({ tab }: Props) {
               const runOne = async (sql: string): Promise<QueryExecutionResult> => {
                 if (isRemoteMode && sshTarget) {
                   return cmd.sqliteExecuteRemote({
-                    host: sshTarget.host,
-                    port: sshTarget.port,
-                    user: sshTarget.user,
-                    authMode: sshTarget.authMode,
-                    password: sshTarget.password,
-                    keyPath: sshTarget.keyPath,
-                    savedConnectionIndex: sshTarget.savedConnectionIndex,
+                    ...remoteBase(),
                     dbPath: usePath,
                     sql,
                   });
@@ -1043,13 +1032,7 @@ function SqlitePanelBody({ tab }: Props) {
                     const sql = `PRAGMA ${name} = ${literal};`;
                     if (isRemoteMode && sshTarget) {
                       await cmd.sqliteExecuteRemote({
-                        host: sshTarget.host,
-                        port: sshTarget.port,
-                        user: sshTarget.user,
-                        authMode: sshTarget.authMode,
-                        password: sshTarget.password,
-                        keyPath: sshTarget.keyPath,
-                        savedConnectionIndex: sshTarget.savedConnectionIndex,
+                        ...remoteBase(),
                         dbPath: usePath,
                         sql,
                       });
@@ -1069,6 +1052,7 @@ function SqlitePanelBody({ tab }: Props) {
         onCancel={() => setConfirm(null)}
         onConfirm={() => void confirm?.onConfirm()}
       />
+      {elev.dialog}
     </>
   );
 }

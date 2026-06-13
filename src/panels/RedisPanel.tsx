@@ -24,7 +24,7 @@ import type {
   RedisCommandResult,
   TabState,
 } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
+import { effectiveSshTarget, effectiveShellUser } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import { softwareKeyForTab, useSoftwareStore } from "../stores/useSoftwareStore";
@@ -714,9 +714,9 @@ function RedisPanelBody({ tab }: Props) {
   }
 
   // ── Splash rows ───────────────────────────────────────────
-  const viaLabel = sshTarget ? `${sshTarget.user}@${sshTarget.host}` : t("direct · localhost");
+  const viaLabel = sshTarget ? `${effectiveShellUser(tab, sshTarget)}@${sshTarget.host}` : t("direct · localhost");
   const viaKind: DbSplashRowData["via"]["kind"] = hasSsh ? "tunnel" : "direct";
-  const probeTarget = sshTarget ? `${sshTarget.user}@${sshTarget.host}` : null;
+  const probeTarget = sshTarget ? `${effectiveShellUser(tab, sshTarget)}@${sshTarget.host}` : null;
   const probeState =
     instancesEntry?.status === "pending"
       ? "scanning"
@@ -750,7 +750,7 @@ function RedisPanelBody({ tab }: Props) {
     addr: `${det.host}:${det.port}`,
     via: {
       kind: det.source === "docker" ? "local" : "remote",
-      label: det.source === "docker" ? det.image || t("docker container") : det.processName || t("systemd unit"),
+      label: det.source === "docker" ? (det.image || t("docker container")) + (det.internal ? " · " + t("internal network") : "") : det.processName || t("systemd unit"),
     },
     stats: <span className="sep">—</span>,
     lastUsed: null,

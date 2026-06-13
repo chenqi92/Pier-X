@@ -10,6 +10,8 @@
   padding: var(--sp-3);
   height: 100%;
   overflow: auto;
+  container-type: inline-size;
+  container-name: ngx;
 }
 .ngx-panel__error {
   margin-top: var(--sp-1);
@@ -817,6 +819,9 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  container-type: inline-size;
+  container-name: ws-raw;
 }
 .ws-raw__toolbar {
   display: flex;
@@ -1806,4 +1811,34 @@
   background: var(--surface-2);
   font-size: var(--size-micro);
   user-select: none;
+}
+
+@container ngx (max-width: 420px) {
+  .ngx-panel {
+    padding: var(--sp-2);
+  }
+
+  .ngx-panel__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ngx-tree {
+    max-height: calc(var(--row-h) * 8);
+  }
+}
+
+@container ws-raw (max-width: 420px) {
+  .ws-raw__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ws-raw__tree {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    max-height: calc(var(--row-h) * 8);
+  }
+
+  .ws-raw__spacer {
+    display: none;
+  }
 }

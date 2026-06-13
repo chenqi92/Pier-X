@@ -62,6 +62,8 @@ import type {
   QueryExecutionResult,
   TabState,
 } from "../lib/types";
+import { effectiveShellUser } from "../lib/types";
+import { useSudoElevation } from "../lib/useSudoElevation";
 import { useTabStore } from "../stores/useTabStore";
 import { softwareKeyForTab, useSoftwareStore } from "../stores/useSoftwareStore";
 import { useSoftwareSnapshot } from "../lib/softwareInstall";
@@ -150,6 +152,15 @@ function MySqlPanelBody({ tab }: Props) {
   const [state, setState] = useState<MysqlBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Socket-CLI mode: browse/query the remote MySQL by running its own
+  // `mysql` client over SSH as the terminal's effective user (auth_socket),
+  // bypassing the tunnel + DB account. Following `su root` → root DB
+  // access with no password. Off by default (native protocol is the
+  // primary path); toggled from the splash when an SSH session exists.
+  const [socketMode, setSocketMode] = useState(false);
+  // Unified sudo elevation for the socket path (lazy prompt + keychain +
+  // currentShellUser → sudo / sudo -u).
+  const elev = useSudoElevation(tab);
   const [readOnly, setReadOnly] = useState(true);
   const [writeConfirm, setWriteConfirm] = useState("");
   const [queryResult, setQueryResult] = useState<QueryExecutionResult | null>(null);
@@ -208,6 +219,48 @@ function MySqlPanelBody({ tab }: Props) {
     setBusy(true);
     setError("");
     try {
+      const tableTarget = draft ? null : (nextTable ?? state?.tableName ?? "").trim() || null;
+      const tableChanged = tableTarget !== (state?.tableName ?? "");
+      const effectiveOffset = draft ? 0 : nextOffset ?? (tableChanged ? 0 : pageOffset);
+      const effectiveSize = nextSize ?? pageSize;
+
+      // Socket-CLI path: run the remote `mysql` as the terminal's
+      // effective user over SSH — no tunnel, no DB account. Needs an
+      // SSH session on the tab.
+      if (socketMode && flow.sshTarget) {
+        const ssh = flow.sshTarget;
+        try {
+          const s = await cmd.mysqlBrowseSocket({
+            host: ssh.host,
+            port: ssh.port,
+            user: ssh.user,
+            authMode: ssh.authMode,
+            password: ssh.password,
+            keyPath: ssh.keyPath,
+            savedConnectionIndex: ssh.savedConnectionIndex,
+            database: (draft ? null : tab.mysqlDatabase.trim()) || null,
+            table: tableTarget,
+            offset: effectiveOffset,
+            limit: effectiveSize,
+            ...elev.getElevationArgs(),
+          });
+          setState(s);
+          setPageSize(s.pageSize);
+          setPageOffset(s.pageOffset);
+          if (s.databaseName !== tab.mysqlDatabase) {
+            updateTab(tab.id, { mysqlDatabase: s.databaseName });
+          }
+        } catch (e) {
+          const raw = e instanceof Error ? e.message : String(e);
+          if (!elev.handlePermissionDenied(raw, () => void browse(passwordOverride, nextTable, nextOffset, nextSize, draft))) {
+            setError(formatError(e));
+          }
+        } finally {
+          setBusy(false);
+        }
+        return;
+      }
+
       const target = await flow.ensureConnectionTarget(false, draft);
       const pw = passwordOverride !== undefined ? passwordOverride : tab.mysqlPassword;
       const connectionUser = draft?.user ?? tab.mysqlUser;
@@ -215,12 +268,6 @@ function MySqlPanelBody({ tab }: Props) {
       // A draft targets a different server — `state` / `pageOffset` in
       // this closure predate the `onReset` that draft-connect fired, so
       // the previous server's table and offset must not leak in.
-      const tableTarget = draft ? null : (nextTable ?? state?.tableName ?? "").trim() || null;
-      // Switching the active table resets paging — the previous
-      // table's offset doesn't apply.
-      const tableChanged = tableTarget !== (state?.tableName ?? "");
-      const effectiveOffset = draft ? 0 : nextOffset ?? (tableChanged ? 0 : pageOffset);
-      const effectiveSize = nextSize ?? pageSize;
       const s = await cmd.mysqlBrowse({
         host: target.host,
         port: target.port,
@@ -302,15 +349,32 @@ function MySqlPanelBody({ tab }: Props) {
     setNotice("");
     const needsWrite = sql.trim() !== "" && !isReadOnlySql(sql);
     try {
-      const target = await flow.ensureConnectionTarget();
-      const r = await cmd.mysqlExecute({
-        host: target.host,
-        port: target.port,
-        user: tab.mysqlUser.trim(),
-        password: tab.mysqlPassword,
-        database: tab.mysqlDatabase.trim() || null,
-        sql,
-      });
+      let r: QueryExecutionResult;
+      if (socketMode && flow.sshTarget) {
+        const ssh = flow.sshTarget;
+        r = await cmd.mysqlExecuteSocket({
+          host: ssh.host,
+          port: ssh.port,
+          user: ssh.user,
+          authMode: ssh.authMode,
+          password: ssh.password,
+          keyPath: ssh.keyPath,
+          savedConnectionIndex: ssh.savedConnectionIndex,
+          database: tab.mysqlDatabase.trim() || null,
+          sql,
+          ...elev.getElevationArgs(),
+        });
+      } else {
+        const target = await flow.ensureConnectionTarget();
+        r = await cmd.mysqlExecute({
+          host: target.host,
+          port: target.port,
+          user: tab.mysqlUser.trim(),
+          password: tab.mysqlPassword,
+          database: tab.mysqlDatabase.trim() || null,
+          sql,
+        });
+      }
       setQueryResult(r);
       setNotice(t("{elapsed} ms", { elapsed: r.elapsedMs }));
       sqlTabs.pushHistory({
@@ -327,7 +391,10 @@ function MySqlPanelBody({ tab }: Props) {
       }
     } catch (e) {
       setQueryResult(null);
-      setQueryError(formatError(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      if (!(socketMode && elev.handlePermissionDenied(raw, () => void runQuery()))) {
+        setQueryError(formatError(e));
+      }
     } finally {
       setQueryBusy(false);
     }
@@ -483,7 +550,7 @@ function MySqlPanelBody({ tab }: Props) {
     (!needsWrite || (!readOnly && writeConfirm.trim().toUpperCase() === "WRITE"));
 
   // ── Splash rows ────────────────────────────────────────────
-  const viaLabel = flow.sshTarget ? `${flow.sshTarget.user}@${flow.sshTarget.host}` : t("direct · localhost");
+  const viaLabel = flow.sshTarget ? `${effectiveShellUser(tab, flow.sshTarget)}@${flow.sshTarget.host}` : t("direct · localhost");
   const viaKind: DbSplashRowData["via"]["kind"] = flow.hasSsh ? "tunnel" : "direct";
 
   const savedRows: DbSplashRowData[] = flow.savedForKind.map((cred) => {
@@ -523,7 +590,7 @@ function MySqlPanelBody({ tab }: Props) {
     addr: `${det.host}:${det.port}`,
     via: {
       kind: det.source === "docker" ? "local" : "remote",
-      label: det.source === "docker" ? det.image || t("docker container") : det.processName || t("systemd unit"),
+      label: det.source === "docker" ? (det.image || t("docker container")) + (det.internal ? " · " + t("internal network") : "") : det.processName || t("systemd unit"),
     },
     stats: <span className="sep">—</span>,
     lastUsed: null,
@@ -1015,19 +1082,40 @@ function MySqlPanelBody({ tab }: Props) {
               : t("No SSH session on this tab — add a connection manually to connect directly.")
           }
           extraBody={
-            flow.hasSsh && mariadbInstalled === false ? (
-              <InlineInstallCta
-                packageId="mariadb"
-                sshParams={swSshParams}
-                swKey={swKey}
-                enableService={false}
-                hint={t("MySQL / MariaDB client is not installed on this host.")}
-                onInstalled={() => void flow.refreshDetection()}
-              />
-            ) : undefined
+            <>
+              {flow.sshTarget && (
+                <button
+                  type="button"
+                  className="btn is-compact"
+                  style={{ marginBottom: "var(--sp-2)" }}
+                  disabled={busy}
+                  onClick={() => {
+                    // Connect by running the remote `mysql` as the
+                    // terminal's effective user (socket / auth_socket) —
+                    // no DB account or tunnel needed.
+                    setSocketMode(true);
+                    void browse();
+                  }}
+                  title={t("Browse the local MySQL as the terminal's current user (socket auth, no DB account)")}
+                >
+                  {t("Connect as terminal user (socket)")}
+                </button>
+              )}
+              {flow.hasSsh && mariadbInstalled === false ? (
+                <InlineInstallCta
+                  packageId="mariadb"
+                  sshParams={swSshParams}
+                  swKey={swKey}
+                  enableService={false}
+                  hint={t("MySQL / MariaDB client is not installed on this host.")}
+                  onInstalled={() => void flow.refreshDetection()}
+                />
+              ) : null}
+            </>
           }
         />
         {dialogs}
+        {elev.dialog}
       </>
     );
   }
@@ -1460,6 +1548,7 @@ function MySqlPanelBody({ tab }: Props) {
           database: tab.mysqlDatabase || null,
         }}
       />
+      {elev.dialog}
     </>
   );
 }

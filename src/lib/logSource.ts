@@ -74,12 +74,12 @@ export const LOG_SYSTEM_PRESETS: LogSystemPreset[] = [
   {
     id: "docker-container",
     label: "docker container",
-    description: "docker logs -f <container>",
+    description: "docker logs -f --tail 500 <container>",
     argLabel: "CONTAINER",
     argPlaceholder: "id or name",
     compile: (arg) => {
       const c = arg.trim();
-      return c ? `docker logs -f ${shellEscape(c)}` : "";
+      return c ? `docker logs -f --tail 500 ${shellEscape(c)}` : "";
     },
   },
 ];

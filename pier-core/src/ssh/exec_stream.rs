@@ -182,9 +182,33 @@ impl SshSession {
     /// shell. Callers that care about shell quoting should
     /// apply their own escaping.
     pub async fn spawn_exec_stream(&self, command: &str) -> Result<ExecStream> {
-        let mut channel = self.handle_arc().channel_open_session().await?;
+        let channel = self.handle_arc().channel_open_session().await?;
         channel.exec(true, command).await?;
+        Ok(Self::stream_from_channel(channel))
+    }
 
+    /// Like [`Self::spawn_exec_stream`], but writes `stdin` to the
+    /// channel before streaming and **does not** send EOF — so a
+    /// `sudo -S` reader can consume the piped password while a follower
+    /// (`docker logs -f`, `tail -F`) keeps the channel open. Used to run
+    /// streaming commands elevated (see
+    /// [`Self::spawn_exec_stream_following`]).
+    pub async fn spawn_exec_stream_with_stdin(
+        &self,
+        command: &str,
+        stdin: &str,
+    ) -> Result<ExecStream> {
+        let channel = self.handle_arc().channel_open_session().await?;
+        channel.exec(true, command).await?;
+        if !stdin.is_empty() {
+            let _ = channel.data(stdin.as_bytes()).await;
+        }
+        Ok(Self::stream_from_channel(channel))
+    }
+
+    /// Build the streaming [`ExecStream`] from an already-`exec`'d
+    /// channel: spawns the producer task on the shared runtime.
+    fn stream_from_channel(mut channel: russh::Channel<russh::client::Msg>) -> ExecStream {
         let (tx, rx) = mpsc::channel::<ExecEvent>();
         let stop_flag = Arc::new(AtomicBool::new(false));
         let finished = Arc::new(AtomicBool::new(false));
@@ -259,17 +283,38 @@ impl SshSession {
             // Disconnected once it's drained the channel.
         });
 
-        Ok(ExecStream {
+        ExecStream {
             rx,
             stop_flag,
             exit_code,
             finished,
-        })
+        }
     }
 
     /// Synchronous wrapper for [`Self::spawn_exec_stream`].
     pub fn spawn_exec_stream_blocking(&self, command: &str) -> Result<ExecStream> {
         runtime::shared().block_on(self.spawn_exec_stream(command))
+    }
+
+    /// Spawn a streaming command following the session's elevation: if a
+    /// sudo password is armed (set via the host-elevation map), wrap in
+    /// `sudo -S -p ''` and pipe the password, so streaming readers like
+    /// `docker logs -f` run as root. Plain stream when not elevated.
+    /// (sudo only — `su` needs a tty, which the stream channel lacks.)
+    pub async fn spawn_exec_stream_following(&self, command: &str) -> Result<ExecStream> {
+        let pw = self.sudo_password_snapshot().await;
+        match pw {
+            Some(pw) if !pw.is_empty() => {
+                let (wrapped, stdin) = crate::sudo::wrap_command(command, &pw);
+                self.spawn_exec_stream_with_stdin(&wrapped, &stdin).await
+            }
+            _ => self.spawn_exec_stream(command).await,
+        }
+    }
+
+    /// Sync wrapper for [`Self::spawn_exec_stream_following`].
+    pub fn spawn_exec_stream_following_blocking(&self, command: &str) -> Result<ExecStream> {
+        runtime::shared().block_on(self.spawn_exec_stream_following(command))
     }
 }
 

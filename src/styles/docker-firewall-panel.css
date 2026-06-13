@@ -6,6 +6,8 @@
   min-height: 0;
   background: var(--surface);
   position: relative;
+  container-type: inline-size;
+  container-name: dk;
 }
 
 .dk-tabs {
@@ -618,6 +620,56 @@
 /* Level tinting (shared detector in lib/logLevels.ts): errors and
  * warnings pop out of the noise; debug recedes; info stays default. */
 .dlg-logs-line.lvl-error .dlg-logs-msg { color: var(--neg); }
+
+@container dk (max-width: 340px) {
+  .dk-primary,
+  .dk-toolbar,
+  .dk-insp-head {
+    flex-wrap: wrap;
+  }
+
+  .dk-search,
+  .dk-pull {
+    flex: 1 0 100%;
+  }
+
+  .dk-card {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .dk-card-body {
+    flex: 1 1 calc(100% - var(--sp-8));
+  }
+
+  .dk-card-meta {
+    order: 3;
+    flex-basis: 100%;
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .dk-card-actions {
+    order: 4;
+    margin-left: auto;
+  }
+
+  .dk-kv {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-1);
+  }
+
+  .dk-insp-name {
+    flex-basis: 100%;
+  }
+}
+
+@container dk (max-width: 300px) {
+  .dk-check span,
+  .dk-card-meta {
+    display: none;
+  }
+}
 .dlg-logs-line.lvl-warn .dlg-logs-msg { color: var(--warn); }
 .dlg-logs-line.lvl-debug .dlg-logs-msg { color: var(--muted); }
 .dlg-logs-n {

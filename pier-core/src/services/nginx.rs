@@ -521,7 +521,10 @@ pub async fn create_file(
     // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
     // and pipe the password. Pre-existing NOPASSWD setups continue
     // to work via the `sudo -n ` fallback when no password is set.
-    let prefix = if is_root || session.has_sudo_password().await {
+    let prefix = if is_root
+        || session.has_sudo_password().await
+        || session.is_elevation_armed().await
+    {
         ""
     } else {
         "sudo -n "
@@ -643,7 +646,10 @@ pub async fn save_file_validate_reload(
     // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
     // and pipe the password. Pre-existing NOPASSWD setups continue
     // to work via the `sudo -n ` fallback when no password is set.
-    let prefix = if is_root || session.has_sudo_password().await {
+    let prefix = if is_root
+        || session.has_sudo_password().await
+        || session.is_elevation_armed().await
+    {
         ""
     } else {
         "sudo -n "
@@ -698,7 +704,7 @@ pub async fn save_file_validate_reload(
     if write_code != 0 {
         // Best-effort restore so we don't leave the file in a bad state.
         let _ = session
-            .exec_command(&format!(
+            .exec_with_sudo(&format!(
                 "{prefix}mv {bak} {target}",
                 bak = shell_single_quote(&backup_path),
                 target = shell_single_quote(path),
@@ -727,7 +733,7 @@ pub async fn save_file_validate_reload(
             target = shell_single_quote(path),
         );
         let (rc, rout) = session
-            .exec_command(&restore_cmd)
+            .exec_with_sudo(&restore_cmd)
             .await
             .unwrap_or((-1, String::new()));
         let restored = rc == 0;
@@ -803,13 +809,16 @@ pub async fn validate(session: &SshSession) -> Result<NginxValidateResult> {
     // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
     // and pipe the password. Pre-existing NOPASSWD setups continue
     // to work via the `sudo -n ` fallback when no password is set.
-    let prefix = if is_root || session.has_sudo_password().await {
+    let prefix = if is_root
+        || session.has_sudo_password().await
+        || session.is_elevation_armed().await
+    {
         ""
     } else {
         "sudo -n "
     };
     let (code, out) = session
-        .exec_command(&format!("{prefix}nginx -t 2>&1"))
+        .exec_with_sudo(&format!("{prefix}nginx -t 2>&1"))
         .await?;
     Ok(NginxValidateResult {
         ok: code == 0,
@@ -840,13 +849,16 @@ pub async fn reload(session: &SshSession) -> Result<NginxValidateResult> {
     // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
     // and pipe the password. Pre-existing NOPASSWD setups continue
     // to work via the `sudo -n ` fallback when no password is set.
-    let prefix = if is_root || session.has_sudo_password().await {
+    let prefix = if is_root
+        || session.has_sudo_password().await
+        || session.is_elevation_armed().await
+    {
         ""
     } else {
         "sudo -n "
     };
     let (code, out) = session
-        .exec_command(&format!(
+        .exec_with_sudo(&format!(
             "{prefix}sh -c 'if command -v systemctl >/dev/null 2>&1; then \
                 systemctl reload nginx 2>&1; \
              else \
@@ -894,7 +906,10 @@ pub async fn toggle_site(
     // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
     // and pipe the password. Pre-existing NOPASSWD setups continue
     // to work via the `sudo -n ` fallback when no password is set.
-    let prefix = if is_root || session.has_sudo_password().await {
+    let prefix = if is_root
+        || session.has_sudo_password().await
+        || session.is_elevation_armed().await
+    {
         ""
     } else {
         "sudo -n "

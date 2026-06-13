@@ -42,6 +42,16 @@ type Store = {
   openSettingsPage: string | undefined;
   /** Fire an "open Settings on page X" request. App.tsx listens. */
   requestOpenSettings: (page?: string) => void;
+  /** Bumped every time something (e.g. the AI panel's insert-into-
+   *  terminal button) wants keyboard focus returned to a terminal. */
+  focusTerminalSeq: number;
+  /** Session id of the terminal that should grab focus. The matching
+   *  TerminalPanel focuses its viewport; others ignore the request. */
+  focusTerminalSessionId: string | undefined;
+  /** Fire a "pull focus back onto terminal <sessionId>" request. The
+   *  AI panel calls this after inserting a command so the user can
+   *  review and press Enter without first clicking the terminal. */
+  requestFocusTerminal: (sessionId: string) => void;
 };
 
 export const useUiActionsStore = create<Store>((set) => ({
@@ -63,5 +73,12 @@ export const useUiActionsStore = create<Store>((set) => ({
     set((state) => ({
       openSettingsSeq: state.openSettingsSeq + 1,
       openSettingsPage: page,
+    })),
+  focusTerminalSeq: 0,
+  focusTerminalSessionId: undefined,
+  requestFocusTerminal: (sessionId: string) =>
+    set((state) => ({
+      focusTerminalSeq: state.focusTerminalSeq + 1,
+      focusTerminalSessionId: sessionId,
     })),
 }));

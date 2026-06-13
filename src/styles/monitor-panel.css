@@ -6,6 +6,8 @@
   flex-direction: column;
   gap: var(--sp-3);
   min-width: 0;
+  container-type: inline-size;
+  container-name: mon;
 }
 
 .mon-host {
@@ -511,4 +513,83 @@
   text-align: center;
   color: var(--muted);
   padding: var(--sp-3) var(--sp-3);
+}
+
+@container mon (max-width: 340px) {
+  .mon {
+    padding: var(--sp-2);
+  }
+
+  .mon-host-top,
+  .mon-block-head,
+  .mon-proc-toolbar,
+  .mon-proc-head-tools {
+    flex-wrap: wrap;
+  }
+
+  .mon-host-uptime,
+  .mon-block-meta {
+    margin-left: 0;
+  }
+
+  .mon-host-uptime {
+    flex-basis: 100%;
+  }
+
+  .mon-host-meta {
+    margin-left: 0;
+  }
+
+  .mon-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mon-actions {
+    flex-wrap: wrap;
+  }
+
+  .mon-proc-filter {
+    flex: 1 0 100%;
+    order: 2;
+  }
+
+  .mon-table--procs .mon-col-ports,
+  .mon-table--procs th:nth-child(3),
+  .mon-table--procs td:nth-child(3),
+  .mon-table--disks .mon-col-disk-type,
+  .mon-table--disks th:nth-child(2),
+  .mon-table--disks td:nth-child(2) {
+    display: none;
+  }
+
+  .mon-tree-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: var(--sp-1);
+  }
+
+  .mon-tree-type,
+  .mon-tree-size {
+    display: none;
+  }
+
+  .mon-tree-mount {
+    text-align: left;
+    white-space: normal;
+  }
+}
+
+@container mon (max-width: 300px) {
+  .mon-block-meta,
+  .mon-actions-hint,
+  .mon-table--procs .mon-col-pid,
+  .mon-table--procs th:nth-child(1),
+  .mon-table--procs td:nth-child(1),
+  .mon-table--procs .mon-col-actions,
+  .mon-table--procs th:nth-child(6),
+  .mon-table--procs td:nth-child(6),
+  .mon-table--disks th:nth-child(5),
+  .mon-table--disks td:nth-child(5) {
+    display: none;
+  }
 }

@@ -15,7 +15,9 @@
 //!    [`crate::services::docker::list_containers`]. Images are
 //!    classified against a small known-DB list. Host-bound
 //!    ports (`0.0.0.0:3307->3306/tcp`) become reachable
-//!    instances; internal-only containers are skipped.
+//!    instances; containers with no published port are resolved
+//!    to their bridge IP via `docker inspect` and surfaced as
+//!    `internal` instances (reachable from the docker host).
 //! 2. **Listening sockets** — `ss -tlnp` (with `netstat -tlnp`
 //!    as fallback). Any listener on a DB default port
 //!    (3306/3307, 5432/5433, 6379/6380, …) that wasn't already
@@ -87,6 +89,11 @@ pub struct DetectedDbMetadata {
     /// `comm` name for the PID, e.g. `mysqld`, `docker-proxy`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_name: Option<String>,
+    /// `true` when this is a docker container with NO published host
+    /// port — it talks only on the bridge network. `host` is then the
+    /// container's bridge IP, dialable from the docker host itself.
+    #[serde(default)]
+    pub internal: bool,
 }
 
 /// One reachable database instance found on the remote host.
@@ -207,11 +214,22 @@ async fn probe_docker(session: &SshSession) -> Vec<DetectedDbInstance> {
     };
 
     let mut out = Vec::new();
+    let mut internal: Vec<(docker::Container, ImageKind)> = Vec::new();
     for c in containers {
         let Some(kind) = classify_image(&c.image) else {
             continue;
         };
-        for mapping in parse_port_mappings(&c.ports) {
+        let mappings = parse_port_mappings(&c.ports);
+        if mappings.is_empty() {
+            // No published host port — the container speaks only on the
+            // docker bridge network (the common Compose pattern where
+            // only the app/proxy publishes). It's still reachable from
+            // THIS host (the docker host itself) via the container's
+            // bridge IP, so resolve that below instead of dropping it.
+            internal.push((c, kind));
+            continue;
+        }
+        for mapping in mappings {
             if mapping.container_port != default_port(kind) {
                 // If the container exposes an unusual internal port,
                 // still accept it — some deployments run mysql on
@@ -241,7 +259,85 @@ async fn probe_docker(session: &SshSession) -> Vec<DetectedDbInstance> {
             });
         }
     }
+    if !internal.is_empty() {
+        out.extend(probe_internal_db_containers(session, &internal).await);
+    }
     out
+}
+
+/// Resolve docker containers that expose a DB port but never publish
+/// it to the host. From the docker host these are reachable on the
+/// container's bridge IP, so we surface them as `internal` instances
+/// (host = bridge IP) instead of dropping them. One `docker inspect`
+/// covers every internal container; the template prints one line per
+/// container as `<fullId>|<ip> <ip> |<port/proto> <port/proto>`.
+async fn probe_internal_db_containers(
+    session: &SshSession,
+    items: &[(docker::Container, ImageKind)],
+) -> Vec<DetectedDbInstance> {
+    let tmpl = "{{.Id}}|{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}|{{range $p, $_ := .Config.ExposedPorts}}{{$p}} {{end}}";
+    let mut args: Vec<String> = vec!["inspect".into(), "--format".into(), tmpl.into()];
+    args.extend(items.iter().map(|(c, _)| c.id.clone()));
+    let stdout = match docker::exec(session, &args).await {
+        // A bad id makes `docker inspect` exit non-zero but it still
+        // prints the good lines, so we parse whatever came back.
+        Ok((_, s)) => s,
+        Err(e) => {
+            log::debug!("db_detect: docker inspect (internal) failed: {e}");
+            return Vec::new();
+        }
+    };
+
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        let Some((full_id, ip, exposed_port)) = parse_internal_inspect_line(line) else {
+            continue;
+        };
+        let Some((c, kind)) = items.iter().find(|(c, _)| {
+            c.id == full_id || c.id.starts_with(&full_id) || full_id.starts_with(&c.id)
+        }) else {
+            continue;
+        };
+        let port = exposed_port.unwrap_or_else(|| default_port(*kind));
+        let label = container_label(&c.names, &c.image);
+        let signature = format!("docker://{}/{}:{}", short_container_id(&c.id), ip, port);
+        out.push(DetectedDbInstance {
+            source: DetectionSource::Docker,
+            kind: to_cred_kind(*kind),
+            host: ip,
+            port,
+            label,
+            metadata: DetectedDbMetadata {
+                image: Some(c.image.clone()),
+                container_id: Some(short_container_id(&c.id)),
+                internal: true,
+                ..Default::default()
+            },
+            signature,
+        });
+    }
+    out
+}
+
+/// Parse one line of the internal-container inspect template:
+/// `<fullId>|<ip> <ip> |<port/proto> <port/proto>`. Returns
+/// `(full_id, first_bridge_ip, first_tcp_port)`. `None` when the line
+/// carries no usable container IP (left its network / inspect error).
+fn parse_internal_inspect_line(line: &str) -> Option<(String, String, Option<u16>)> {
+    let mut parts = line.splitn(3, '|');
+    let id = parts.next()?.trim();
+    if id.is_empty() {
+        return None;
+    }
+    let ips = parts.next().unwrap_or("");
+    let ports = parts.next().unwrap_or("");
+    let ip = ips.split_whitespace().find(|s| !s.is_empty())?.to_string();
+    // Prefer a tcp-exposed port; ignore udp. `5432/tcp` → 5432.
+    let port = ports
+        .split_whitespace()
+        .filter(|tok| tok.ends_with("/tcp") || !tok.contains('/'))
+        .find_map(|tok| tok.split('/').next().unwrap_or(tok).parse::<u16>().ok());
+    Some((id.to_string(), ip, port))
 }
 
 async fn probe_listening_sockets(session: &SshSession) -> Vec<DetectedDbInstance> {
@@ -249,9 +345,13 @@ async fn probe_listening_sockets(session: &SshSession) -> Vec<DetectedDbInstance
     // fallback for old distros. `2>/dev/null` swallows
     // permission warnings from `ss -p` when run as a non-root
     // user — the process column will just be empty, which is
-    // fine; we still get host+port.
+    // fine; we still get host+port. Run via `exec_with_sudo` so that
+    // when the session follows a terminal `sudo -i`/`su` (captured
+    // password or armed NOPASSWD) the process column is filled in and we
+    // can tell a mysql/redis socket from a stray listener; degrades to
+    // the login user otherwise.
     let cmd = "(ss -tlnp 2>/dev/null; netstat -tlnp 2>/dev/null) | head -n 500";
-    let stdout = match session.exec_command(cmd).await {
+    let stdout = match session.exec_with_sudo(cmd).await {
         Ok((_, s)) => s,
         Err(e) => {
             log::debug!("db_detect: ss/netstat failed: {e}");
@@ -341,7 +441,8 @@ fn classify_image(image: &str) -> Option<ImageKind> {
         "mysql" | "mariadb" | "percona" | "percona-server" | "percona-mysql" => {
             Some(ImageKind::Mysql)
         }
-        "postgres" | "postgresql" | "timescaledb" | "citus" => Some(ImageKind::Postgres),
+        "postgres" | "postgresql" | "timescaledb" | "citus" | "pgvector" | "postgis"
+        | "pgautoupgrade" | "pgvecto-rs" => Some(ImageKind::Postgres),
         "redis" | "redis-stack" | "redis-stack-server" | "valkey" | "keydb" => {
             Some(ImageKind::Redis)
         }
@@ -596,6 +697,41 @@ mod tests {
             classify_image("quay.io/citus/citus:12"),
             Some(ImageKind::Postgres),
         );
+        // pgvector / postgis and friends are Postgres-flavored too.
+        assert_eq!(
+            classify_image("pgvector/pgvector:pg16"),
+            Some(ImageKind::Postgres),
+        );
+        assert_eq!(
+            classify_image("ankane/pgvector:latest"),
+            Some(ImageKind::Postgres),
+        );
+        assert_eq!(
+            classify_image("postgis/postgis:16-3.4"),
+            Some(ImageKind::Postgres),
+        );
+    }
+
+    #[test]
+    fn parse_internal_inspect_line_extracts_ip_and_tcp_port() {
+        let (id, ip, port) = parse_internal_inspect_line("abc123|172.18.0.5 |5432/tcp ").unwrap();
+        assert_eq!(id, "abc123");
+        assert_eq!(ip, "172.18.0.5");
+        assert_eq!(port, Some(5432));
+
+        // First non-empty IP wins; udp is ignored in favor of tcp.
+        let (_, ip, port) =
+            parse_internal_inspect_line("id| 10.0.0.2 10.0.0.3 |53/udp 6379/tcp ").unwrap();
+        assert_eq!(ip, "10.0.0.2");
+        assert_eq!(port, Some(6379));
+
+        // No exposed port → None (caller falls back to the default port).
+        let (_, _, port) = parse_internal_inspect_line("id|172.17.0.9 |").unwrap();
+        assert_eq!(port, None);
+
+        // No IP at all → the whole line is unusable.
+        assert!(parse_internal_inspect_line("id| |5432/tcp").is_none());
+        assert!(parse_internal_inspect_line("").is_none());
     }
 
     #[test]

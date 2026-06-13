@@ -276,6 +276,14 @@ pub struct PackageDetail {
     /// header shows after probe_all; surfaced here so a stale row
     /// snapshot can't disagree with the details pane.
     pub installed_version: Option<String>,
+    /// Whether the package manager reports a newer installable version.
+    /// Computed authoritatively by the manager itself (`dpkg
+    /// --compare-versions`, `dnf check-update`, …) so a Debian/RPM
+    /// revision suffix on the candidate (`1.28.3-2ubuntu1.4`) is not
+    /// mistaken for an update over the bare upstream installed version
+    /// (`1.28.3`). `None` when it couldn't be determined (e.g. not
+    /// installed via the manager, or an unsupported manager).
+    pub update_available: Option<bool>,
     /// Per-variant install state when the descriptor declares
     /// `version_variants`. Empty for single-version software.
     pub variants: Vec<PackageVariantStatus>,
@@ -1938,13 +1946,12 @@ pub struct DbMetrics {
 /// system user via `sudo` (same auth path as `postgres_create_user`).
 pub async fn postgres_metrics(session: &SshSession) -> Result<DbMetrics> {
     let env = probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
     let inner = "su - postgres -c 'psql -tAF\"|\" -c \"\
       SELECT \
         (SELECT count(*) FROM pg_stat_activity), \
         (SELECT pg_size_pretty(sum(pg_database_size(datname))) FROM pg_database)\"' 2>&1";
-    let cmd = format!("{prefix}sh -c {} 2>&1", shell_single_quote(inner));
-    let (code, stdout) = session.exec_command(&cmd).await?;
+    let cmd = format!("sh -c {} 2>&1", shell_single_quote(inner));
+    let (code, stdout) = session.exec_maybe_sudo(&cmd, env.is_root).await?;
     if code != 0 {
         return Ok(DbMetrics {
             kind: "postgres".to_string(),
@@ -1971,12 +1978,8 @@ pub async fn postgres_metrics(session: &SshSession) -> Result<DbMetrics> {
 /// Probe MySQL/MariaDB metrics via `SHOW STATUS`. Uses
 /// `auth_socket` first (sudo mysql); accepts an optional root
 /// password for distros where root requires one.
-pub async fn mysql_metrics(
-    session: &SshSession,
-    root_password: Option<&str>,
-) -> Result<DbMetrics> {
+pub async fn mysql_metrics(session: &SshSession, root_password: Option<&str>) -> Result<DbMetrics> {
     let env = probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
     let pwd_env = match root_password {
         Some(p) if !p.is_empty() => format!("MYSQL_PWD={} ", shell_single_quote(p)),
         _ => String::new(),
@@ -1986,8 +1989,8 @@ pub async fn mysql_metrics(
         "{pwd_env}mysql -u root -B -e {} 2>&1",
         shell_single_quote(sql),
     );
-    let cmd = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
-    let (code, stdout) = session.exec_command(&cmd).await?;
+    let cmd = format!("sh -c {} 2>&1", shell_single_quote(&inner));
+    let (code, stdout) = session.exec_maybe_sudo(&cmd, env.is_root).await?;
     if code != 0 {
         return Ok(DbMetrics {
             kind: "mariadb".to_string(),
@@ -2011,7 +2014,8 @@ pub async fn mysql_metrics(
             }
         }
     }
-    let memory_mib = read_process_rss_mib(session, "mysqld").await
+    let memory_mib = read_process_rss_mib(session, "mysqld")
+        .await
         .or(read_process_rss_mib(session, "mariadbd").await);
     Ok(DbMetrics {
         kind: "mariadb".to_string(),
@@ -2025,10 +2029,10 @@ pub async fn mysql_metrics(
 /// Probe Redis metrics via `redis-cli INFO clients` + `INFO memory`.
 pub async fn redis_metrics(session: &SshSession) -> Result<DbMetrics> {
     let env = probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
-    let inner = "redis-cli INFO clients 2>&1; redis-cli INFO memory 2>&1; redis-cli INFO stats 2>&1";
-    let cmd = format!("{prefix}sh -c {} 2>&1", shell_single_quote(inner));
-    let (code, stdout) = session.exec_command(&cmd).await?;
+    let inner =
+        "redis-cli INFO clients 2>&1; redis-cli INFO memory 2>&1; redis-cli INFO stats 2>&1";
+    let cmd = format!("sh -c {} 2>&1", shell_single_quote(inner));
+    let (code, stdout) = session.exec_maybe_sudo(&cmd, env.is_root).await?;
     if code != 0 || stdout.contains("Could not connect") {
         return Ok(DbMetrics {
             kind: "redis".to_string(),
@@ -2133,16 +2137,13 @@ pub async fn list_user_installed(session: &SshSession) -> Result<Vec<String>> {
                 .to_string()
         }
         PackageManager::Yum => {
-            "yum list installed 2>/dev/null | awk 'NR>1 {print $1}' | sed 's/\\..*//'"
-                .to_string()
+            "yum list installed 2>/dev/null | awk 'NR>1 {print $1}' | sed 's/\\..*//'".to_string()
         }
         PackageManager::Apk => "cat /etc/apk/world 2>/dev/null".to_string(),
         PackageManager::Pacman => "pacman -Qeq 2>/dev/null".to_string(),
-        PackageManager::Zypper => {
-            "zypper search -i --installed-only -t package 2>/dev/null \
+        PackageManager::Zypper => "zypper search -i --installed-only -t package 2>/dev/null \
              | awk -F'|' 'NR>4 {gsub(/ /, \"\", $2); print $2}'"
-                .to_string()
-        }
+            .to_string(),
     };
     let (_code, stdout) = session.exec_command(&cmd).await?;
     let mut out: Vec<String> = stdout
@@ -2226,7 +2227,8 @@ const COMPOSE_TEMPLATES: &[ComposeTemplate] = &[
     ComposeTemplate {
         id: "postgres",
         display_name: "PostgreSQL 17",
-        description: "PostgreSQL 17 with persistent volume; default password = piertest. Change it!",
+        description:
+            "PostgreSQL 17 with persistent volume; default password = piertest. Change it!",
         yaml: r#"services:
   postgres:
     image: postgres:17
@@ -2419,8 +2421,10 @@ pub async fn compose_apply_inline(
          cd \"$dir\"; \
          docker compose up -d 2>&1",
     );
-    let SudoCommand { full: command, display: command_display } =
-        wrap_sudo_sh(env.is_root, &inner, sudo_password);
+    let SudoCommand {
+        full: command,
+        display: command_display,
+    } = wrap_sudo_sh(env.is_root, &inner, sudo_password);
     let (exit_code, stdout) = session.exec_command(&command).await?;
     let stdout_clean = sanitize_sudo_output(&stdout, sudo_password);
     let output_tail = stdout_clean
@@ -2479,8 +2483,10 @@ pub async fn compose_down(
          docker compose down 2>&1",
         id = template_id,
     );
-    let SudoCommand { full: command, display: command_display } =
-        wrap_sudo_sh(env.is_root, &inner, sudo_password);
+    let SudoCommand {
+        full: command,
+        display: command_display,
+    } = wrap_sudo_sh(env.is_root, &inner, sudo_password);
     let (exit_code, stdout) = session.exec_command(&command).await?;
     let stdout_clean = sanitize_sudo_output(&stdout, sudo_password);
     let output_tail = stdout_clean
@@ -2523,8 +2529,7 @@ pub fn compose_apply_inline_blocking(
     yaml: &str,
     sudo_password: Option<&str>,
 ) -> Result<PostgresActionReport> {
-    crate::ssh::runtime::shared()
-        .block_on(compose_apply_inline(session, id, yaml, sudo_password))
+    crate::ssh::runtime::shared().block_on(compose_apply_inline(session, id, yaml, sudo_password))
 }
 
 /// Blocking wrapper for [`compose_down`].
@@ -2580,8 +2585,7 @@ pub fn topo_sort_bundle(ids: &[&str]) -> Vec<String> {
 
     // Pre-seed indegree with every input id so the find() loop
     // below sees a value even for nodes that have no predecessors.
-    let mut indegree: HashMap<&str, usize> =
-        ids.iter().map(|&s| (s, 0_usize)).collect();
+    let mut indegree: HashMap<&str, usize> = ids.iter().map(|&s| (s, 0_usize)).collect();
     let mut succs: HashMap<&str, Vec<&str>> = HashMap::new();
 
     for &id in ids {
@@ -2682,8 +2686,7 @@ pub fn co_install_suggestions(installed_id: &str) -> &'static [&'static str] {
 /// Path injected by src-tauri at startup. Set once; later calls
 /// silently no-op so a misbehaving caller can't swap the file
 /// after the catalog has already been built.
-static USER_EXTRAS_PATH: std::sync::OnceLock<std::path::PathBuf> =
-    std::sync::OnceLock::new();
+static USER_EXTRAS_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 /// Memoized merged catalog: REGISTRY + parsed user extras. Built
 /// lazily on first access. Subsequent edits to the extras file are
@@ -2709,8 +2712,7 @@ pub fn user_extras_path() -> Option<&'static std::path::Path> {
 
 /// Memoized merged bundle catalog: built-in BUNDLES + user extras.
 /// Same lazy + Box::leak pattern as MERGED_REGISTRY.
-static MERGED_BUNDLES: std::sync::OnceLock<&'static [SoftwareBundle]> =
-    std::sync::OnceLock::new();
+static MERGED_BUNDLES: std::sync::OnceLock<&'static [SoftwareBundle]> = std::sync::OnceLock::new();
 
 fn ensure_user_extras_loaded() -> &'static UserExtrasParsed {
     static CACHED: std::sync::OnceLock<UserExtrasParsed> = std::sync::OnceLock::new();
@@ -2744,8 +2746,7 @@ fn merged_registry() -> &'static [PackageDescriptor] {
     MERGED_REGISTRY.get_or_init(|| {
         let extras = ensure_user_extras_loaded();
         let mut v: Vec<PackageDescriptor> = REGISTRY.iter().cloned().collect();
-        let built_in_ids: std::collections::HashSet<&str> =
-            REGISTRY.iter().map(|d| d.id).collect();
+        let built_in_ids: std::collections::HashSet<&str> = REGISTRY.iter().map(|d| d.id).collect();
         for e in &extras.packages {
             if built_in_ids.contains(e.id) {
                 eprintln!(
@@ -2764,8 +2765,7 @@ fn merged_bundles() -> &'static [SoftwareBundle] {
     MERGED_BUNDLES.get_or_init(|| {
         let extras = ensure_user_extras_loaded();
         let mut v: Vec<SoftwareBundle> = BUNDLES.iter().copied().collect();
-        let built_in_ids: std::collections::HashSet<&str> =
-            BUNDLES.iter().map(|b| b.id).collect();
+        let built_in_ids: std::collections::HashSet<&str> = BUNDLES.iter().map(|b| b.id).collect();
         for b in &extras.bundles {
             if built_in_ids.contains(b.id) {
                 eprintln!(
@@ -2843,9 +2843,7 @@ struct UserBundleJson {
 /// Two-shape JSON deserialiser. Accepts either:
 ///   * `[ {package}, {package}, ... ]`               (legacy)
 ///   * `{ "packages": [...], "bundles": [...] }`     (wrapper)
-fn parse_user_extras_bytes(
-    bytes: &[u8],
-) -> std::result::Result<UserExtrasWrapper, String> {
+fn parse_user_extras_bytes(bytes: &[u8]) -> std::result::Result<UserExtrasWrapper, String> {
     // Probe the first non-whitespace byte: `[` → legacy, `{` → wrapper.
     let first = bytes.iter().copied().find(|b| !b.is_ascii_whitespace());
     if first == Some(b'[') {
@@ -2860,9 +2858,7 @@ fn parse_user_extras_bytes(
     }
 }
 
-fn load_user_extras(
-    path: &std::path::Path,
-) -> std::result::Result<UserExtras, String> {
+fn load_user_extras(path: &std::path::Path) -> std::result::Result<UserExtras, String> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -2888,9 +2884,7 @@ fn load_user_extras(
     Ok(UserExtras { packages, bundles })
 }
 
-fn validate_and_leak_bundle(
-    raw: UserBundleJson,
-) -> std::result::Result<SoftwareBundle, String> {
+fn validate_and_leak_bundle(raw: UserBundleJson) -> std::result::Result<SoftwareBundle, String> {
     if raw.id.trim().is_empty() {
         return Err("bundle missing id".into());
     }
@@ -2920,10 +2914,7 @@ fn validate_and_leak(raw: UserPackageJson) -> std::result::Result<PackageDescrip
         return Err(format!("entry '{}' missing probeCommand", raw.id));
     }
     if raw.install_packages.is_empty() {
-        return Err(format!(
-            "entry '{}' has empty installPackages",
-            raw.id
-        ));
+        return Err(format!("entry '{}' has empty installPackages", raw.id));
     }
     let mut install: Vec<(PackageManager, &'static [&'static str])> =
         Vec::with_capacity(raw.install_packages.len());
@@ -3037,11 +3028,7 @@ pub async fn read_os_release(session: &SshSession) -> (String, String) {
     let id = if !id.is_empty() {
         id
     } else {
-        id_like
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string()
+        id_like.split_whitespace().next().unwrap_or("").to_string()
     };
     (id, pretty)
 }
@@ -3076,9 +3063,10 @@ pub fn pick_package_manager(distro_id: &str) -> Option<PackageManager> {
         // OpenCloudOS, TencentOS, Anolis, Asianux). All ship dnf as
         // the default; the few that still default to yum (CentOS 7,
         // RHEL 7) get auto-aliased by our install command.
-        "fedora" | "rhel" | "centos" | "rocky" | "almalinux" | "ol" | "amzn"
-        | "openeuler" | "kylin" | "anolis" | "opencloudos" | "tencentos"
-        | "asianux" | "circlelinux" => Some(PackageManager::Dnf),
+        "fedora" | "rhel" | "centos" | "rocky" | "almalinux" | "ol" | "amzn" | "openeuler"
+        | "kylin" | "anolis" | "opencloudos" | "tencentos" | "asianux" | "circlelinux" => {
+            Some(PackageManager::Dnf)
+        }
         // Alpine
         "alpine" => Some(PackageManager::Apk),
         // Arch-family
@@ -3258,9 +3246,8 @@ pub async fn available_versions(
     id: &str,
     variant_key: Option<&str>,
 ) -> Result<Vec<String>> {
-    let descriptor = descriptor(id).ok_or_else(|| {
-        SshError::InvalidConfig(format!("unknown package id: {id}"))
-    })?;
+    let descriptor = descriptor(id)
+        .ok_or_else(|| SshError::InvalidConfig(format!("unknown package id: {id}")))?;
     let env = probe_host_env(session).await;
     let Some(manager) = env.package_manager else {
         return Ok(Vec::new());
@@ -3471,8 +3458,14 @@ pub fn uninstall_blocking<F>(
 where
     F: FnMut(&str),
 {
-    crate::ssh::runtime::shared()
-        .block_on(uninstall(session, id, opts, sudo_password, on_line, cancel))
+    crate::ssh::runtime::shared().block_on(uninstall(
+        session,
+        id,
+        opts,
+        sudo_password,
+        on_line,
+        cancel,
+    ))
 }
 
 /// Drive a `systemctl <verb> <unit>` for one descriptor's service.
@@ -3512,8 +3505,13 @@ pub fn service_action_blocking<F>(
 where
     F: FnMut(&str),
 {
-    crate::ssh::runtime::shared()
-        .block_on(service_action(session, descriptor, action, sudo_password, on_line))
+    crate::ssh::runtime::shared().block_on(service_action(
+        session,
+        descriptor,
+        action,
+        sudo_password,
+        on_line,
+    ))
 }
 
 /// Pull the most recent `lines` rows of `journalctl -u <unit>` output
@@ -3570,13 +3568,12 @@ pub struct PostgresActionReport {
 /// `-u postgres` boilerplate in one place.
 async fn run_pg_psql(session: &SshSession, sql: &str) -> Result<PostgresActionReport> {
     let env = probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
     let inner = format!(
         "su - postgres -c {} 2>&1",
         shell_single_quote(&format!("psql -tAc {}", shell_single_quote(sql))),
     );
-    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
-    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let command = format!("sh -c {} 2>&1", shell_single_quote(&inner));
+    let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
     let output_tail = stdout
         .lines()
         .rev()
@@ -3668,11 +3665,8 @@ pub async fn postgres_create_db(
 /// Path discovery is per-distro: we ask postgres for SHOW
 /// hba_file / config_file via psql so we don't hardcode
 /// `/etc/postgresql/X/main/...`.
-pub async fn postgres_open_remote(
-    session: &SshSession,
-) -> Result<PostgresActionReport> {
+pub async fn postgres_open_remote(session: &SshSession) -> Result<PostgresActionReport> {
     let env = probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
     // Sequence:
     //   1. discover paths via psql (-tA strips formatting)
     //   2. append/replace listen_addresses
@@ -3692,8 +3686,8 @@ pub async fn postgres_open_remote(
       fi; \
       systemctl reload postgresql 2>&1 || systemctl restart postgresql 2>&1 || true; \
       echo OK";
-    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(inner));
-    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let command = format!("sh -c {} 2>&1", shell_single_quote(inner));
+    let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
     let output_tail = stdout
         .lines()
         .rev()
@@ -3739,8 +3733,7 @@ pub fn postgres_create_db_blocking(
     db_name: &str,
     owner: &str,
 ) -> Result<PostgresActionReport> {
-    crate::ssh::runtime::shared()
-        .block_on(postgres_create_db(session, db_name, owner))
+    crate::ssh::runtime::shared().block_on(postgres_create_db(session, db_name, owner))
 }
 
 /// Blocking wrapper for [`postgres_open_remote`].
@@ -3760,20 +3753,13 @@ async fn run_mysql(
     root_password: Option<&str>,
 ) -> Result<PostgresActionReport> {
     let env = probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
     let pwd_env = match root_password {
-        Some(p) if !p.is_empty() => format!(
-            "MYSQL_PWD={} ",
-            shell_single_quote(p)
-        ),
+        Some(p) if !p.is_empty() => format!("MYSQL_PWD={} ", shell_single_quote(p)),
         _ => String::new(),
     };
-    let inner = format!(
-        "{pwd_env}mysql -u root -e {} 2>&1",
-        shell_single_quote(sql),
-    );
-    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
-    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let inner = format!("{pwd_env}mysql -u root -e {} 2>&1", shell_single_quote(sql),);
+    let command = format!("sh -c {} 2>&1", shell_single_quote(&inner));
+    let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
     let output_tail = stdout
         .lines()
         .rev()
@@ -3851,11 +3837,8 @@ pub async fn mysql_create_db(
 /// `bind-address = 0.0.0.0` in the daemon config and restarting.
 /// Walks every `mysqld.cnf` / `my.cnf` fragment that ships across
 /// the apt/dnf packaging variants. Best-effort restart at the end.
-pub async fn mysql_open_remote(
-    session: &SshSession,
-) -> Result<PostgresActionReport> {
+pub async fn mysql_open_remote(session: &SshSession) -> Result<PostgresActionReport> {
     let env = probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
     // Targets:
     //   apt MariaDB  → /etc/mysql/mariadb.conf.d/50-server.cnf
     //   apt MySQL    → /etc/mysql/mysql.conf.d/mysqld.cnf
@@ -3884,8 +3867,8 @@ pub async fn mysql_open_remote(
       fi; \
       systemctl restart mariadb 2>&1 || systemctl restart mysql 2>&1 || systemctl restart mysqld 2>&1 || true; \
       [ \"$changed\" -eq 1 ] && echo OK || { echo 'no mysql config file found'; exit 1; }";
-    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(inner));
-    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let command = format!("sh -c {} 2>&1", shell_single_quote(inner));
+    let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
     let output_tail = stdout
         .lines()
         .rev()
@@ -3955,7 +3938,6 @@ pub async fn redis_set_password(
         return Err(SshError::InvalidConfig("password empty".into()));
     }
     let env = probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
     // The password is single-quoted into the sed expression after
     // we shell-escape it; defence-in-depth against passwords with
     // `'` or `&` (the latter is sed's match-back reference).
@@ -3976,8 +3958,8 @@ pub async fn redis_set_password(
          echo OK",
         esc = escaped_for_sed,
     );
-    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
-    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let command = format!("sh -c {} 2>&1", shell_single_quote(&inner));
+    let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
     let output_tail = stdout
         .lines()
         .rev()
@@ -4009,11 +3991,8 @@ pub async fn redis_set_password(
 ///      AND we're using the password — for the simple case we
 ///      drop protected-mode; the user should also call
 ///      [`redis_set_password`] for a sane setup).
-pub async fn redis_open_remote(
-    session: &SshSession,
-) -> Result<PostgresActionReport> {
+pub async fn redis_open_remote(session: &SshSession) -> Result<PostgresActionReport> {
     let env = probe_host_env(session).await;
-    let prefix = if env.is_root { "" } else { "sudo -n " };
     let inner = "set -e; \
       conf=''; \
       for f in /etc/redis/redis.conf /etc/redis.conf; do \
@@ -4028,8 +4007,8 @@ pub async fn redis_open_remote(
       fi; \
       systemctl restart redis-server 2>&1 || systemctl restart redis 2>&1 || true; \
       echo OK";
-    let command = format!("{prefix}sh -c {} 2>&1", shell_single_quote(inner));
-    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let command = format!("sh -c {} 2>&1", shell_single_quote(inner));
+    let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
     let output_tail = stdout
         .lines()
         .rev()
@@ -4126,7 +4105,11 @@ pub async fn search_remote(
         PackageManager::Pacman => format!("pacman -Ss {q} 2>/dev/null"),
         PackageManager::Zypper => format!("zypper --non-interactive search {q} 2>/dev/null"),
     };
-    let cmd = format!("sh -c {} 2>&1 | head -{}", shell_single_quote(&inner), limit * 4);
+    let cmd = format!(
+        "sh -c {} 2>&1 | head -{}",
+        shell_single_quote(&inner),
+        limit * 4
+    );
     let (_code, stdout) = session.exec_command(&cmd).await?;
     Ok(parse_search_output(manager, &stdout, limit))
 }
@@ -4203,9 +4186,8 @@ pub async fn install_command_preview(
     variant_key: Option<&str>,
     is_update: bool,
 ) -> Result<InstallCommandPreview> {
-    let descriptor = descriptor(id).ok_or_else(|| {
-        SshError::InvalidConfig(format!("unknown package id: {id}"))
-    })?;
+    let descriptor = descriptor(id)
+        .ok_or_else(|| SshError::InvalidConfig(format!("unknown package id: {id}")))?;
     let env = probe_host_env(session).await;
     let manager = env.package_manager.ok_or_else(|| {
         SshError::InvalidConfig(format!(
@@ -4213,19 +4195,20 @@ pub async fn install_command_preview(
             env.distro_id
         ))
     })?;
-    let packages = packages_for_with_variant(descriptor, manager, variant_key)
-        .ok_or_else(|| {
+    let packages =
+        packages_for_with_variant(descriptor, manager, variant_key).ok_or_else(|| {
             SshError::InvalidConfig(format!(
                 "{id} has no install packages for {}",
                 manager.as_str()
             ))
         })?;
     let inner = build_install_command(manager, packages, is_update, version);
+    // Display-only preview of the wrapped command. The real install
+    // path elevates via `wrap_sudo_sh` (password through stdin); here we
+    // just show the `sudo -n` shape so the password never lands in a
+    // surfaced string.
     let prefix = if env.is_root { "" } else { "sudo -n " };
-    let outer = format!(
-        "{prefix}sh -c {} 2>&1",
-        shell_single_quote(&inner)
-    );
+    let outer = format!("{prefix}sh -c {} 2>&1", shell_single_quote(&inner));
     Ok(InstallCommandPreview {
         package_id: id.to_string(),
         package_manager: manager.as_str().to_string(),
@@ -4283,9 +4266,8 @@ pub struct InstallCommandPreview {
 /// existence test, `ss -ltn`, candidate-version, plus one per variant).
 /// All run sequentially on the existing session — no extra connections.
 pub async fn probe_details(session: &SshSession, id: &str) -> Result<PackageDetail> {
-    let descriptor = descriptor(id).ok_or_else(|| {
-        SshError::InvalidConfig(format!("unknown package id: {id}"))
-    })?;
+    let descriptor = descriptor(id)
+        .ok_or_else(|| SshError::InvalidConfig(format!("unknown package id: {id}")))?;
     let env = probe_host_env(session).await;
     let pm = env.package_manager;
 
@@ -4437,6 +4419,36 @@ pub async fn probe_details(session: &SshSession, id: &str) -> Result<PackageDeta
         .and_then(|m| descriptor_service_unit(descriptor, m))
         .map(|s| s.to_string());
 
+    // Authoritative "is there an upgrade?" — let the package manager
+    // compare versions so a candidate's Debian/RPM revision suffix isn't
+    // mistaken for an update over the bare upstream installed version.
+    // Falls back to an upstream-normalized compare when the manager
+    // can't answer (e.g. the package wasn't installed via the manager).
+    let update_available = if installed {
+        let cmd_based = match (
+            pm,
+            packages_for(descriptor, pm.unwrap_or(PackageManager::Apt)),
+        ) {
+            (Some(manager), Some(packages)) => match packages.first().copied() {
+                Some(pkg) => match build_update_available_command(manager, pkg) {
+                    Some(cmd) => match session.exec_command(&cmd).await {
+                        Ok((_, out)) => parse_update_available(&out),
+                        Err(_) => None,
+                    },
+                    None => None,
+                },
+                None => None,
+            },
+            _ => None,
+        };
+        cmd_based.or_else(|| match (&installed_version, &latest_version) {
+            (Some(i), Some(l)) => upstream_update_available(i, l),
+            _ => None,
+        })
+    } else {
+        None
+    };
+
     Ok(PackageDetail {
         package_id: id.to_string(),
         installed,
@@ -4448,6 +4460,7 @@ pub async fn probe_details(session: &SshSession, id: &str) -> Result<PackageDeta
         service_unit,
         latest_version,
         installed_version,
+        update_available,
         variants,
     })
 }
@@ -4484,8 +4497,10 @@ async fn run_setup_then_install<F>(
 where
     F: FnMut(&str),
 {
-    let SudoCommand { full: setup_command, display: setup_command_display } =
-        wrap_sudo_sh(env.is_root, setup_inner, sudo_password);
+    let SudoCommand {
+        full: setup_command,
+        display: setup_command_display,
+    } = wrap_sudo_sh(env.is_root, setup_inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
     let push_tail = |line: &str, tail: &mut Vec<String>| {
@@ -4511,9 +4526,7 @@ where
     };
     let setup_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
-    if setup_exit == CANCELLED_EXIT_CODE
-        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
-    {
+    if setup_exit == CANCELLED_EXIT_CODE || cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
         let repo_warnings = detect_broken_repo_warnings(&setup_tail);
         return Ok(InstallReport {
             package_id: id.to_string(),
@@ -4639,8 +4652,10 @@ where
     // since this string may originate in a search result the user
     // could have manipulated.
     let install_inner = build_install_command(manager, &[package_name], false, None);
-    let SudoCommand { full: command, display: command_display } =
-        wrap_sudo_sh(env.is_root, &install_inner, sudo_password);
+    let SudoCommand {
+        full: command,
+        display: command_display,
+    } = wrap_sudo_sh(env.is_root, &install_inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = session
@@ -4658,9 +4673,7 @@ where
         .await?;
     let output_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
-    if exit_code == CANCELLED_EXIT_CODE
-        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
-    {
+    if exit_code == CANCELLED_EXIT_CODE || cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
         let repo_warnings = detect_broken_repo_warnings(&output_tail);
         return Ok(InstallReport {
             package_id: package_name.to_string(),
@@ -4745,10 +4758,7 @@ fn parse_search_output(manager: PackageManager, raw: &str, limit: usize) -> Vec<
             for line in raw.lines() {
                 // Format: "name.arch : summary"
                 let s = line.trim();
-                if s.starts_with("===")
-                    || s.starts_with("Last metadata")
-                    || s.is_empty()
-                {
+                if s.starts_with("===") || s.starts_with("Last metadata") || s.is_empty() {
                     continue;
                 }
                 if let Some((left, summary)) = s.split_once(" : ") {
@@ -4851,9 +4861,8 @@ async fn run_install_via_script<F>(
 where
     F: FnMut(&str),
 {
-    let descriptor = descriptor(id).ok_or_else(|| {
-        SshError::InvalidConfig(format!("unknown package id: {id}"))
-    })?;
+    let descriptor = descriptor(id)
+        .ok_or_else(|| SshError::InvalidConfig(format!("unknown package id: {id}")))?;
     let Some(vendor) = descriptor.vendor_script else {
         return Err(SshError::InvalidConfig(format!(
             "package {id} has no vendor_script"
@@ -4944,10 +4953,7 @@ where
     // only escalate for the script execution step. Keeping these as two
     // separate exec invocations means a download failure surfaces with a
     // clean exit code instead of being shadowed by sudo's behavior.
-    let download_command = format!(
-        "sh -c {} 2>&1",
-        shell_single_quote(&download_inner)
-    );
+    let download_command = format!("sh -c {} 2>&1", shell_single_quote(&download_inner));
 
     let mut tail_lines: Vec<String> = Vec::new();
     let push_tail = |line: &str, tail: &mut Vec<String>| {
@@ -4976,11 +4982,13 @@ where
     // CANCELLED_EXIT_CODE sentinel from `exec_command_streaming` or
     // a vanilla curl error if SIGHUP arrived mid-handshake). Either way
     // the user's intent was Cancel, not "download failed".
-    if dl_exit == CANCELLED_EXIT_CODE
-        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
-    {
+    if dl_exit == CANCELLED_EXIT_CODE || cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
         cleanup_vendor_temp(session, &script_path).await;
-        return Ok(cancelled_report(download_command, dl_exit, tail_lines.join("\n")));
+        return Ok(cancelled_report(
+            download_command,
+            dl_exit,
+            tail_lines.join("\n"),
+        ));
     }
 
     if dl_exit != 0 {
@@ -5013,7 +5021,10 @@ where
     // `-n` fallback. Scripts that don't need root (e.g. user-mode
     // installers) bypass sudo entirely.
     let needs_sudo = vendor.run_as_root && !env.is_root;
-    let SudoCommand { full: exec_command, display: exec_command_display } = if needs_sudo {
+    let SudoCommand {
+        full: exec_command,
+        display: exec_command_display,
+    } = if needs_sudo {
         wrap_sudo_sh(false, &exec_inner, sudo_password)
     } else {
         // Non-sudo path — `wrap_sudo_sh(true, ...)` returns no prefix
@@ -5042,11 +5053,13 @@ where
 
     // Same priority as the apt path: cancellation wins over both
     // sudo-prompt detection and the post-probe / service-enable steps.
-    if exec_exit == CANCELLED_EXIT_CODE
-        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
-    {
+    if exec_exit == CANCELLED_EXIT_CODE || cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
         cleanup_vendor_temp(session, &script_path).await;
-        return Ok(cancelled_report(exec_command_display, exec_exit, output_tail));
+        return Ok(cancelled_report(
+            exec_command_display,
+            exec_exit,
+            output_tail,
+        ));
     }
 
     if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
@@ -5189,9 +5202,8 @@ async fn run_install_or_update<F>(
 where
     F: FnMut(&str),
 {
-    let descriptor = descriptor(id).ok_or_else(|| {
-        SshError::InvalidConfig(format!("unknown package id: {id}"))
-    })?;
+    let descriptor = descriptor(id)
+        .ok_or_else(|| SshError::InvalidConfig(format!("unknown package id: {id}")))?;
 
     let env = probe_host_env(session).await;
 
@@ -5228,8 +5240,10 @@ where
     };
 
     let install_inner = build_install_command(manager, packages, is_update, version);
-    let SudoCommand { full: command, display: command_display } =
-        wrap_sudo_sh(env.is_root, &install_inner, sudo_password);
+    let SudoCommand {
+        full: command,
+        display: command_display,
+    } = wrap_sudo_sh(env.is_root, &install_inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = session
@@ -5253,9 +5267,7 @@ where
     // intent. The CANCELLED_EXIT_CODE check covers both the case where
     // we tripped the select! arm ourselves and the rare case where the
     // remote happened to surface the same code.
-    if exit_code == CANCELLED_EXIT_CODE
-        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
-    {
+    if exit_code == CANCELLED_EXIT_CODE || cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
         let repo_warnings = detect_broken_repo_warnings(&output_tail);
         return Ok(InstallReport {
             package_id: id.to_string(),
@@ -5361,9 +5373,8 @@ async fn run_uninstall<F>(
 where
     F: FnMut(&str),
 {
-    let descriptor = descriptor(id).ok_or_else(|| {
-        SshError::InvalidConfig(format!("unknown package id: {id}"))
-    })?;
+    let descriptor = descriptor(id)
+        .ok_or_else(|| SshError::InvalidConfig(format!("unknown package id: {id}")))?;
 
     let env = probe_host_env(session).await;
 
@@ -5425,8 +5436,10 @@ where
         service_unit,
         cleanup_script,
     );
-    let SudoCommand { full: command, display: command_display } =
-        wrap_sudo_sh(env.is_root, &inner, sudo_password);
+    let SudoCommand {
+        full: command,
+        display: command_display,
+    } = wrap_sudo_sh(env.is_root, &inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = session
@@ -5446,9 +5459,7 @@ where
 
     // Same fast-path-out as the install side: cancel beats every other
     // post-action branch, including the post-removal probe.
-    if exit_code == CANCELLED_EXIT_CODE
-        || cancel.as_ref().is_some_and(|t| t.is_cancelled())
-    {
+    if exit_code == CANCELLED_EXIT_CODE || cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
         return Ok(UninstallReport {
             package_id: id.to_string(),
             status: UninstallStatus::Cancelled,
@@ -5485,9 +5496,8 @@ where
         UninstallStatus::PackageManagerFailed
     };
 
-    let data_dirs_removed = !still_installed
-        && opts.remove_data_dirs
-        && !descriptor.data_dirs.is_empty();
+    let data_dirs_removed =
+        !still_installed && opts.remove_data_dirs && !descriptor.data_dirs.is_empty();
 
     Ok(UninstallReport {
         package_id: id.to_string(),
@@ -5534,8 +5544,10 @@ where
         });
     };
 
-    let SudoCommand { full: command, display: command_display } =
-        build_systemctl_command(action, unit, env.is_root, sudo_password);
+    let SudoCommand {
+        full: command,
+        display: command_display,
+    } = build_systemctl_command(action, unit, env.is_root, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = session
@@ -5602,8 +5614,8 @@ async fn run_journalctl_tail(
     let Some(unit) = unit else {
         return Ok(Vec::new());
     };
-    let command = build_journalctl_command(unit, lines, env.is_root);
-    let (_code, stdout) = session.exec_command(&command).await?;
+    let command = build_journalctl_command(unit, lines);
+    let (_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
     Ok(stdout
         .lines()
         .map(|l| l.trim_end_matches('\r').to_string())
@@ -5636,10 +5648,12 @@ fn build_systemctl_command(
 /// `--no-pager` so the channel doesn't end up in `less` waiting for
 /// keypresses, and `2>&1` so "no entries" / permission warnings flow
 /// alongside the entries themselves.
-fn build_journalctl_command(unit: &str, lines: usize, is_root: bool) -> String {
-    let prefix = if is_root { "" } else { "sudo -n " };
+fn build_journalctl_command(unit: &str, lines: usize) -> String {
+    // No sudo prefix here — the caller runs this through
+    // `exec_maybe_sudo`, which follows the terminal's elevation (captured
+    // password via stdin, or armed `sudo -n`).
     format!(
-        "{prefix}journalctl -u {} -n {} --no-pager 2>&1",
+        "journalctl -u {} -n {} --no-pager 2>&1",
         shell_single_quote(unit),
         lines,
     )
@@ -5969,9 +5983,7 @@ fn extract_quoted_url(line: &str) -> Option<String> {
 fn extract_url_token(line: &str) -> Option<String> {
     let i = line.find("http").or_else(|| line.find("https"))?;
     let tail = &line[i..];
-    let end = tail
-        .find(|c: char| c.is_whitespace())
-        .unwrap_or(tail.len());
+    let end = tail.find(|c: char| c.is_whitespace()).unwrap_or(tail.len());
     let url = tail[..end].trim_end_matches(|c: char| matches!(c, ',' | '.' | ';' | ')' | ']'));
     if url.starts_with("http") && url.len() > "http://".len() {
         Some(url.to_string())
@@ -6086,8 +6098,7 @@ fn build_uninstall_command_inner(
     };
 
     let data_step = if opts.remove_data_dirs && !data_dirs.is_empty() {
-        let quoted: Vec<String> =
-            data_dirs.iter().map(|d| shell_single_quote(d)).collect();
+        let quoted: Vec<String> = data_dirs.iter().map(|d| shell_single_quote(d)).collect();
         Some(format!("rm -rf {}", quoted.join(" ")))
     } else {
         None
@@ -6147,6 +6158,97 @@ fn build_candidate_version_command(manager: PackageManager, package: &str) -> Op
     })
 }
 
+/// Build the per-manager "is there a newer installable version of
+/// `package`?" command. Each emits exactly one token on stdout:
+/// `yes` (upgrade available), `no` (up to date), or `unknown` (couldn't
+/// tell). The manager does its own version comparison, so a candidate's
+/// Debian/RPM revision suffix is handled correctly. Returns `None` for
+/// managers without a cheap native check (caller falls back to an
+/// upstream-normalized compare).
+fn build_update_available_command(manager: PackageManager, package: &str) -> Option<String> {
+    let pkg = shell_single_quote(package);
+    Some(match manager {
+        // Compare the installed and candidate strings from a single
+        // policy query with dpkg's authoritative version comparison.
+        PackageManager::Apt => format!(
+            "i=$(LC_ALL=C apt-cache policy {pkg} 2>/dev/null | awk '/Installed:/{{print $2; exit}}'); \
+             c=$(LC_ALL=C apt-cache policy {pkg} 2>/dev/null | awk '/Candidate:/{{print $2; exit}}'); \
+             if [ -z \"$i\" ] || [ -z \"$c\" ] || [ \"$i\" = \"(none)\" ]; then echo unknown; \
+             elif dpkg --compare-versions \"$i\" lt \"$c\"; then echo yes; else echo no; fi"
+        ),
+        // `check-update` exits 100 when an update exists, 0 when none.
+        PackageManager::Dnf => format!(
+            "dnf -q check-update {pkg} >/dev/null 2>&1; rc=$?; \
+             if [ $rc -eq 100 ]; then echo yes; elif [ $rc -eq 0 ]; then echo no; else echo unknown; fi"
+        ),
+        PackageManager::Yum => format!(
+            "yum -q check-update {pkg} >/dev/null 2>&1; rc=$?; \
+             if [ $rc -eq 100 ]; then echo yes; elif [ $rc -eq 0 ]; then echo no; else echo unknown; fi"
+        ),
+        // `-Qu` lists the package iff an upgrade is queued; empty = none.
+        PackageManager::Pacman => format!(
+            "if pacman -Qu {pkg} 2>/dev/null | grep -q .; then echo yes; else echo no; fi"
+        ),
+        // apk / zypper have no equally-cheap per-package check — let the
+        // caller's upstream-normalized fallback handle these.
+        PackageManager::Apk | PackageManager::Zypper => return None,
+    })
+}
+
+/// Parse the single token emitted by [`build_update_available_command`].
+fn parse_update_available(output: &str) -> Option<bool> {
+    match output
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+    {
+        "yes" => Some(true),
+        "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// Normalize a version string to its upstream numeric core: drop a
+/// leading `epoch:` and any `-debian_revision` / `-rN` suffix, keeping
+/// the dotted release. `1:1.28.3-2ubuntu1.4` → `1.28.3`.
+fn upstream_core(v: &str) -> &str {
+    let after_epoch = v.split_once(':').map(|(_, r)| r).unwrap_or(v);
+    after_epoch.split('-').next().unwrap_or(after_epoch).trim()
+}
+
+/// Best-effort "is `candidate` newer than `installed`?" using only the
+/// upstream numeric core. Fallback for managers without a native check
+/// and for packages not installed via the manager. Returns `None` when
+/// neither side parses, so the UI suppresses the badge rather than
+/// guessing. Note: because the installed side is often the bare upstream
+/// version, this cannot see revision-only updates — that's why apt/dnf
+/// use the authoritative native check above.
+fn upstream_update_available(installed: &str, candidate: &str) -> Option<bool> {
+    let parse = |s: &str| -> Vec<u64> {
+        upstream_core(s)
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|p| !p.is_empty())
+            .filter_map(|p| p.parse::<u64>().ok())
+            .collect()
+    };
+    let a = parse(installed);
+    let b = parse(candidate);
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    // Lexicographic compare of the numeric segments, missing = 0.
+    let len = a.len().max(b.len());
+    for idx in 0..len {
+        let ai = a.get(idx).copied().unwrap_or(0);
+        let bi = b.get(idx).copied().unwrap_or(0);
+        if bi != ai {
+            return Some(bi > ai);
+        }
+    }
+    Some(false)
+}
+
 /// Per-manager "is `package` installed" check. Used by the variants
 /// probe so we can distinguish "Java is installed" (descriptor's
 /// generic probe) from "OpenJDK 17 specifically is installed". Always
@@ -6154,9 +6256,9 @@ fn build_candidate_version_command(manager: PackageManager, package: &str) -> Op
 fn build_pkg_installed_check(manager: PackageManager, package: &str) -> String {
     let qpkg = shell_single_quote(package);
     match manager {
-        PackageManager::Apt => format!(
-            "dpkg -l {qpkg} 2>/dev/null | awk 'BEGIN {{f=1}} /^ii/ {{f=0}} END {{exit f}}'"
-        ),
+        PackageManager::Apt => {
+            format!("dpkg -l {qpkg} 2>/dev/null | awk 'BEGIN {{f=1}} /^ii/ {{f=0}} END {{exit f}}'")
+        }
         PackageManager::Dnf | PackageManager::Yum | PackageManager::Zypper => {
             format!("rpm -q {qpkg} >/dev/null 2>&1")
         }
@@ -6312,7 +6414,9 @@ fn shell_single_quote(s: &str) -> String {
 /// one we hand back `None` and the UI shows just "已安装".
 pub fn parse_version(output: &str) -> Option<String> {
     for line in output.lines() {
-        for token in line.split(|c: char| c.is_whitespace() || c == '/' || c == ',' || c == '(' || c == ')') {
+        for token in
+            line.split(|c: char| c.is_whitespace() || c == '/' || c == ',' || c == '(' || c == ')')
+        {
             if token.contains('.') && token.chars().next()?.is_ascii_digit() {
                 return Some(token.trim_end_matches('.').to_string());
             }
@@ -6331,8 +6435,7 @@ mod tests {
     fn registry_has_v1_software() {
         let ids: Vec<&str> = registry().iter().map(|d| d.id).collect();
         for required in [
-            "sqlite3", "docker", "compose", "redis", "postgres", "mariadb",
-            "nginx", "jq", "curl",
+            "sqlite3", "docker", "compose", "redis", "postgres", "mariadb", "nginx", "jq", "curl",
         ] {
             assert!(ids.contains(&required), "registry missing {required}");
         }
@@ -6582,7 +6685,11 @@ mod tests {
         let postgres = descriptor("postgres").expect("postgres in registry");
         assert!(!postgres.version_variants.is_empty());
         for v in postgres.version_variants {
-            for m in [PackageManager::Apt, PackageManager::Dnf, PackageManager::Yum] {
+            for m in [
+                PackageManager::Apt,
+                PackageManager::Dnf,
+                PackageManager::Yum,
+            ] {
                 assert!(
                     v.install_packages.iter().any(|(mm, _)| *mm == m),
                     "postgres variant {} missing install_packages for {:?}",
@@ -6609,11 +6716,8 @@ mod tests {
     fn postgres_setup_scripts_cover_apt_and_dnf() {
         let postgres = descriptor("postgres").expect("postgres in registry");
         let vendor = postgres.vendor_script.expect("postgres vendor_script");
-        let managers: std::collections::HashSet<PackageManager> = vendor
-            .setup_scripts
-            .iter()
-            .map(|(m, _)| *m)
-            .collect();
+        let managers: std::collections::HashSet<PackageManager> =
+            vendor.setup_scripts.iter().map(|(m, _)| *m).collect();
         assert!(
             managers.contains(&PackageManager::Apt),
             "postgres setup_scripts missing apt entry"
@@ -6637,8 +6741,7 @@ mod tests {
     fn co_install_suggestions_only_reference_built_in_ids() {
         // Suggesting an id that doesn't exist would surface a dead
         // chip in the UI. Catch typos at test time.
-        let ids: std::collections::HashSet<&str> =
-            REGISTRY.iter().map(|d| d.id).collect();
+        let ids: std::collections::HashSet<&str> = REGISTRY.iter().map(|d| d.id).collect();
         for d in REGISTRY {
             for sugg in co_install_suggestions(d.id) {
                 assert!(
@@ -6733,8 +6836,7 @@ mod tests {
         // User extras can be referenced too in production, but the
         // built-in bundles should only point at the static REGISTRY
         // so a fresh install with no extras file still wires up.
-        let ids: std::collections::HashSet<&str> =
-            REGISTRY.iter().map(|d| d.id).collect();
+        let ids: std::collections::HashSet<&str> = REGISTRY.iter().map(|d| d.id).collect();
         for b in bundles() {
             for pkg in b.package_ids {
                 assert!(
@@ -6906,8 +7008,12 @@ mod tests {
 
     #[test]
     fn build_install_command_dnf_version_pin_uses_dash() {
-        let cmd =
-            build_install_command(PackageManager::Dnf, &["docker"], false, Some("27.5.1-1.fc40"));
+        let cmd = build_install_command(
+            PackageManager::Dnf,
+            &["docker"],
+            false,
+            Some("27.5.1-1.fc40"),
+        );
         assert!(cmd.starts_with("dnf install -y"));
         assert!(cmd.contains("docker-27.5.1-1.fc40"));
     }
@@ -6987,19 +7093,14 @@ mod tests {
 
     #[test]
     fn build_install_command_apk_version_pin_uses_equals() {
-        let cmd =
-            build_install_command(PackageManager::Apk, &["sqlite"], false, Some("3.46.1-r0"));
+        let cmd = build_install_command(PackageManager::Apk, &["sqlite"], false, Some("3.46.1-r0"));
         assert_eq!(cmd, "apk add --no-cache sqlite=3.46.1-r0");
     }
 
     #[test]
     fn build_install_command_zypper_version_pin_uses_equals() {
-        let cmd = build_install_command(
-            PackageManager::Zypper,
-            &["redis"],
-            false,
-            Some("7.0.4-1.1"),
-        );
+        let cmd =
+            build_install_command(PackageManager::Zypper, &["redis"], false, Some("7.0.4-1.1"));
         assert!(cmd.contains("zypper --non-interactive install redis=7.0.4-1.1"));
     }
 
@@ -7018,12 +7119,8 @@ mod tests {
 
     #[test]
     fn build_install_command_quotes_injection_version() {
-        let cmd = build_install_command(
-            PackageManager::Apt,
-            &["nginx"],
-            false,
-            Some("1.0; reboot"),
-        );
+        let cmd =
+            build_install_command(PackageManager::Apt, &["nginx"], false, Some("1.0; reboot"));
         // The dangerous version must be single-quoted in the inner cmd.
         assert!(cmd.contains("'nginx=1.0; reboot'"), "got: {cmd}");
         assert!(!cmd.contains("nginx=1.0; reboot "), "unquoted leak: {cmd}");
@@ -7034,12 +7131,7 @@ mod tests {
         // Arch's standard repos don't carry historical versions. The
         // panel hides the dropdown, but defence-in-depth: even if
         // `version=Some(...)` slips through, the command still runs.
-        let cmd = build_install_command(
-            PackageManager::Pacman,
-            &["redis"],
-            false,
-            Some("7.2.4-1"),
-        );
+        let cmd = build_install_command(PackageManager::Pacman, &["redis"], false, Some("7.2.4-1"));
         assert!(cmd.contains("pacman -S --noconfirm redis"));
         assert!(!cmd.contains("7.2.4-1"));
     }
@@ -7058,8 +7150,7 @@ mod tests {
 
     #[test]
     fn build_install_command_blank_version_falls_back_to_unpinned() {
-        let cmd =
-            build_install_command(PackageManager::Apt, &["docker.io"], false, Some("   "));
+        let cmd = build_install_command(PackageManager::Apt, &["docker.io"], false, Some("   "));
         assert!(cmd.contains("apt-get install -y docker.io"));
         assert!(!cmd.contains("docker.io="));
     }
@@ -7068,31 +7159,21 @@ mod tests {
 
     #[test]
     fn build_versions_command_per_manager() {
-        assert!(
-            build_versions_command(PackageManager::Apt, "docker.io")
-                .unwrap()
-                .contains("apt-cache madison")
-        );
-        assert!(
-            build_versions_command(PackageManager::Dnf, "docker")
-                .unwrap()
-                .contains("dnf list available")
-        );
-        assert!(
-            build_versions_command(PackageManager::Yum, "redis")
-                .unwrap()
-                .contains("yum list available")
-        );
-        assert!(
-            build_versions_command(PackageManager::Apk, "sqlite")
-                .unwrap()
-                .contains("apk version -a")
-        );
-        assert!(
-            build_versions_command(PackageManager::Zypper, "redis")
-                .unwrap()
-                .contains("zypper search -s")
-        );
+        assert!(build_versions_command(PackageManager::Apt, "docker.io")
+            .unwrap()
+            .contains("apt-cache madison"));
+        assert!(build_versions_command(PackageManager::Dnf, "docker")
+            .unwrap()
+            .contains("dnf list available"));
+        assert!(build_versions_command(PackageManager::Yum, "redis")
+            .unwrap()
+            .contains("yum list available"));
+        assert!(build_versions_command(PackageManager::Apk, "sqlite")
+            .unwrap()
+            .contains("apk version -a"));
+        assert!(build_versions_command(PackageManager::Zypper, "redis")
+            .unwrap()
+            .contains("zypper search -s"));
         // pacman has no historical-version query; surface as None so
         // the frontend can hide the dropdown.
         assert!(build_versions_command(PackageManager::Pacman, "redis").is_none());
@@ -7150,6 +7231,40 @@ mod tests {
     }
 
     #[test]
+    fn parse_update_available_reads_token() {
+        assert_eq!(parse_update_available("yes\n"), Some(true));
+        assert_eq!(parse_update_available("no"), Some(false));
+        assert_eq!(parse_update_available("unknown"), None);
+        assert_eq!(parse_update_available(""), None);
+        assert_eq!(parse_update_available("\n  yes  \n"), Some(true));
+    }
+
+    #[test]
+    fn upstream_core_strips_epoch_and_revision() {
+        assert_eq!(upstream_core("1:1.28.3-2ubuntu1.4"), "1.28.3");
+        assert_eq!(upstream_core("1.28.3-2ubuntu1.4"), "1.28.3");
+        assert_eq!(upstream_core("16.4"), "16.4");
+        assert_eq!(upstream_core("7.4.1-r0"), "7.4.1");
+    }
+
+    #[test]
+    fn upstream_update_available_ignores_revision_noise() {
+        // The reported false positive: bare upstream vs full apt candidate
+        // of the SAME package must NOT read as an update.
+        assert_eq!(
+            upstream_update_available("1.28.3", "1.28.3-2ubuntu1.4"),
+            Some(false),
+        );
+        // A genuine upstream bump IS an update.
+        assert_eq!(upstream_update_available("1.28.3", "1.30.0"), Some(true));
+        assert_eq!(upstream_update_available("16.4", "16.10"), Some(true));
+        // Downgrade / equal core → no update.
+        assert_eq!(upstream_update_available("1.30.0", "1.28.3"), Some(false));
+        // Unparseable → unknown (suppress the badge).
+        assert_eq!(upstream_update_available("git", "stable"), None);
+    }
+
+    #[test]
     fn strip_os_release_quotes_handles_double_and_single() {
         assert_eq!(strip_os_release_quotes("\"ubuntu\""), "ubuntu");
         assert_eq!(strip_os_release_quotes("'ubuntu'"), "ubuntu");
@@ -7174,9 +7289,7 @@ mod tests {
         assert!(looks_like_sudo_password_prompt(
             "sudo: interactive authentication is required"
         ));
-        assert!(looks_like_sudo_password_prompt(
-            "Sorry, try again."
-        ));
+        assert!(looks_like_sudo_password_prompt("Sorry, try again."));
         assert!(!looks_like_sudo_password_prompt(
             "E: Unable to locate package sqlite3"
         ));
@@ -7458,7 +7571,9 @@ mod tests {
     fn build_systemctl_command_with_password_pipes_via_stdin() {
         let cmd = build_systemctl_command(ServiceAction::Stop, "redis", false, Some("hunter2"));
         // Full carries the password through `printf | sudo -S`.
-        assert!(cmd.full.starts_with("printf '%s\\n' 'hunter2' | sudo -S -p '' systemctl stop "));
+        assert!(cmd
+            .full
+            .starts_with("printf '%s\\n' 'hunter2' | sudo -S -p '' systemctl stop "));
         // Display redacts the password and reads as plain `sudo`.
         assert!(cmd.display.starts_with("sudo systemctl stop "));
         assert!(!cmd.display.contains("hunter2"));
@@ -7508,31 +7623,28 @@ mod tests {
 
         // sqlite has no service.
         let sqlite = descriptor("sqlite3").unwrap();
-        assert!(
-            descriptor_service_unit(sqlite, PackageManager::Apt).is_none(),
-        );
+        assert!(descriptor_service_unit(sqlite, PackageManager::Apt).is_none(),);
     }
 
     #[test]
-    fn build_journalctl_command_root_no_sudo() {
-        let cmd = build_journalctl_command("redis-server", 200, true);
-        assert_eq!(
-            cmd,
-            "journalctl -u 'redis-server' -n 200 --no-pager 2>&1",
-        );
+    fn build_journalctl_command_is_bare() {
+        // The command carries no sudo prefix — elevation is applied by the
+        // caller via `exec_maybe_sudo` (captured password / armed sudo -n).
+        let cmd = build_journalctl_command("redis-server", 200);
+        assert_eq!(cmd, "journalctl -u 'redis-server' -n 200 --no-pager 2>&1",);
     }
 
     #[test]
-    fn build_journalctl_command_non_root_uses_sudo_n() {
-        let cmd = build_journalctl_command("nginx", 50, false);
-        assert!(cmd.starts_with("sudo -n journalctl -u 'nginx' -n 50 "));
+    fn build_journalctl_command_includes_unit_and_flags() {
+        let cmd = build_journalctl_command("nginx", 50);
+        assert!(cmd.starts_with("journalctl -u 'nginx' -n 50 "));
         assert!(cmd.contains("--no-pager"));
         assert!(cmd.ends_with("2>&1"));
     }
 
     #[test]
     fn build_journalctl_command_includes_lines_argument() {
-        let cmd = build_journalctl_command("redis", 1, true);
+        let cmd = build_journalctl_command("redis", 1);
         assert!(cmd.contains("-n 1 "));
     }
 
@@ -7631,10 +7743,7 @@ mod tests {
         // gets rewritten as the canonical `'\''` close-escape-reopen
         // sequence, and the `-o <path>` argument stays positionally
         // separate from the URL.
-        let cmd = build_vendor_download_command(
-            "https://evil.example/x';rm -rf /;'",
-            "/tmp/x.sh",
-        );
+        let cmd = build_vendor_download_command("https://evil.example/x';rm -rf /;'", "/tmp/x.sh");
         // Embedded quotes were escaped via the close-escape-reopen
         // dance — the literal `'\''` token has to appear at least
         // once.

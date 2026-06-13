@@ -269,6 +269,8 @@ export const zhExtra: Record<string, string> = {
   "Last year": "去年",
   "Line ownership": "行归属",
   "lines": "行",
+  "read-only": "只读",
+  "invalid UTF-8 (replaced)": "无效 UTF-8（已替换）",
   "load": "负载",
   "Load more": "加载更多",
   "Load recent commits to start an interactive rebase.": "加载最近提交以开始交互式变基。",
@@ -910,8 +912,9 @@ export const zhExtra: Record<string, string> = {
   "Scanning via": "正在扫描：",
   "Probe failed via": "探测失败：",
   "Re-probe": "重新探测",
-  "ss -tlnp · systemd units · /etc/{daemon}":
-    "ss -tlnp · systemd 单元 · /etc/{daemon}",
+  "ss -tlnp · docker ps · systemd units · /etc/{daemon}":
+    "ss -tlnp · docker ps · systemd 单元 · /etc/{daemon}",
+  "internal network": "内部网络",
   "Auto-detected on this host": "本机自动发现",
   "{count} found": "发现 {count} 个",
   "Saved profiles": "已保存配置",
@@ -2854,4 +2857,21 @@ export const zhExtra: Record<string, string> = {
     "文件不是 UTF-8 文本，无法就地复制。请改用下载后再上传。",
   "{name} is too large for drag-drop; use the upload button instead.":
     "{name} 太大，无法拖拽上传；请改用上传按钮。",
+  // SFTP 多格式预览器
+  "Loading PDF…": "正在加载 PDF…",
+  "Zoom in": "放大",
+  "Zoom out": "缩小",
+  "Parsing…": "正在解析…",
+  "Converting document…": "正在转换文档…",
+  "No rows.": "无数据行。",
+  "Sheet": "工作表",
+  "streaming…": "流式加载…",
+  "bytes/row": "字节/行",
+  "Fit to window": "适应窗口",
+  "Actual size": "实际大小",
+  "Open in editor": "用编辑器打开",
+  "Spreadsheet": "表格",
+  "Word": "Word 文档",
+  "Video": "视频",
+  "Text": "文本",
 };

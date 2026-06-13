@@ -7,6 +7,8 @@
   min-height: 0;
   flex: 1;
   overflow: hidden;
+  container-type: inline-size;
+  container-name: cs;
 }
 .cs-toolbar {
   display: flex;
@@ -188,4 +190,50 @@
 }
 .cs-truncated {
   flex: 0 0 auto;
+}
+
+@container cs (max-width: 340px) {
+  .cs {
+    padding: var(--sp-2);
+  }
+
+  .cs-toolbar,
+  .cs-cwd-row {
+    flex-wrap: wrap;
+  }
+
+  .cs-input-wrap,
+  .cs-cwd-input {
+    flex: 1 0 100%;
+  }
+
+  .cs-engine-badge {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cs-hit {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .cs-hit-loc {
+    min-width: 0;
+  }
+
+  .cs-hit-text {
+    flex-basis: 100%;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}
+
+@container cs (max-width: 300px) {
+  .cs-engine-badge,
+  .cs-file-count,
+  .cs-truncated {
+    display: none;
+  }
 }

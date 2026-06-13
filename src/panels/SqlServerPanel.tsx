@@ -182,13 +182,13 @@ export default function SqlServerPanel({ tab }: Props) {
   // ── Connect form ──────────────────────────────────────────────────
   if (!overview) {
     return (
-      <div className="mssql-connect">
-        <div className="mssql-connect__card">
-          <div className="mssql-connect__title mono">
+      <div className="dbq-connect">
+        <div className="dbq-connect__card">
+          <div className="dbq-connect__title mono">
             <META.icon size={14} /> {META.label}
           </div>
-          <div className="mssql-connect__sub">{t(META.splashSubtitle)}</div>
-          <div className="mssql-form">
+          <div className="dbq-connect__sub">{t(META.splashSubtitle)}</div>
+          <div className="dbq-form">
             <label className="field">
               <span className="field-label">{t("Host")}</span>
               <input
@@ -198,7 +198,7 @@ export default function SqlServerPanel({ tab }: Props) {
                 placeholder="127.0.0.1"
               />
             </label>
-            <label className="field mssql-form__port">
+            <label className="field dbq-form__port">
               <span className="field-label">{t("Port")}</span>
               <input
                 className="field-input is-mono"
@@ -247,7 +247,7 @@ export default function SqlServerPanel({ tab }: Props) {
             <Plug size={13} /> {busy ? t("Connecting…") : t("Connect")}
           </button>
           {error && <div className="status-note mono status-note--error">{error}</div>}
-          <div className="mssql-connect__hint">
+          <div className="dbq-connect__hint">
             {tab && effectiveSshTarget(tab)
               ? t("Connects via the SSH tunnel — host/port are as seen from the SSH host.")
               : t("Connects directly to the address above (TLS off).")}
@@ -259,7 +259,7 @@ export default function SqlServerPanel({ tab }: Props) {
 
   // ── Connected shell ───────────────────────────────────────────────
   return (
-    <div className="mssql-panel">
+    <div className="dbq-panel">
       <PanelHeader
         icon={META.icon}
         title={META.label}
@@ -286,9 +286,9 @@ export default function SqlServerPanel({ tab }: Props) {
           </>
         }
       />
-      <div className="mssql-body">
-        <aside className="mssql-side">
-          <div className="mssql-side__db">
+      <div className="dbq-body">
+        <aside className="dbq-side">
+          <div className="dbq-side__db">
             <Select
               value={form.database}
               onChange={(v) => {
@@ -301,7 +301,7 @@ export default function SqlServerPanel({ tab }: Props) {
               mono
             />
           </div>
-          <div className="mssql-side__tables">
+          <div className="dbq-side__tables">
             {overview.tables.length === 0 && (
               <div className="empty-note">{t("No tables.")}</div>
             )}
@@ -311,22 +311,22 @@ export default function SqlServerPanel({ tab }: Props) {
                 <button
                   key={key}
                   type="button"
-                  className={"mssql-table-row mono" + (key === selected ? " is-active" : "")}
+                  className={"dbq-table-row mono" + (key === selected ? " is-active" : "")}
                   title={key}
                   onClick={() => void openTable(tbl.schema, tbl.name)}
                 >
                   <Table2 size={11} />
-                  <span className="mssql-table-row__name">{tbl.name}</span>
-                  <span className="mssql-table-row__schema">{tbl.schema}</span>
+                  <span className="dbq-table-row__name">{tbl.name}</span>
+                  <span className="dbq-table-row__schema">{tbl.schema}</span>
                 </button>
               );
             })}
           </div>
         </aside>
-        <section className="mssql-main">
-          <div className="mssql-editor">
+        <section className="dbq-main">
+          <div className="dbq-editor">
             <textarea
-              className="mssql-editor__ta mono"
+              className="dbq-editor__ta mono"
               value={sql}
               spellCheck={false}
               onChange={(e) => setSql(e.target.value)}
@@ -337,7 +337,7 @@ export default function SqlServerPanel({ tab }: Props) {
                 }
               }}
             />
-            <div className="mssql-editor__bar">
+            <div className="dbq-editor__bar">
               <button
                 type="button"
                 className="btn is-primary is-compact"
@@ -346,13 +346,13 @@ export default function SqlServerPanel({ tab }: Props) {
               >
                 <Play size={11} /> {t("Run")}
               </button>
-              <span className="mssql-editor__hint">⌘⏎</span>
+              <span className="dbq-editor__hint">⌘⏎</span>
               {error && <span className="status-note mono status-note--error">{error}</span>}
             </div>
           </div>
           {columns && (
-            <div className="mssql-cols">
-              <div className="mssql-cols__head mono">
+            <div className="dbq-cols">
+              <div className="dbq-cols__head mono">
                 <Columns3 size={11} /> {selected}
               </div>
               <div className="data-table-wrap">
@@ -383,7 +383,7 @@ export default function SqlServerPanel({ tab }: Props) {
               </div>
             </div>
           )}
-          <div className="mssql-results">
+          <div className="dbq-results">
             {results ? (
               <div className="data-table-wrap ux-selectable">
                 <table className="data-table">
@@ -404,7 +404,7 @@ export default function SqlServerPanel({ tab }: Props) {
                     ))}
                   </tbody>
                 </table>
-                <div className="mssql-results__foot">
+                <div className="dbq-results__foot">
                   {t("{n} rows", { n: String(results.rows.length) })}
                   {results.truncated ? ` · ${t("truncated")}` : ""}
                   {` · ${results.elapsedMs} ms`}

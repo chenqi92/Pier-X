@@ -2945,7 +2945,7 @@
 /* ── SQL Server panel (functional v1) ───────────────────────────────
    Direct-connect form + table list + T-SQL editor + result table.
    Not yet on the shared credential/tunnel flow — see SqlServerPanel. */
-.mssql-connect {
+.dbq-connect {
   height: 100%;
   display: flex;
   align-items: flex-start;
@@ -2953,55 +2953,55 @@
   padding: var(--sp-6) var(--sp-4);
   overflow-y: auto;
 }
-.mssql-connect__card {
+.dbq-connect__card {
   width: 100%;
   max-width: 340px;
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
 }
-.mssql-connect__title {
+.dbq-connect__title {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   font-size: var(--ui-fs-lg);
   color: var(--ink);
 }
-.mssql-connect__sub {
+.dbq-connect__sub {
   font-size: var(--ui-fs-sm);
   color: var(--muted);
 }
-.mssql-connect__hint {
+.dbq-connect__hint {
   font-size: var(--size-micro);
   color: var(--dim);
   line-height: 1.4;
 }
-.mssql-form {
+.dbq-form {
   display: grid;
   grid-template-columns: 1fr 88px;
   gap: var(--sp-2) var(--sp-2);
 }
-.mssql-form .field {
+.dbq-form .field {
   grid-column: 1 / -1;
 }
-.mssql-form .field:nth-child(1) {
+.dbq-form .field:nth-child(1) {
   grid-column: 1 / 2;
 }
-.mssql-form__port {
+.dbq-form__port {
   grid-column: 2 / 3 !important;
 }
-.mssql-panel {
+.dbq-panel {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
 }
-.mssql-body {
+.dbq-body {
   flex: 1;
   min-height: 0;
   display: flex;
 }
-.mssql-side {
+.dbq-side {
   width: 200px;
   flex-shrink: 0;
   border-right: 1px solid var(--line);
@@ -3009,17 +3009,17 @@
   flex-direction: column;
   min-height: 0;
 }
-.mssql-side__db {
+.dbq-side__db {
   padding: var(--sp-2);
   border-bottom: 1px solid var(--line);
 }
-.mssql-side__tables {
+.dbq-side__tables {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: var(--sp-1);
 }
-.mssql-table-row {
+.dbq-table-row {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
@@ -3033,33 +3033,33 @@
   font-size: var(--size-micro);
   text-align: left;
 }
-.mssql-table-row:hover {
+.dbq-table-row:hover {
   background: var(--bg-hover);
   color: var(--ink);
 }
-.mssql-table-row__name {
+.dbq-table-row__name {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mssql-table-row__schema {
+.dbq-table-row__schema {
   color: var(--dim);
   font-size: var(--size-micro);
 }
-.mssql-main {
+.dbq-main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
-.mssql-editor {
+.dbq-editor {
   border-bottom: 1px solid var(--line);
   display: flex;
   flex-direction: column;
 }
-.mssql-editor__ta {
+.dbq-editor__ta {
   resize: vertical;
   height: 120px;
   min-height: 64px;
@@ -3070,23 +3070,23 @@
   font-size: var(--ui-fs-sm);
   outline: none;
 }
-.mssql-editor__bar {
+.dbq-editor__bar {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-1) var(--sp-2);
   background: var(--panel);
 }
-.mssql-editor__hint {
+.dbq-editor__hint {
   font-size: var(--size-micro);
   color: var(--dim);
 }
-.mssql-results {
+.dbq-results {
   flex: 1;
   min-height: 0;
   overflow: auto;
 }
-.mssql-results__foot {
+.dbq-results__foot {
   padding: var(--sp-1) var(--sp-2);
   font-size: var(--size-micro);
   color: var(--muted);
@@ -3094,17 +3094,17 @@
 }
 
 /* SQL Server: active table row + column metadata block */
-.mssql-table-row.is-active {
+.dbq-table-row.is-active {
   background: var(--accent-subtle);
   color: var(--accent-hover);
 }
-.mssql-cols {
+.dbq-cols {
   border-bottom: 1px solid var(--line);
   max-height: 200px;
   overflow: auto;
   flex-shrink: 0;
 }
-.mssql-cols__head {
+.dbq-cols__head {
   display: flex;
   align-items: center;
   gap: var(--sp-1);

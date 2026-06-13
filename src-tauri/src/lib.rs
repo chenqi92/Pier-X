@@ -10,6 +10,7 @@ use pier_core::services::caddy;
 use pier_core::services::docker;
 use pier_core::services::firewall;
 use pier_core::services::git::{CommitInfo, GitClient, StashEntry, UnpushedCommit};
+use pier_core::services::influx::{self, InfluxConfig};
 use pier_core::services::mysql::{
     self as mysql_service, MysqlClient, MysqlConfig, MysqlProcessRow,
 };
@@ -7476,6 +7477,95 @@ async fn mssql_columns(
     })
     .await
     .map_err(|e| format!("mssql_columns join: {e}"))?
+}
+
+fn normalize_influx_port(port: u16) -> u16 {
+    if port == 0 {
+        8086
+    } else {
+        port
+    }
+}
+
+fn build_influx_config(
+    host: String,
+    port: u16,
+    database: Option<String>,
+    user: String,
+    password: String,
+    token: String,
+) -> InfluxConfig {
+    InfluxConfig {
+        host: host.trim().to_string(),
+        port: normalize_influx_port(port),
+        database: database.filter(|v| !v.trim().is_empty()),
+        user: user.trim().to_string(),
+        password,
+        token: token.trim().to_string(),
+    }
+}
+
+/// Database + measurement snapshot for the InfluxDB panel sidebar.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InfluxOverview {
+    databases: Vec<String>,
+    measurements: Vec<String>,
+    current_database: String,
+}
+
+/// Run an InfluxQL statement and return the first series as a grid.
+#[tauri::command]
+async fn influx_query(
+    host: String,
+    port: u16,
+    database: Option<String>,
+    user: String,
+    password: String,
+    token: String,
+    query: String,
+) -> Result<QueryExecutionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = build_influx_config(host, port, database, user, password, token);
+        let r = influx::query(&cfg, &query).map_err(|e| e.to_string())?;
+        let n = r.rows.len() as u64;
+        Ok(QueryExecutionResult {
+            columns: r.columns,
+            rows: r.rows,
+            truncated: r.truncated,
+            affected_rows: n,
+            last_insert_id: None,
+            elapsed_ms: r.elapsed_ms,
+        })
+    })
+    .await
+    .map_err(|e| format!("influx_query join: {e}"))?
+}
+
+/// Database list + measurements of the active database.
+#[tauri::command]
+async fn influx_overview(
+    host: String,
+    port: u16,
+    database: Option<String>,
+    user: String,
+    password: String,
+    token: String,
+) -> Result<InfluxOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = build_influx_config(host, port, database, user, password, token);
+        let databases = influx::list_databases(&cfg).map_err(|e| e.to_string())?;
+        // Measurements need an active database; fail-soft to empty.
+        let measurements = influx::list_measurements(&cfg).unwrap_or_default();
+        let current_database = cfg.database.clone().unwrap_or_default();
+        Ok(InfluxOverview {
+            databases,
+            measurements,
+            current_database,
+        })
+    })
+    .await
+    .map_err(|e| format!("influx_overview join: {e}"))?
 }
 
 /// Snapshot of `pg_stat_activity`. Each call opens a fresh connection
@@ -18767,6 +18857,8 @@ pub fn run() {
             mssql_execute,
             mssql_overview,
             mssql_columns,
+            influx_query,
+            influx_overview,
             mysql_list_processes,
             mysql_kill_query,
             mysql_kill_connection,

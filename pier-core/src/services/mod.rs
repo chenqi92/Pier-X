@@ -43,6 +43,7 @@ pub mod docker;
 pub mod firewall;
 pub mod git;
 pub mod host_health;
+pub mod influx;
 pub mod local_exec;
 pub mod local_monitor;
 pub mod mysql;

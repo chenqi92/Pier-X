@@ -319,9 +319,9 @@ export const DB_KIND_META: Record<DbProduct, DbKindMeta> = {
     label: "InfluxDB",
     icon: Activity,
     tintVar: "var(--svc-influx)",
-    splashSubtitle: "Query measurements and buckets on an InfluxDB time-series host.",
+    splashSubtitle: "Query measurements with InfluxQL on an InfluxDB time-series host.",
     defaultPort: 8086,
     hasSchema: false,
-    available: false,
+    available: true,
   },
 };

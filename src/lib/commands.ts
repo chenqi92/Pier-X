@@ -1157,6 +1157,35 @@ export const mssqlColumns = (params: {
   table: string;
 }) => invoke<SqlServerColumnView[]>("mssql_columns", params);
 
+// ── InfluxDB (InfluxQL over HTTP) ───────────────────────────────────
+
+export type InfluxOverview = {
+  databases: string[];
+  measurements: string[];
+  currentDatabase: string;
+};
+
+/** Run an InfluxQL statement; returns the first series as a grid. */
+export const influxQuery = (params: {
+  host: string;
+  port: number;
+  database?: string | null;
+  user: string;
+  password: string;
+  token: string;
+  query: string;
+}) => invoke<QueryExecutionResult>("influx_query", params);
+
+/** Database list + measurements of the active database. */
+export const influxOverview = (params: {
+  host: string;
+  port: number;
+  database?: string | null;
+  user: string;
+  password: string;
+  token: string;
+}) => invoke<InfluxOverview>("influx_overview", params);
+
 /** Socket-CLI Postgres browse — runs the remote host's own `psql` over
  *  SSH as a specific OS user (default `postgres`, Unix-socket **peer**
  *  auth), so the panel browses as superuser with no role password or

@@ -1236,6 +1236,9 @@ export type TabState = {
    *  Cleared on rehydrate like the other tunnel slots. */
   mssqlTunnelId: string | null;
   mssqlTunnelPort: number | null;
+  /** InfluxDB SSH-tunnel handle for this tab (slot "influx"). */
+  influxTunnelId: string | null;
+  influxTunnelPort: number | null;
   /** When set, points at a `SavedSshConnection.databases[]`
    *  entry of the matching kind. Drives the instance picker
    *  pill-bar selection and the auto-browse effect on saved

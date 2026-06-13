@@ -5,7 +5,7 @@ import { useTabStore } from "../stores/useTabStore";
 import type { TabState, TunnelInfoView } from "./types";
 import { effectiveSshTarget } from "./types";
 
-type TunnelSlot = "mysql" | "postgres" | "redis" | "sqlserver";
+type TunnelSlot = "mysql" | "postgres" | "redis" | "sqlserver" | "influx";
 type UpdateTab = (id: string, patch: Partial<TabState>) => void;
 
 const tunnelFields = {
@@ -24,6 +24,10 @@ const tunnelFields = {
   sqlserver: {
     id: "mssqlTunnelId",
     port: "mssqlTunnelPort",
+  },
+  influx: {
+    id: "influxTunnelId",
+    port: "influxTunnelPort",
   },
 } as const satisfies Record<TunnelSlot, { id: keyof TabState; port: keyof TabState }>;
 

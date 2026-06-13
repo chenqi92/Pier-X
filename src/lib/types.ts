@@ -1124,7 +1124,9 @@ export type DbProduct =
   | "postgres"
   | "sqlite"
   | "sqlserver"
-  | "influx";
+  | "influx"
+  | "oracle"
+  | "dameng";
 
 /** Order shown in the in-panel product switcher. */
 export const DATABASE_TOOL_KINDS: readonly DbProduct[] = [
@@ -1132,6 +1134,8 @@ export const DATABASE_TOOL_KINDS: readonly DbProduct[] = [
   "postgres",
   "sqlite",
   "sqlserver",
+  "oracle",
+  "dameng",
   "influx",
 ];
 

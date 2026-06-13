@@ -11,6 +11,7 @@ use pier_core::services::docker;
 use pier_core::services::firewall;
 use pier_core::services::git::{CommitInfo, GitClient, StashEntry, UnpushedCommit};
 use pier_core::services::influx::{self, InfluxConfig};
+use pier_core::services::remote_db_cli::{self, CliConn, CliKind};
 use pier_core::services::mysql::{
     self as mysql_service, MysqlClient, MysqlConfig, MysqlProcessRow,
 };
@@ -7566,6 +7567,154 @@ async fn influx_overview(
     })
     .await
     .map_err(|e| format!("influx_overview join: {e}"))?
+}
+
+/// Shared impl for the Oracle / Dameng remote-CLI query commands: resolve
+/// the tab's SSH session, run the vendor CLI on the remote host, and map
+/// the CSV result into the standard grid view.
+#[allow(clippy::too_many_arguments)]
+fn remote_cli_query_impl(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+    effective_user: Option<String>,
+    kind: CliKind,
+    db_host: String,
+    db_port: u16,
+    db_user: String,
+    db_password: String,
+    db_service: String,
+    sql: String,
+) -> Result<QueryExecutionResult, String> {
+    let session = get_or_open_ssh_session_elevated(
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+        sudo_password,
+        effective_user.as_deref(),
+    )?;
+    let conn = CliConn {
+        host: db_host.trim().to_string(),
+        port: db_port,
+        user: db_user.trim().to_string(),
+        password: db_password,
+        service: db_service.trim().to_string(),
+    };
+    let r = remote_db_cli::query_blocking(&session, kind, &conn, &sql).map_err(|e| e.to_string())?;
+    if let Some(err) = r.error {
+        return Err(err);
+    }
+    let n = r.rows.len() as u64;
+    Ok(QueryExecutionResult {
+        columns: r.columns,
+        rows: r.rows,
+        truncated: r.truncated,
+        affected_rows: n,
+        last_insert_id: None,
+        elapsed_ms: r.elapsed_ms,
+    })
+}
+
+/// Run a statement against Oracle via the remote host's `sqlplus`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn oracle_query(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+    effective_user: Option<String>,
+    db_host: String,
+    db_port: u16,
+    db_user: String,
+    db_password: String,
+    db_service: String,
+    sql: String,
+) -> Result<QueryExecutionResult, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        remote_cli_query_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            sudo_password,
+            effective_user,
+            CliKind::Oracle,
+            db_host,
+            db_port,
+            db_user,
+            db_password,
+            db_service,
+            sql,
+        )
+    })
+    .await
+}
+
+/// Run a statement against Dameng (达梦) via the remote host's `disql`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn dameng_query(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+    effective_user: Option<String>,
+    db_host: String,
+    db_port: u16,
+    db_user: String,
+    db_password: String,
+    sql: String,
+) -> Result<QueryExecutionResult, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        remote_cli_query_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            sudo_password,
+            effective_user,
+            CliKind::Dameng,
+            db_host,
+            db_port,
+            db_user,
+            db_password,
+            String::new(),
+            sql,
+        )
+    })
+    .await
 }
 
 /// Snapshot of `pg_stat_activity`. Each call opens a fresh connection
@@ -18859,6 +19008,8 @@ pub fn run() {
             mssql_columns,
             influx_query,
             influx_overview,
+            oracle_query,
+            dameng_query,
             mysql_list_processes,
             mysql_kill_query,
             mysql_kill_connection,

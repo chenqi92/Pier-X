@@ -20,6 +20,7 @@ const PostgresPanel = lazy(() => import("./PostgresPanel"));
 const SqlitePanel = lazy(() => import("./SqlitePanel"));
 const SqlServerPanel = lazy(() => import("./SqlServerPanel"));
 const InfluxPanel = lazy(() => import("./InfluxPanel"));
+const RemoteSqlPanel = lazy(() => import("./RemoteSqlPanel"));
 
 type Props = {
   tab: TabState | null;
@@ -93,6 +94,9 @@ function renderProduct(
       return <SqlServerPanel key={tab?.id ?? "no-tab"} tab={tab} />;
     case "influx":
       return <InfluxPanel key={tab?.id ?? "no-tab"} tab={tab} />;
+    case "oracle":
+    case "dameng":
+      return <RemoteSqlPanel key={`${kind}-${tab?.id ?? "no-tab"}`} tab={tab} kind={kind} />;
   }
 }
 

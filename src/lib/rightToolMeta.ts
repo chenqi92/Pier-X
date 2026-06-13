@@ -324,4 +324,22 @@ export const DB_KIND_META: Record<DbProduct, DbKindMeta> = {
     hasSchema: false,
     available: true,
   },
+  oracle: {
+    label: "Oracle",
+    icon: Database,
+    tintVar: "var(--svc-oracle)",
+    splashSubtitle: "Run SQL via the remote host's sqlplus — connects over SSH, no local client.",
+    defaultPort: 1521,
+    hasSchema: true,
+    available: true,
+  },
+  dameng: {
+    label: "达梦 DM",
+    icon: Database,
+    tintVar: "var(--svc-dameng)",
+    splashSubtitle: "Run SQL via the remote host's disql — connects over SSH, no local client.",
+    defaultPort: 5236,
+    hasSchema: true,
+    available: true,
+  },
 };

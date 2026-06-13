@@ -1186,6 +1186,35 @@ export const influxOverview = (params: {
   token: string;
 }) => invoke<InfluxOverview>("influx_overview", params);
 
+// ── Oracle / Dameng (达梦) over the remote host's CLI ────────────────
+
+/** Run a statement against Oracle via the remote host's `sqlplus`. The
+ *  SshParams address the SSH host; `db*` address the Oracle instance as
+ *  reachable from that host. */
+export const oracleQuery = (
+  params: SshParams & {
+    effectiveUser?: string | null;
+    dbHost: string;
+    dbPort: number;
+    dbUser: string;
+    dbPassword: string;
+    dbService: string;
+    sql: string;
+  },
+) => invoke<QueryExecutionResult>("oracle_query", params);
+
+/** Run a statement against Dameng via the remote host's `disql`. */
+export const damengQuery = (
+  params: SshParams & {
+    effectiveUser?: string | null;
+    dbHost: string;
+    dbPort: number;
+    dbUser: string;
+    dbPassword: string;
+    sql: string;
+  },
+) => invoke<QueryExecutionResult>("dameng_query", params);
+
 /** Socket-CLI Postgres browse — runs the remote host's own `psql` over
  *  SSH as a specific OS user (default `postgres`, Unix-socket **peer**
  *  auth), so the panel browses as superuser with no role password or

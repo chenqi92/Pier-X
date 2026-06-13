@@ -54,6 +54,7 @@ pub mod package_mirror;
 pub mod postgres;
 pub mod postgres_cli;
 pub mod redis;
+pub mod remote_db_cli;
 pub mod search;
 pub mod server_monitor;
 pub mod sqlite;

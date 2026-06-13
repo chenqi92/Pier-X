@@ -83,6 +83,8 @@
   --svc-postgres: #8fb3ff;
   --svc-sqlserver: #e06c5d;
   --svc-influx: #d65db1;
+  --svc-oracle: #e8643c;
+  --svc-dameng: #4f9d69;
   --svc-redis: #e5484d;
   --svc-monitor: #3dd68c;
   --svc-log: #b48cff;

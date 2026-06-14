@@ -11,7 +11,6 @@ use pier_core::services::docker;
 use pier_core::services::firewall;
 use pier_core::services::git::{CommitInfo, GitClient, StashEntry, UnpushedCommit};
 use pier_core::services::influx::{self, InfluxConfig};
-use pier_core::services::remote_db_cli::{self, CliConn, CliKind};
 use pier_core::services::mysql::{
     self as mysql_service, MysqlClient, MysqlConfig, MysqlProcessRow,
 };
@@ -20,6 +19,7 @@ use pier_core::services::package_manager;
 use pier_core::services::package_mirror;
 use pier_core::services::postgres::{PgActivityRow, PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
+use pier_core::services::remote_db_cli::{self, CliConn, CliKind};
 use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
 use pier_core::services::sqlite_remote;
@@ -7354,7 +7354,11 @@ fn map_sqlserver_query_result(
         rows: result
             .rows
             .into_iter()
-            .map(|row| row.into_iter().map(|cell| cell.unwrap_or_default()).collect())
+            .map(|row| {
+                row.into_iter()
+                    .map(|cell| cell.unwrap_or_default())
+                    .collect()
+            })
             .collect(),
         truncated: result.truncated,
         affected_rows: result.affected_rows,
@@ -7420,7 +7424,9 @@ async fn mssql_overview(
         })
         .map_err(|e| e.to_string())?;
 
-        let databases = client.list_databases_blocking().map_err(|e| e.to_string())?;
+        let databases = client
+            .list_databases_blocking()
+            .map_err(|e| e.to_string())?;
         let current_database = client
             .current_database_blocking()
             .map_err(|e| e.to_string())?;
@@ -7617,7 +7623,8 @@ fn remote_cli_query_impl(
         password: db_password,
         service: db_service.trim().to_string(),
     };
-    let r = remote_db_cli::query_blocking(&session, kind, &conn, &sql).map_err(|e| e.to_string())?;
+    let r =
+        remote_db_cli::query_blocking(&session, kind, &conn, &sql).map_err(|e| e.to_string())?;
     if let Some(err) = r.error {
         return Err(err);
     }
@@ -9587,22 +9594,6 @@ struct RemoteSqliteCapabilityView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RemoteSqliteInstallReportView {
-    /// One of `installed` / `unsupported-distro` / `sudo-requires-password`
-    /// / `package-manager-failed`. Mirrors the kebab-case tag emitted by
-    /// `RemoteSqliteInstallStatus`'s serde representation so the frontend
-    /// can match on a flat string.
-    status: String,
-    distro_id: String,
-    package_manager: String,
-    command: String,
-    exit_code: i32,
-    output_tail: String,
-    installed_version: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct RemoteSqliteBrowserState {
     path: String,
     table_name: String,
@@ -9682,59 +9673,6 @@ fn sqlite_remote_capable_impl(
         version: cap.version,
         supports_json: cap.supports_json,
     })
-}
-
-#[tauri::command]
-async fn sqlite_install_remote(
-    app: tauri::AppHandle,
-    host: String,
-    port: u16,
-    user: String,
-    auth_mode: String,
-    password: String,
-    key_path: String,
-    saved_connection_index: Option<usize>,
-) -> Result<RemoteSqliteInstallReportView, String> {
-    // `apt-get update + install` over SSH routinely takes 20–60s. Running
-    // that on the IPC worker would starve every other invoke (server
-    // monitor probes, terminal CWD polling, panel refreshes) and the
-    // whole UI looks frozen. Push the wait onto tokio's blocking pool
-    // instead — same pattern as `local_docker_overview`.
-    tauri::async_runtime::spawn_blocking(move || {
-        let state: tauri::State<'_, AppState> = app.state();
-        let session = get_or_open_ssh_session(
-            &state,
-            &host,
-            port,
-            &user,
-            &auth_mode,
-            &password,
-            &key_path,
-            saved_connection_index,
-        )?;
-        let report = sqlite_remote::install_blocking(&session).map_err(|e| e.to_string())?;
-        let status = match report.status {
-            sqlite_remote::RemoteSqliteInstallStatus::Installed => "installed",
-            sqlite_remote::RemoteSqliteInstallStatus::UnsupportedDistro => "unsupported-distro",
-            sqlite_remote::RemoteSqliteInstallStatus::SudoRequiresPassword => {
-                "sudo-requires-password"
-            }
-            sqlite_remote::RemoteSqliteInstallStatus::PackageManagerFailed => {
-                "package-manager-failed"
-            }
-        };
-        Ok::<_, String>(RemoteSqliteInstallReportView {
-            status: status.to_string(),
-            distro_id: report.distro_id,
-            package_manager: report.package_manager,
-            command: report.command,
-            exit_code: report.exit_code,
-            output_tail: report.output_tail,
-            installed_version: report.installed_version,
-        })
-    })
-    .await
-    .map_err(|e| format!("sqlite_install_remote join: {e}"))?
 }
 
 // ── Software panel ─────────────────────────────────────────────
@@ -19105,7 +19043,6 @@ pub fn run() {
             db_cred_resolve,
             docker_inspect_db_env,
             sqlite_remote_capable,
-            sqlite_install_remote,
             sqlite_browse_remote,
             sqlite_execute_remote,
             software_registry,

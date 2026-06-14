@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
 import ComboInput from "../ComboInput";
+import ContextMenu, { type ContextMenuItem } from "../ContextMenu";
 import Select from "../Select";
 import type { DataPreview } from "../../lib/types";
 import { confirm } from "../../stores/useConfirmStore";
@@ -111,6 +112,16 @@ export default function DbResultGrid({
   const [dirtyMap, setDirtyMap] = useState<Map<string, DirtyCell>>(new Map());
   const [pendingInserts, setPendingInserts] = useState<Record<string, string>[]>([]);
   const [pendingDeletes, setPendingDeletes] = useState<Set<number>>(new Set());
+  // Right-click row/cell menu. `rowIdx` is the absolute index into the
+  // source preview so it lines up with the edit/delete handlers.
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    rowIdx: number;
+    col: string;
+    value: string;
+    row: string[];
+  } | null>(null);
   // Per-column width overrides, keyed by column name. Loaded from
   // localStorage when `storageKey` is provided; falls back to "auto"
   // (browser-decided) when no override is set. Stored as integer
@@ -442,6 +453,47 @@ export default function DbResultGrid({
     const init: Record<string, string> = {};
     for (const c of cols) init[c] = "";
     setPendingInserts((prev) => [...prev, init]);
+  };
+
+  const copyText = (s: string) => {
+    void navigator.clipboard?.writeText(s).catch(() => {});
+  };
+
+  /** Build the right-click row/cell menu from the clicked target. */
+  const rowMenuItems = (m: {
+    rowIdx: number;
+    col: string;
+    value: string;
+    row: string[];
+  }): ContextMenuItem[] => {
+    const items: ContextMenuItem[] = [];
+    const isDeleted = pendingDeletes.has(m.rowIdx);
+    if (editEnabled && !pkSet.has(m.col) && !isDeleted) {
+      items.push({ label: t("Edit cell"), action: () => startEdit(m.rowIdx, m.col) });
+    }
+    items.push({ label: t("Copy cell"), action: () => copyText(m.value) });
+    items.push({
+      label: t("Copy row (TSV)"),
+      action: () => copyText(m.row.map((c) => c ?? "").join("\t")),
+    });
+    if (onOpenRow) {
+      items.push({ divider: true });
+      items.push({ label: t("View full row"), action: () => onOpenRow(m.row) });
+    }
+    if (insertEnabled || editEnabled) {
+      items.push({ divider: true });
+      if (insertEnabled) {
+        items.push({ label: t("Insert row"), action: () => startInsert() });
+      }
+      if (editEnabled) {
+        items.push({
+          label: isDeleted ? t("Undo delete") : t("Delete row"),
+          action: () => togglePendingDelete(m.rowIdx),
+          iconColor: isDeleted ? undefined : "var(--neg)",
+        });
+      }
+    }
+    return items;
   };
 
   /**
@@ -869,8 +921,6 @@ export default function DbResultGrid({
                       (isDeleted ? " rg-row-deleted" : "") +
                       (rowIsDirty && !isDeleted ? " rg-row-dirty" : "")
                     }
-                    onClick={() => onOpenRow?.(row)}
-                    style={{ cursor: onOpenRow ? "pointer" : undefined }}
                   >
                     <td className="rg-td-n">{displayIdx}</td>
                     {row.map((cell, ci) => {
@@ -922,6 +972,17 @@ export default function DbResultGrid({
                           onDoubleClick={(e) => {
                             e.stopPropagation();
                             startEdit(absIdx, col);
+                          }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setMenu({
+                              x: e.clientX,
+                              y: e.clientY,
+                              rowIdx: absIdx,
+                              col,
+                              value: String(display ?? ""),
+                              row,
+                            });
                           }}
                         >
                           {isEditing ? (
@@ -1046,6 +1107,14 @@ export default function DbResultGrid({
           />
         </label>
       </div>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={rowMenuItems(menu)}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }

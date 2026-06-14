@@ -93,57 +93,6 @@ pub struct RemoteSqliteCapability {
     pub supports_json: bool,
 }
 
-/// Outcome of an auto-install attempt. The frontend branches on this
-/// rather than the `SshError` enum because every status here is the
-/// result of a *successful* SSH round-trip — failures arise only when
-/// the SSH layer itself is broken.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case", tag = "kind")]
-pub enum RemoteSqliteInstallStatus {
-    /// `sqlite3` is now on the remote PATH (either it already was, or
-    /// our install command succeeded). `version` carries the parsed
-    /// `sqlite3 --version` output.
-    Installed,
-    /// We could not match the remote `/etc/os-release` `ID` /
-    /// `ID_LIKE` to any package manager we know how to drive.
-    UnsupportedDistro,
-    /// `sudo -n` reported that a password is required. The user must
-    /// either reconnect as root or configure passwordless sudo.
-    SudoRequiresPassword,
-    /// The package manager exited non-zero and a follow-up probe still
-    /// could not find `sqlite3`. `output_tail` carries the diagnostic
-    /// the user needs to act on.
-    PackageManagerFailed,
-}
-
-/// Structured result returned by [`install`]. Always populated, even
-/// on the no-op "already installed" branch — the UI uses the same
-/// fields to render a success/error card.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RemoteSqliteInstallReport {
-    /// Outcome class — see [`RemoteSqliteInstallStatus`].
-    pub status: RemoteSqliteInstallStatus,
-    /// `ID=` field from `/etc/os-release` (e.g. `ubuntu`, `alpine`).
-    /// Empty when `/etc/os-release` was missing or unreadable.
-    pub distro_id: String,
-    /// Human label of the manager we used (`apt`, `dnf`, `apk`,
-    /// `pacman`, `zypper`, `yum`). Empty on `UnsupportedDistro`.
-    pub package_manager: String,
-    /// Exact command we ran on the remote (already including any
-    /// `sudo -n` / `DEBIAN_FRONTEND=...` prefix). Empty on
-    /// `UnsupportedDistro` and on the already-installed fast path.
-    pub command: String,
-    /// Exit code reported by the install command, or 0 on the
-    /// already-installed fast path.
-    pub exit_code: i32,
-    /// Last ~40 lines of merged stdout/stderr from the install
-    /// command. Empty on the already-installed fast path.
-    pub output_tail: String,
-    /// Version string from a post-install `sqlite3 --version`. `None`
-    /// when the package manager failed and `sqlite3` is still missing.
-    pub installed_version: Option<String>,
-}
-
 // ─────────────────────────────────────────────────────────
 // Entry points
 // ─────────────────────────────────────────────────────────
@@ -176,50 +125,6 @@ pub async fn probe(session: &SshSession) -> RemoteSqliteCapability {
         version,
         supports_json,
     }
-}
-
-/// Auto-install `sqlite3` on the remote host. Thin wrapper over the
-/// generic [`crate::services::package_manager::install`] with a noop
-/// per-line callback — the SQLite panel's button shows a single status
-/// note rather than a streaming log, so we don't need the live feed
-/// here. The Software panel exposes the streaming variant directly.
-pub async fn install(session: &SshSession) -> Result<RemoteSqliteInstallReport> {
-    use crate::services::package_manager as pm;
-
-    // The SQLite panel button has no version pin and no Cancel UI —
-    // pass `None` for both. Match arm below stays exhaustive for
-    // `Cancelled` defensively in case a future caller injects a token.
-    // No sudo password threaded here either — the SQLite panel doesn't
-    // surface the password prompt; callers needing that go through
-    // `software_install_remote` instead.
-    let report = pm::install(session, "sqlite3", false, None, None, None, |_| {}, None).await?;
-    Ok(RemoteSqliteInstallReport {
-        status: match report.status {
-            pm::InstallStatus::Installed => RemoteSqliteInstallStatus::Installed,
-            pm::InstallStatus::UnsupportedDistro => RemoteSqliteInstallStatus::UnsupportedDistro,
-            pm::InstallStatus::SudoRequiresPassword => {
-                RemoteSqliteInstallStatus::SudoRequiresPassword
-            }
-            // sqlite3 has no vendor_script — the v2 vendor variants
-            // can't be produced by `pm::install("sqlite3", …)`. Map
-            // them (along with PackageManagerFailed and Cancelled)
-            // to PackageManagerFailed so the SQLite panel's existing
-            // error UI keeps working if a future descriptor edit
-            // ever changes that.
-            pm::InstallStatus::PackageManagerFailed
-            | pm::InstallStatus::Cancelled
-            | pm::InstallStatus::VendorScriptDownloadFailed
-            | pm::InstallStatus::VendorScriptFailed => {
-                RemoteSqliteInstallStatus::PackageManagerFailed
-            }
-        },
-        distro_id: report.distro_id,
-        package_manager: report.package_manager,
-        command: report.command,
-        exit_code: report.exit_code,
-        output_tail: report.output_tail,
-        installed_version: report.installed_version,
-    })
 }
 
 /// List tables on a remote `.db` file. Equivalent to
@@ -759,10 +664,6 @@ fn supports_json_mode(version: &str) -> bool {
 /// Blocking wrapper for [`probe`].
 pub fn probe_blocking(session: &SshSession) -> RemoteSqliteCapability {
     crate::ssh::runtime::shared().block_on(probe(session))
-}
-/// Blocking wrapper for [`install`].
-pub fn install_blocking(session: &SshSession) -> Result<RemoteSqliteInstallReport> {
-    crate::ssh::runtime::shared().block_on(install(session))
 }
 /// Best-effort `stat`-style file-size lookup on the remote host.
 /// Tries `stat -c %s` first (GNU coreutils / BusyBox) and falls

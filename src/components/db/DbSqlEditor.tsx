@@ -1,5 +1,5 @@
-import { Activity, Edit, FileText, GitBranch, History, Lock, Play, Plus, Star, Unlock, Wand2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Activity, ChevronLeft, ChevronRight, Edit, FileText, GitBranch, History, Lock, Play, Plus, Star, Unlock, Wand2, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
 import { renderSqlTokens } from "./sqlHighlight";
@@ -144,9 +144,47 @@ export default function DbSqlEditor({
 
   const isMulti = !!tabs && tabs.length > 0;
 
+  // Horizontal-scroll the tab strip when more tabs are open than fit. The
+  // ‹ › buttons appear only when the strip actually overflows.
+  const tabListRef = useRef<HTMLDivElement | null>(null);
+  const [tabOverflow, setTabOverflow] = useState(false);
+  const measureTabs = () => {
+    const el = tabListRef.current;
+    if (!el) return;
+    setTabOverflow(el.scrollWidth > el.clientWidth + 4);
+  };
+  useLayoutEffect(measureTabs, [tabs, activeTabId]);
+  useEffect(() => {
+    const el = tabListRef.current;
+    if (!el) return;
+    // Observe the strip itself so panel-splitter resizes (which don't
+    // fire window.resize) still toggle the ‹ › buttons correctly.
+    const ro = new ResizeObserver(() => measureTabs());
+    ro.observe(el);
+    window.addEventListener("resize", measureTabs);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measureTabs);
+    };
+  }, []);
+  const scrollTabs = (dir: -1 | 1) => {
+    tabListRef.current?.scrollBy({ left: dir * 160, behavior: "smooth" });
+  };
+
   return (
     <div className="sq">
       <div className="sq-tabs">
+        {isMulti && tabOverflow && (
+          <button
+            type="button"
+            className="sq-tab-nav"
+            onClick={() => scrollTabs(-1)}
+            title={t("Scroll tabs left")}
+          >
+            <ChevronLeft size={12} />
+          </button>
+        )}
+        <div className="sq-tab-list" ref={tabListRef}>
         {isMulti ? (
           tabs!.map((tab) => {
             const active = tab.id === activeTabId;
@@ -193,7 +231,18 @@ export default function DbSqlEditor({
             <Plus size={11} />
           </button>
         )}
-        <span className="sq-spacer" />
+        </div>
+        {isMulti && tabOverflow && (
+          <button
+            type="button"
+            className="sq-tab-nav"
+            onClick={() => scrollTabs(1)}
+            title={t("Scroll tabs right")}
+          >
+            <ChevronRight size={12} />
+          </button>
+        )}
+        <div className="sq-tab-actions">
         {history && history.length > 0 && (
           <button
             type="button"
@@ -248,6 +297,7 @@ export default function DbSqlEditor({
         >
           <Wand2 size={11} />
         </button>
+        </div>
       </div>
 
       <div className="sq-editor-wrap">

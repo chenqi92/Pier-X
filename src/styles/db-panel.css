@@ -675,7 +675,41 @@
   border-bottom: 1px solid var(--line);
   flex: none;
 }
+/* Scrollable tab strip — tabs keep their width and scroll horizontally
+   instead of being clipped when more are open than fit. The action
+   buttons (history / favorites / format) stay pinned on the right. */
+.sq-tab-list {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-0-5);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.sq-tab-list::-webkit-scrollbar { display: none; }
+.sq-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-0-5);
+  flex: none;
+}
+.sq-tab-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 22px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+.sq-tab-nav:hover { color: var(--ink); background: var(--panel-2); }
 .sq-tab {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
@@ -1003,6 +1037,7 @@
 
 .sq-foot {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-1-5) var(--sp-2-5);
@@ -1010,6 +1045,12 @@
   border-top: 1px solid var(--line);
   flex: none;
 }
+/* Keep the lock toggle + action buttons on one line; only the hint
+   shrinks/truncates so a narrow right-rail width never wraps the row. */
+.sq-foot > .sq-lock,
+.sq-foot > .btn,
+.sq-foot > .sq-shortcut,
+.sq-foot > .sq-confirm { flex: none; }
 .sq-lock {
   display: inline-flex;
   align-items: center;
@@ -1032,6 +1073,11 @@
   font-size: var(--size-small);
   color: var(--dim);
   font-family: var(--mono);
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sq-shortcut {
   font-size: var(--size-small);
@@ -1318,6 +1364,19 @@
   font-size: var(--ui-fs);
   padding: 4px var(--sp-1-5);
   box-sizing: border-box;
+}
+/* The inline cell editor is a ComboInput — its `input.ui-combo` border /
+   radius / panel background / fixed control-height out-specify the rule
+   above, drawing a SECOND box inside the cell's accent outline. Override
+   at matching specificity so the editor fills the cell as a single box. */
+input.ui-combo.rg-td-input {
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 4px var(--sp-1-5);
+  font-family: var(--mono);
+  font-size: var(--ui-fs);
 }
 .rg-td-input-num {
   text-align: right;
@@ -2596,7 +2655,10 @@
   color: var(--ink);
 }
 
-@container rds (max-width: 600px) {
+/* Stack key-list over detail when the panel is narrow; flip to a
+ * side-by-side split when wide — same threshold the .db2 SQL panels use
+ * to collapse their tree sidebar, so every DB panel switches in step. */
+@container rds (max-width: 560px) {
   .rds-split {
     grid-template-columns: minmax(0, 1fr);
     grid-auto-rows: minmax(0, 1fr);
@@ -2887,15 +2949,46 @@
 .db-switcher {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--sp-1);
   padding: var(--sp-1) var(--sp-2);
   border-bottom: 1px solid var(--line);
   background: var(--surface);
+}
+.db-switcher__scroll {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
 }
-.db-switcher::-webkit-scrollbar {
+.db-switcher__scroll::-webkit-scrollbar {
   display: none;
+}
+.db-switcher__arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.db-switcher__arrow:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--bg-hover);
+  border-color: var(--line-3);
+}
+.db-switcher__arrow:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 .db-switcher__btn {
   display: inline-flex;
@@ -3000,6 +3093,8 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  container-type: inline-size;
+  container-name: dbq;
 }
 .dbq-body {
   flex: 1;
@@ -3119,4 +3214,21 @@
   background: var(--panel);
   position: sticky;
   top: 0;
+}
+
+/* Narrow right panel: stack the db/table sidebar above the editor + results
+ * instead of side-by-side, matching the 560px flip the .db2 (MySQL/PG/SQLite)
+ * and .rds (Redis) panels use. Unlike .db2 we keep the sidebar visible (as a
+ * height-capped top section) rather than hiding it, since .dbq has no compact
+ * table-bar fallback to navigate from. */
+@container dbq (max-width: 560px) {
+  .dbq-body {
+    flex-direction: column;
+  }
+  .dbq-side {
+    width: auto;
+    max-height: 40%;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
 }

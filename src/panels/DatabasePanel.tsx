@@ -1,4 +1,5 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { DbProduct, TabState } from "../lib/types";
 import { DATABASE_TOOL_KINDS } from "../lib/types";
 import { DB_KIND_META } from "../lib/rightToolMeta";
@@ -137,41 +138,124 @@ function DbProductSwitcher({
   onPick: (k: DbProduct) => void;
   t: (s: string) => string;
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState({ left: false, right: false });
+
+  const updateOverflow = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const { scrollLeft, scrollWidth, clientWidth } = el;
+    setOverflow({
+      left: scrollLeft > 0,
+      right: scrollLeft + clientWidth < scrollWidth - 1,
+    });
+  }, []);
+
+  // Recompute the arrow state whenever the bar or its content is resized
+  // (panel width changes, fonts load, items added later).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    updateOverflow();
+    const ro = new ResizeObserver(updateOverflow);
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+    return () => ro.disconnect();
+  }, [updateOverflow]);
+
+  // Keep the active pill in view when switching products via other entry
+  // points (palette, persisted tab) so the selection is never off-screen.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const activeEl = el?.querySelector('[aria-selected="true"]');
+    activeEl?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+  }, [active]);
+
+  function step(direction: -1 | 1) {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: direction * Math.max(el.clientWidth * 0.7, 120), behavior: "smooth" });
+  }
+
+  function onWheel(event: React.WheelEvent<HTMLDivElement>) {
+    const el = scrollRef.current;
+    if (!el) return;
+    // Translate a vertical wheel into horizontal scroll so users without a
+    // horizontal-scroll device can still reach overflowing products.
+    if (event.deltaY !== 0 && el.scrollWidth > el.clientWidth) {
+      el.scrollLeft += event.deltaY;
+    }
+  }
+
+  const scrollable = overflow.left || overflow.right;
+
   return (
-    <div className="db-switcher" role="tablist">
-      {DATABASE_TOOL_KINDS.map((kind) => {
-        const meta = DB_KIND_META[kind];
-        const Icon = meta.icon;
-        const isActive = kind === active;
-        const isRunning = running.has(kind);
-        return (
-          <button
-            key={kind}
-            type="button"
-            role="tab"
-            aria-selected={isActive}
-            className={
-              "db-switcher__btn" +
-              (isActive ? " is-active" : "") +
-              (meta.available ? "" : " db-switcher__btn--soon")
-            }
-            style={{ ["--db-tint" as string]: meta.tintVar }}
-            onClick={() => onPick(kind)}
-            title={meta.label}
-          >
-            <span className="db-switcher__icon">
-              <Icon size={13} />
-            </span>
-            <span className="db-switcher__label">{meta.label}</span>
-            {isRunning && (
-              <span className="db-switcher__dot" title={t("Running")} />
-            )}
-            {!meta.available && (
-              <span className="db-switcher__soon">{t("soon")}</span>
-            )}
-          </button>
-        );
-      })}
+    <div className="db-switcher">
+      {scrollable && (
+        <button
+          type="button"
+          className="db-switcher__arrow"
+          disabled={!overflow.left}
+          title={t("Scroll left")}
+          aria-label={t("Scroll left")}
+          onClick={() => step(-1)}
+        >
+          <ChevronLeft size={14} />
+        </button>
+      )}
+      <div
+        className="db-switcher__scroll"
+        role="tablist"
+        ref={scrollRef}
+        onScroll={updateOverflow}
+        onWheel={onWheel}
+      >
+        {DATABASE_TOOL_KINDS.map((kind) => {
+          const meta = DB_KIND_META[kind];
+          const Icon = meta.icon;
+          const isActive = kind === active;
+          const isRunning = running.has(kind);
+          return (
+            <button
+              key={kind}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              className={
+                "db-switcher__btn" +
+                (isActive ? " is-active" : "") +
+                (meta.available ? "" : " db-switcher__btn--soon")
+              }
+              style={{ ["--db-tint" as string]: meta.tintVar }}
+              onClick={() => onPick(kind)}
+              title={meta.label}
+            >
+              <span className="db-switcher__icon">
+                <Icon size={13} />
+              </span>
+              <span className="db-switcher__label">{meta.label}</span>
+              {isRunning && (
+                <span className="db-switcher__dot" title={t("Running")} />
+              )}
+              {!meta.available && (
+                <span className="db-switcher__soon">{t("soon")}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {scrollable && (
+        <button
+          type="button"
+          className="db-switcher__arrow"
+          disabled={!overflow.right}
+          title={t("Scroll right")}
+          aria-label={t("Scroll right")}
+          onClick={() => step(1)}
+        >
+          <ChevronRight size={14} />
+        </button>
+      )}
     </div>
   );
 }

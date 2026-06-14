@@ -78,7 +78,7 @@ import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import Popover from "../components/Popover";
 import Select from "../components/Select";
 import StatusDot from "../components/StatusDot";
-import SudoPasswordDialog from "../components/SudoPasswordDialog";
+import { useSudoRetry } from "../lib/useSudoRetry";
 import "../styles/software-panel.css";
 
 type Props = { tab: TabState | null; isActive?: boolean };
@@ -401,20 +401,6 @@ function SoftwarePanelBody({ tab, isActive = true }: Props) {
    *  notes / "I understand" gate. */
   const [vendorTarget, setVendorTarget] = useState<SoftwareDescriptor | null>(null);
 
-  /** Pending sudo-password prompt. `null` = no prompt visible.
-   *  When set, the modal `SudoPasswordDialog` appears; its submit /
-   *  cancel handlers resolve the embedded promise so the in-flight
-   *  install/uninstall/etc handler can decide whether to retry with
-   *  the new password or surface the original
-   *  `sudo-requires-password` outcome. */
-  const [sudoPrompt, setSudoPrompt] = useState<{
-    hostLabel: string;
-    errorMessage?: string;
-    resolve: (result: { password: string; remember: boolean } | null) => void;
-  } | null>(null);
-  const sudoPromptRef = useRef(sudoPrompt);
-  sudoPromptRef.current = sudoPrompt;
-
   const sshParams = useMemo(() => {
     if (!sshReady || !sshTarget) return null;
     return {
@@ -444,6 +430,14 @@ function SoftwarePanelBody({ tab, isActive = true }: Props) {
     if (!sshParams) return;
     void useSudoStore.getState().hydrate(sshParams);
   }, [sshParams]);
+
+  // Shared sudo-password retry flow (cached/keychain password → pass it →
+  // on `sudo-requires-password`, prompt + retry). `sudoDialog` is rendered
+  // near the panel's other dialogs below.
+  const { withSudoRetry, sudoDialog } = useSudoRetry(
+    sshParams,
+    sshTarget ? `${displayUser}@${sshTarget.host}` : t("the remote host"),
+  );
 
   // Pull the registry once. It's a static const on the backend so we
   // don't refetch when the host changes.
@@ -675,82 +669,6 @@ function SoftwarePanelBody({ tab, isActive = true }: Props) {
       }
       return { ...prev, [packageId]: opening };
     });
-  }
-
-  /** Promise-returning helper: pop the sudo password dialog, wait
-   *  for the user, resolve with the entered string (or `null` on
-   *  Cancel). Used by the sudo-retry wrapper below; never shows two
-   *  prompts at once because the panel's lifecycle handlers wait on
-   *  this promise before continuing. */
-  function requestSudoPassword(
-    errorMessage?: string,
-  ): Promise<{ password: string; remember: boolean } | null> {
-    const hostLabel = sshTarget
-      ? `${displayUser}@${sshTarget.host}`
-      : t("the remote host");
-    return new Promise<{ password: string; remember: boolean } | null>((resolve) => {
-      // If a prior prompt is still open (shouldn't happen — every
-      // call awaits the resolver — but be defensive), close it first
-      // so the previous awaiter sees a `null` and bails cleanly.
-      sudoPromptRef.current?.resolve(null);
-      setSudoPrompt({ hostLabel, errorMessage, resolve });
-    });
-  }
-
-  /** Wrap a single backend call in sudo-password retry logic. `fn`
-   *  is invoked once with whatever password is cached for the host
-   *  (or `null` for the legacy `sudo -n` path). If the report comes
-   *  back as `sudo-requires-password`, we pop the dialog, cache the
-   *  user's input, and call `fn` again — repeating until either:
-   *
-   *  - The report status is anything OTHER than
-   *    `sudo-requires-password` (success, package-manager-failed,
-   *    cancelled, …), in which case we return that report.
-   *  - The user dismisses the dialog (Cancel / Esc), in which case
-   *    we return the most recent `sudo-requires-password` report so
-   *    the caller can finalize the activity with the original
-   *    "needs password" outcome.
-   *
-   *  Each retry runs as a fresh attempt — the caller passes a
-   *  closure that owns its own subscribe / unsubscribe / installId
-   *  lifecycle so the activity log reflects the actual run. */
-  async function withSudoRetry<R extends { status: string }>(
-    fn: (sudoPassword: string | null) => Promise<R>,
-  ): Promise<R> {
-    if (!sshParams) {
-      // Should be unreachable — every caller checks sshParams first
-      // — but TypeScript wants the path-typed return.
-      return fn(null);
-    }
-    const cached = useSudoStore.getState().get(sshParams);
-    let password: string | null = cached;
-    let cachedRejectedThisRun = false;
-    let lastReport: R | null = null;
-    // Cap at 4 attempts (1 initial + 3 retries) so a stuck dialog
-    // can't spin forever. The user can re-trigger from the row.
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const report = await fn(password);
-      lastReport = report;
-      if (report.status !== "sudo-requires-password") return report;
-      // First failure with a cached password → that cached value is
-      // wrong; clear it and ask fresh. After that it's straight
-      // "wrong password, try again" until the loop bottoms out.
-      let errorMessage: string | undefined;
-      if (cached && password === cached && !cachedRejectedThisRun) {
-        useSudoStore.getState().clear(sshParams);
-        cachedRejectedThisRun = true;
-        errorMessage = t("Saved sudo password was rejected — please re-enter.");
-      } else if (attempt > 0) {
-        errorMessage = t("Wrong password — please try again.");
-      }
-      const fresh = await requestSudoPassword(errorMessage);
-      if (fresh === null) return report;
-      password = fresh.password;
-      void useSudoStore
-        .getState()
-        .setPersistent(sshParams, fresh.password, fresh.remember);
-    }
-    return lastReport as R;
   }
 
   /** Kick off a `systemctl <verb>` for one row's service. Mirrors the
@@ -2654,21 +2572,7 @@ function SoftwarePanelBody({ tab, isActive = true }: Props) {
           if (uninstallTarget) void runUninstall(uninstallTarget, opts);
         }}
       />
-      <SudoPasswordDialog
-        open={sudoPrompt !== null}
-        hostLabel={sudoPrompt?.hostLabel ?? ""}
-        errorMessage={sudoPrompt?.errorMessage}
-        onSubmit={(password, remember) => {
-          const cur = sudoPromptRef.current;
-          setSudoPrompt(null);
-          cur?.resolve({ password, remember });
-        }}
-        onCancel={() => {
-          const cur = sudoPromptRef.current;
-          setSudoPrompt(null);
-          cur?.resolve(null);
-        }}
-      />
+      {sudoDialog}
       <ServiceLogsDialog
         target={logTarget}
         sshParams={sshParams}

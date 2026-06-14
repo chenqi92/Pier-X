@@ -4,12 +4,14 @@ import { useEffect, useRef } from "react";
 import * as cmd from "../lib/commands";
 import type { SoftwareInstallReport, SshParams } from "../lib/commands";
 import { describeInstallOutcome } from "../lib/softwareInstall";
+import { useSudoRetry } from "../lib/useSudoRetry";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import {
   activePackageId,
   useSoftwareStore,
 } from "../stores/useSoftwareStore";
+import { useSudoStore } from "../stores/useSudoStore";
 
 /** Registry ids declared in `pier-core/src/services/package_manager.rs`. */
 type PackageId = "docker" | "redis" | "mariadb" | "postgres" | "sqlite3";
@@ -65,6 +67,21 @@ export default function InlineInstallCta({
   // re-emits during a parent re-render.
   const installedFiredRef = useRef<string | null>(null);
 
+  // Same sudo flow the Software panel uses: cached/keychain password →
+  // pass it to the install → on `sudo-requires-password`, prompt + retry.
+  const hostLabel = sshParams
+    ? `${sshParams.user}@${sshParams.host}`
+    : t("the remote host");
+  const { withSudoRetry, sudoDialog } = useSudoRetry(sshParams, hostLabel);
+
+  // Lift any persisted elevation password from the OS keychain into the
+  // in-memory cache the first time we see this host, so the retry path
+  // can reuse it without a prompt round-trip.
+  useEffect(() => {
+    if (!sshParams) return;
+    void useSudoStore.getState().hydrate(sshParams);
+  }, [sshParams]);
+
   useEffect(() => {
     if (!activity || !logRef.current) return;
     logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -73,21 +90,43 @@ export default function InlineInstallCta({
   async function runInstall() {
     if (!sshParams || !swKey || !canManage) return;
     if (activity?.busy || otherBusy) return;
-    const installId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random()}`;
-    startActivity(swKey, packageId, installId, "install");
-    const unlisten = await cmd.subscribeSoftwareInstall(installId, (evt) => {
-      if (evt.kind === "line") appendLine(swKey, packageId, evt.text);
-    });
+    // Each sudo retry attempt owns its own installId + subscribe cycle so
+    // the streamed log stays in sync with the run the backend emits
+    // against. `startActivity` fires once; the captured installId from the
+    // last attempt is what `onInstalled` dedupes on.
+    let firstAttempt = true;
+    let lastInstallId: string | null = null;
     try {
-      const report: SoftwareInstallReport = await cmd.softwareInstallRemote({
-        ...sshParams,
-        packageId,
-        installId,
-        enableService,
-      });
+      const report = await withSudoRetry<SoftwareInstallReport>(
+        async (sudoPassword) => {
+          const installId =
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random()}`;
+          lastInstallId = installId;
+          if (firstAttempt) {
+            startActivity(swKey, packageId, installId, "install");
+            firstAttempt = false;
+          }
+          const unlisten = await cmd.subscribeSoftwareInstall(
+            installId,
+            (evt) => {
+              if (evt.kind === "line") appendLine(swKey, packageId, evt.text);
+            },
+          );
+          try {
+            return await cmd.softwareInstallRemote({
+              ...sshParams,
+              packageId,
+              installId,
+              enableService,
+              sudoPassword: sudoPassword ?? null,
+            });
+          } finally {
+            unlisten();
+          }
+        },
+      );
       const localized = describeInstallOutcome(report, t);
       const nextStatus = {
         id: packageId,
@@ -103,15 +142,14 @@ export default function InlineInstallCta({
       );
       if (
         report.status === "installed" &&
-        installedFiredRef.current !== installId
+        lastInstallId &&
+        installedFiredRef.current !== lastInstallId
       ) {
-        installedFiredRef.current = installId;
+        installedFiredRef.current = lastInstallId;
         onInstalled?.();
       }
     } catch (e) {
       finishActivity(swKey, packageId, formatError(e), null);
-    } finally {
-      unlisten();
     }
   }
 
@@ -164,6 +202,7 @@ export default function InlineInstallCta({
           {activity.log.join("\n")}
         </pre>
       )}
+      {sudoDialog}
     </div>
   );
 }

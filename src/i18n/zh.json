@@ -18,6 +18,8 @@
   "New tab": "新建标签页",
   "Scroll tabs left": "向左滚动标签页",
   "Scroll tabs right": "向右滚动标签页",
+  "Scroll left": "向左滚动",
+  "Scroll right": "向右滚动",
   "Git": "Git",
   "Server Monitor": "服务器监控",
   "Docker": "Docker",

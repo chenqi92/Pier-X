@@ -764,7 +764,18 @@ export type HostKeyPromptEvent = {
 export const sshHostKeyDecide = (promptId: string, accept: boolean) =>
   invoke<void>("ssh_host_key_decide", { promptId, accept });
 
-export type CodeSearchEngine = "rg" | "git-grep" | "none" | "cwd-missing";
+export type CodeSearchMode = "content" | "filename" | "command";
+
+export type CodeSearchEngine =
+  | "rg"
+  | "git-grep"
+  | "grep"
+  | "fd"
+  | "rg-files"
+  | "find"
+  | "command"
+  | "none"
+  | "cwd-missing";
 
 export type CodeSearchHit = {
   file: string;
@@ -791,6 +802,7 @@ export type CodeSearchParams = {
   savedConnectionIndex: number | null;
   cwd: string;
   query: string;
+  mode?: CodeSearchMode;
   caseInsensitive?: boolean;
   regex?: boolean;
   wholeWord?: boolean;
@@ -809,6 +821,7 @@ export const codeSearch = (params: CodeSearchParams) =>
     savedConnectionIndex: params.savedConnectionIndex,
     cwd: params.cwd,
     query: params.query,
+    mode: params.mode ?? "content",
     caseInsensitive: params.caseInsensitive ?? false,
     regex: params.regex ?? false,
     wholeWord: params.wholeWord ?? false,
@@ -1599,27 +1612,6 @@ export type SshParams = {
 export const sqliteRemoteCapable = (params: SshParams) =>
   invoke<RemoteSqliteCapability>("sqlite_remote_capable", params);
 
-/** Outcome class returned by `sqliteInstallRemote`. Keep in sync with
- *  `RemoteSqliteInstallStatus` in `pier-core/src/services/sqlite_remote.rs`. */
-export type RemoteSqliteInstallStatus =
-  | "installed"
-  | "unsupported-distro"
-  | "sudo-requires-password"
-  | "package-manager-failed";
-
-export type RemoteSqliteInstallReport = {
-  status: RemoteSqliteInstallStatus;
-  distroId: string;
-  packageManager: string;
-  command: string;
-  exitCode: number;
-  outputTail: string;
-  installedVersion: string | null;
-};
-
-export const sqliteInstallRemote = (params: SshParams) =>
-  invoke<RemoteSqliteInstallReport>("sqlite_install_remote", params);
-
 // ── Software panel ─────────────────────────────────────────────
 
 /** Static info about a v2 vendor-supplied installer (e.g. Docker's
@@ -1710,8 +1702,8 @@ export type SoftwareProbeResult = {
 };
 
 /** Outcome class returned by `softwareInstallRemote` /
- *  `softwareUpdateRemote`. Superset of `RemoteSqliteInstallStatus` —
- *  v2 adds Cancelled (cancel button) and the two vendor-script-only
+ *  `softwareUpdateRemote`. Beyond the base install/distro/sudo/package-manager
+ *  outcomes, v2 adds Cancelled (cancel button) and the two vendor-script-only
  *  outcomes (vendor channel). */
 export type SoftwareInstallStatus =
   | "installed"

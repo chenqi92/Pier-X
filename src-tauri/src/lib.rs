@@ -5343,6 +5343,7 @@ async fn code_search(
     saved_connection_index: Option<usize>,
     cwd: String,
     query: String,
+    mode: Option<String>,
     case_insensitive: Option<bool>,
     regex: Option<bool>,
     whole_word: Option<bool>,
@@ -5362,6 +5363,7 @@ async fn code_search(
             saved_connection_index,
             cwd,
             query,
+            mode,
             case_insensitive,
             regex,
             whole_word,
@@ -5383,6 +5385,7 @@ fn code_search_impl(
     saved_connection_index: Option<usize>,
     cwd: String,
     query: String,
+    mode: Option<String>,
     case_insensitive: Option<bool>,
     regex: Option<bool>,
     whole_word: Option<bool>,
@@ -5394,6 +5397,9 @@ fn code_search_impl(
         return Err(String::from("Query is empty."));
     }
     let opts = pier_core::services::code_search::SearchOpts {
+        mode: pier_core::services::code_search::SearchMode::from_wire(
+            mode.as_deref().unwrap_or("content"),
+        ),
         cwd,
         query: trimmed_query.to_string(),
         case_insensitive: case_insensitive.unwrap_or(false),

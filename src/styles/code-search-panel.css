@@ -192,6 +192,115 @@
   flex: 0 0 auto;
 }
 
+/* Mode switch (content / file name / command) ------------------- */
+.cs-modes {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.cs-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1;
+  justify-content: center;
+  padding: 3px var(--sp-2);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--ui-fs-sm);
+  white-space: nowrap;
+}
+.cs-mode:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+.cs-mode.on {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.cs-mode:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Command-mode meta row (no cwd input) -------------------------- */
+.cs-meta-row {
+  font-size: var(--ui-fs-sm);
+}
+.cs-meta-label {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Install nudge (clickable CTA → Software panel) ---------------- */
+.cs-nudge {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 0 0 auto;
+}
+.cs-nudge-text {
+  flex: 1;
+  min-width: 0;
+}
+.cs-nudge-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: var(--size-micro);
+}
+.cs-nudge-cta:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent-dim);
+}
+
+/* File-name / command result rows (bare paths) ------------------ */
+.cs-path {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  padding: 3px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--panel);
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--ui-fs-sm);
+  color: var(--ink);
+  overflow: hidden;
+}
+.cs-path:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent-dim);
+}
+.cs-path-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.cs-path-base {
+  flex: 0 0 auto;
+  color: var(--ink);
+}
+
 @container cs (max-width: 340px) {
   .cs {
     padding: var(--sp-2);

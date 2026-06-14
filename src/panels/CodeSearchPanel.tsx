@@ -15,14 +15,23 @@ import {
   Regex,
   CaseSensitive,
   WholeWord,
+  FileSearch,
+  FileText,
+  TerminalSquare,
+  Download,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import * as cmd from "../lib/commands";
-import type { CodeSearchHit, CodeSearchOutput } from "../lib/commands";
+import type {
+  CodeSearchHit,
+  CodeSearchMode,
+  CodeSearchOutput,
+} from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import type { TabState } from "../lib/types";
 import { effectiveShellUser, effectiveSshTarget, isSshTargetReady } from "../lib/types";
+import { useTabStore } from "../stores/useTabStore";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
@@ -97,11 +106,29 @@ function CodeSearchBody({ tab }: Props) {
     );
   }, [tab.lastCwd]);
 
+  const [mode, setMode] = useState<CodeSearchMode>("content");
   const [query, setQuery] = useState("");
   const [caseInsensitive, setCaseInsensitive] = useState(true);
   const [regex, setRegex] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
   const [glob, setGlob] = useState("");
+
+  // Per-mode chrome. Content greps file bodies; FileName matches
+  // paths; Command locates an executable on $PATH (cwd-independent).
+  const showCwd = mode !== "command";
+  const showGlob = mode === "content";
+  const showToggles = mode !== "command";
+  const modeTabs: { id: CodeSearchMode; label: string; icon: typeof Search }[] = [
+    { id: "content", label: t("Content"), icon: FileSearch },
+    { id: "filename", label: t("File name"), icon: FileText },
+    { id: "command", label: t("Command"), icon: TerminalSquare },
+  ];
+  const placeholder =
+    mode === "filename"
+      ? t("Find files by name, e.g. nginx.conf")
+      : mode === "command"
+        ? t("Locate a command, e.g. python3")
+        : t("Search the terminal's working directory…");
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -170,24 +197,21 @@ function CodeSearchBody({ tab }: Props) {
     try {
       const out = await cmd.codeSearch({
         ...sshArgs,
-        cwd: cwd.trim(),
+        cwd: showCwd ? cwd.trim() : "",
         query: trimmed,
+        mode,
         caseInsensitive,
         regex,
         wholeWord,
-        glob: glob.trim(),
+        glob: showGlob ? glob.trim() : "",
         maxHits: 500,
       });
       if (seq !== searchSeqRef.current) return;
       setResult(out);
-      // Surface engine state failures as errors, not empty results.
-      if (out.engine === "none") {
-        setError(
-          t(
-            "No search engine on this host — install ripgrep (Software panel) or run inside a git repo.",
-          ),
-        );
-      } else if (out.engine === "cwd-missing") {
+      // `none` (no search tool found) is surfaced as a clickable
+      // install CTA below, not a blocking error. Real failures stay
+      // errors.
+      if (out.engine === "cwd-missing") {
         setError(
           t("Working directory does not exist on the remote: {cwd}", {
             cwd: cwd || "$HOME",
@@ -225,17 +249,53 @@ function CodeSearchBody({ tab }: Props) {
     setEditorTarget({
       path: absolute,
       name: basename(hit.file),
-      line: hit.line,
+      line: hit.line || 1,
       column: hit.column || 1,
     });
   }
 
-  const engineLabel =
-    result?.engine === "rg"
-      ? "rg"
-      : result?.engine === "git-grep"
-        ? "git grep"
-        : null;
+  function gotoSoftware() {
+    if (sshTarget) useTabStore.getState().setTabRightTool(tab.id, "software");
+  }
+
+  const ENGINE_LABELS: Partial<Record<CodeSearchOutput["engine"], string>> = {
+    rg: "rg",
+    "git-grep": "git grep",
+    grep: "grep",
+    fd: "fd",
+    "rg-files": "rg --files",
+    find: "find",
+    command: "command -v",
+  };
+  const engineLabel = result ? ENGINE_LABELS[result.engine] ?? null : null;
+
+  // A clickable "install a faster tool" nudge. Shown when the search
+  // fell back to a slow engine (plain grep / find) or found no tool
+  // at all — the CTA jumps to the Software panel to install it.
+  const nudge = !result
+    ? null
+    : result.engine === "none"
+      ? {
+          text:
+            mode === "filename"
+              ? t("No file-search tool found — install fd or ripgrep.")
+              : t("No search tool found — install ripgrep."),
+          cta: t("Install"),
+          tone: "error" as const,
+        }
+      : result.engine === "grep"
+        ? {
+            text: t("Using grep — install ripgrep for faster search."),
+            cta: t("Install ripgrep"),
+            tone: "warn" as const,
+          }
+        : result.engine === "find"
+          ? {
+              text: t("Using find — install fd for faster search."),
+              cta: t("Install fd"),
+              tone: "warn" as const,
+            }
+          : null;
 
   const headerMeta = result
     ? t("{n} hits", { n: result.hits.length }) +
@@ -250,6 +310,25 @@ function CodeSearchBody({ tab }: Props) {
         meta={headerMeta}
       />
       <div className="cs">
+        <div className="cs-modes" role="tablist" aria-label={t("Search mode")}>
+          {modeTabs.map((m) => {
+            const Icon = m.icon;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                role="tab"
+                aria-selected={mode === m.id}
+                className={"cs-mode" + (mode === m.id ? " on" : "")}
+                onClick={() => setMode(m.id)}
+                disabled={busy}
+              >
+                <Icon size={12} />
+                {m.label}
+              </button>
+            );
+          })}
+        </div>
         <div className="cs-toolbar">
           <div className="cs-input-wrap">
             <Search size={12} className="cs-input-icon" aria-hidden="true" />
@@ -258,7 +337,7 @@ function CodeSearchBody({ tab }: Props) {
               type="text"
               className="dlg-input mono cs-input"
               spellCheck={false}
-              placeholder={t("Search the terminal's working directory…")}
+              placeholder={placeholder}
               value={query}
               onChange={(e) => setQuery(e.currentTarget.value)}
               onKeyDown={(e) => {
@@ -280,35 +359,39 @@ function CodeSearchBody({ tab }: Props) {
               </button>
             ) : null}
           </div>
-          <div className="cs-toggles">
-            <button
-              type="button"
-              className={"cs-toggle" + (caseInsensitive ? "" : " on")}
-              onClick={() => setCaseInsensitive((v) => !v)}
-              title={t("Case sensitive")}
-              disabled={busy}
-            >
-              <CaseSensitive size={12} />
-            </button>
-            <button
-              type="button"
-              className={"cs-toggle" + (wholeWord ? " on" : "")}
-              onClick={() => setWholeWord((v) => !v)}
-              title={t("Whole word")}
-              disabled={busy}
-            >
-              <WholeWord size={12} />
-            </button>
-            <button
-              type="button"
-              className={"cs-toggle" + (regex ? " on" : "")}
-              onClick={() => setRegex((v) => !v)}
-              title={t("Regex")}
-              disabled={busy}
-            >
-              <Regex size={12} />
-            </button>
-          </div>
+          {showToggles ? (
+            <div className="cs-toggles">
+              <button
+                type="button"
+                className={"cs-toggle" + (caseInsensitive ? "" : " on")}
+                onClick={() => setCaseInsensitive((v) => !v)}
+                title={t("Case sensitive")}
+                disabled={busy}
+              >
+                <CaseSensitive size={12} />
+              </button>
+              {mode === "content" ? (
+                <button
+                  type="button"
+                  className={"cs-toggle" + (wholeWord ? " on" : "")}
+                  onClick={() => setWholeWord((v) => !v)}
+                  title={t("Whole word")}
+                  disabled={busy}
+                >
+                  <WholeWord size={12} />
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={"cs-toggle" + (regex ? " on" : "")}
+                onClick={() => setRegex((v) => !v)}
+                title={t("Regex")}
+                disabled={busy}
+              >
+                <Regex size={12} />
+              </button>
+            </div>
+          ) : null}
           <button
             type="button"
             className="btn is-primary is-compact"
@@ -320,52 +403,85 @@ function CodeSearchBody({ tab }: Props) {
           </button>
         </div>
 
-        <div className="cs-cwd-row">
-          <Folder size={11} className="muted" aria-hidden="true" />
-          <input
-            type="text"
-            className="dlg-input mono cs-cwd-input"
-            spellCheck={false}
-            placeholder="$HOME"
-            value={cwd}
-            onChange={(e) => setCwd(e.currentTarget.value)}
-            disabled={busy}
-            aria-label={t("Working directory")}
-          />
-          {engineLabel ? (
+        {showCwd ? (
+          <div className="cs-cwd-row">
+            <Folder size={11} className="muted" aria-hidden="true" />
+            <input
+              type="text"
+              className="dlg-input mono cs-cwd-input"
+              spellCheck={false}
+              placeholder="$HOME"
+              value={cwd}
+              onChange={(e) => setCwd(e.currentTarget.value)}
+              disabled={busy}
+              aria-label={t("Working directory")}
+            />
+            {engineLabel ? (
+              <span className="cs-engine-badge mono" title={t("Search engine")}>
+                {engineLabel}
+              </span>
+            ) : null}
+          </div>
+        ) : engineLabel ? (
+          <div className="cs-cwd-row cs-meta-row">
+            <TerminalSquare size={11} className="muted" aria-hidden="true" />
+            <span className="cs-meta-label muted">{t("Located on $PATH")}</span>
             <span className="cs-engine-badge mono" title={t("Search engine")}>
               {engineLabel}
             </span>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
 
-        <div className="cs-cwd-row">
-          <Filter size={11} className="muted" aria-hidden="true" />
-          <input
-            type="text"
-            className="dlg-input mono cs-cwd-input"
-            spellCheck={false}
-            placeholder={t("Glob filter, e.g. src/**/*.ts")}
-            value={glob}
-            onChange={(e) => setGlob(e.currentTarget.value)}
-            disabled={busy}
-            aria-label={t("Glob filter")}
-          />
-          {glob ? (
-            <button
-              type="button"
-              className="cs-input-clear cs-inline-clear"
-              onClick={() => setGlob("")}
-              aria-label={t("Clear glob filter")}
-            >
-              <X size={11} />
-            </button>
-          ) : null}
-        </div>
+        {showGlob ? (
+          <div className="cs-cwd-row">
+            <Filter size={11} className="muted" aria-hidden="true" />
+            <input
+              type="text"
+              className="dlg-input mono cs-cwd-input"
+              spellCheck={false}
+              placeholder={t("Glob filter, e.g. src/**/*.ts")}
+              value={glob}
+              onChange={(e) => setGlob(e.currentTarget.value)}
+              disabled={busy}
+              aria-label={t("Glob filter")}
+            />
+            {glob ? (
+              <button
+                type="button"
+                className="cs-input-clear cs-inline-clear"
+                onClick={() => setGlob("")}
+                aria-label={t("Clear glob filter")}
+              >
+                <X size={11} />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         {error ? (
           <div className="status-note status-note--error mono cs-error">
             {error}
+          </div>
+        ) : null}
+
+        {nudge ? (
+          <div
+            className={
+              "status-note mono cs-nudge" +
+              (nudge.tone === "error"
+                ? " status-note--error"
+                : " status-note--warn")
+            }
+          >
+            <span className="cs-nudge-text">{nudge.text}</span>
+            <button
+              type="button"
+              className="cs-nudge-cta"
+              onClick={gotoSoftware}
+            >
+              <Download size={11} />
+              {nudge.cta}
+            </button>
           </div>
         ) : null}
 
@@ -387,33 +503,51 @@ function CodeSearchBody({ tab }: Props) {
 
         {result && result.hits.length > 0 ? (
           <div className="cs-results">
-            {grouped.map((group) => (
-              <div key={group.file} className="cs-file">
-                <div className="cs-file-head mono" title={group.file}>
-                  <span className="cs-file-path">{group.file}</span>
-                  <span className="cs-file-count muted">
-                    {group.hits.length}
-                  </span>
-                </div>
-                <div className="cs-file-hits">
-                  {group.hits.map((hit, i) => (
+            {mode === "content"
+              ? grouped.map((group) => (
+                  <div key={group.file} className="cs-file">
+                    <div className="cs-file-head mono" title={group.file}>
+                      <span className="cs-file-path">{group.file}</span>
+                      <span className="cs-file-count muted">
+                        {group.hits.length}
+                      </span>
+                    </div>
+                    <div className="cs-file-hits">
+                      {group.hits.map((hit, i) => (
+                        <button
+                          key={`${group.file}:${hit.line}:${hit.column}:${i}`}
+                          type="button"
+                          className="cs-hit mono"
+                          onClick={() => openHit(hit)}
+                          title={t("Open in SFTP editor")}
+                        >
+                          <span className="cs-hit-loc muted">
+                            {hit.line}
+                            {hit.column ? `:${hit.column}` : ""}
+                          </span>
+                          <span className="cs-hit-text">{hit.text}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              : result.hits.map((hit, i) => {
+                  const slash = hit.file.lastIndexOf("/");
+                  const dir = slash < 0 ? "" : hit.file.slice(0, slash + 1);
+                  const base = slash < 0 ? hit.file : hit.file.slice(slash + 1);
+                  return (
                     <button
-                      key={`${group.file}:${hit.line}:${hit.column}:${i}`}
+                      key={`${hit.file}:${i}`}
                       type="button"
-                      className="cs-hit mono"
+                      className="cs-path mono"
                       onClick={() => openHit(hit)}
                       title={t("Open in SFTP editor")}
                     >
-                      <span className="cs-hit-loc muted">
-                        {hit.line}
-                        {hit.column ? `:${hit.column}` : ""}
-                      </span>
-                      <span className="cs-hit-text">{hit.text}</span>
+                      {dir ? <span className="cs-path-dir muted">{dir}</span> : null}
+                      <span className="cs-path-base">{base}</span>
                     </button>
-                  ))}
-                </div>
-              </div>
-            ))}
+                  );
+                })}
             {result.truncated ? (
               <div className="status-note status-note--warn mono cs-truncated">
                 {t(

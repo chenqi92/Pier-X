@@ -2837,6 +2837,20 @@ export const zhExtra: Record<string, string> = {
   "Clear glob filter": "清空 Glob 过滤器",
   "Open in SFTP editor": "在 SFTP 编辑器中打开",
   "{n} hits": "{n} 条命中",
+  "Search mode": "搜索模式",
+  "Content": "内容",
+  "Find files by name, e.g. nginx.conf": "按文件名查找，例如 nginx.conf",
+  "Locate a command, e.g. python3": "定位命令，例如 python3",
+  "Located on $PATH": "在 $PATH 中定位",
+  "Using grep — install ripgrep for faster search.":
+    "正在用 grep —— 装 ripgrep 搜索更快。",
+  "Using find — install fd for faster search.":
+    "正在用 find —— 装 fd 搜索更快。",
+  "No search tool found — install ripgrep.": "未找到搜索工具 —— 请安装 ripgrep。",
+  "No file-search tool found — install fd or ripgrep.":
+    "未找到文件搜索工具 —— 请安装 fd 或 ripgrep。",
+  "Install ripgrep": "安装 ripgrep",
+  "Install fd": "安装 fd",
   "No search engine on this host — install ripgrep (Software panel) or run inside a git repo.":
     "该主机上未找到搜索引擎 — 请在「软件」面板安装 ripgrep，或在 git 仓库目录内运行。",
   "Working directory does not exist on the remote: {cwd}":

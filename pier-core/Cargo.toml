@@ -42,6 +42,19 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 
+# Machine-bound encrypted local fallback for secrets (see
+# `local_secret_store`). Consulted by `credentials` ONLY when the OS
+# keyring is unavailable (Linux without secret-service, Windows where
+# Credential Manager silently drops the write) — so a remembered sudo
+# password survives a restart instead of living only in process memory.
+# AES-256-GCM under a 32-byte key kept in a `0600` key file in the data
+# dir; `getrandom` fills the key + per-entry nonce; `zeroize` wipes the
+# key from memory after use. All three already build for russh / keyring
+# (pure Rust, no new system libraries).
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+getrandom = "0.2"
+zeroize = "1"
+
 # Cross-platform credential storage. The actual `keyring` dependency
 # lives in the per-target sections below: keyring 3 ships NO storage
 # backend unless a platform feature is enabled (without one it silently

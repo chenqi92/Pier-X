@@ -17,6 +17,7 @@ pub mod connections;
 pub mod credentials;
 pub mod egress;
 pub mod git_graph;
+pub mod local_secret_store;
 pub mod logging;
 pub mod markdown;
 pub mod paths;

@@ -40,6 +40,7 @@ import type {
   PostgresBrowserState,
   QueryExecutionResult,
   RedisBrowserState,
+  RedisKeyPage,
   RedisCommandResult,
   LogEventView,
   SavedSshConnection,
@@ -1051,6 +1052,27 @@ export const redisBrowse = (params: {
     limit: params.limit ?? null,
   });
 
+/** Fetch one more page of a collection key's entries (hash / set /
+ *  list / zset / stream), continuing from `cursor` (the `entryCursor`
+ *  on the current view or a prior page's `nextCursor`). */
+export const redisKeyPage = (params: {
+  host: string;
+  port: number;
+  db: number;
+  key: string;
+  cursor?: string | null;
+  count?: number | null;
+  username?: string | null;
+  password?: string | null;
+}) =>
+  invoke<RedisKeyPage>("redis_key_page", {
+    ...params,
+    cursor: params.cursor ?? null,
+    count: params.count ?? null,
+    username: params.username ?? null,
+    password: params.password ?? null,
+  });
+
 export const redisExecute = (params: {
   host: string;
   port: number;
@@ -1095,6 +1117,25 @@ export const redisDeleteKey = (params: {
   password?: string | null;
 }) =>
   invoke<boolean>("redis_delete_key", {
+    ...params,
+    username: params.username ?? null,
+    password: params.password ?? null,
+  });
+
+/** Remove the list element at `index` (atomic tombstone swap on the
+ *  server). Resolves `true` when an element was removed. Index-precise
+ *  so lists with duplicate values delete the intended row, not the
+ *  first value match. */
+export const redisListRemoveAt = (params: {
+  host: string;
+  port: number;
+  db: number;
+  key: string;
+  index: number;
+  username?: string | null;
+  password?: string | null;
+}) =>
+  invoke<boolean>("redis_list_remove_at", {
     ...params,
     username: params.username ?? null,
     password: params.password ?? null,

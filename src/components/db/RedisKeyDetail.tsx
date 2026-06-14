@@ -1,8 +1,9 @@
-import { Check, Edit, Plus, Save, Trash2, X } from "lucide-react";
+import { Check, Edit, Plus, Save, Search, Trash2, X } from "lucide-react";
 import RedisIcon from "../icons/RedisIcon";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
+import Select, { type SelectItems } from "../Select";
 import RedisTypeBadge from "./RedisTypeBadge";
 import type { RedisKeyView } from "../../lib/types";
 import { confirm } from "../../stores/useConfirmStore";
@@ -17,7 +18,9 @@ export type RedisEdit =
   | { kind: "hash-del"; field: string }
   | { kind: "list-set"; index: number; value: string }
   | { kind: "list-push"; side: "L" | "R"; value: string }
-  | { kind: "list-rem"; value: string; count: number }
+  /** Index-precise removal — the panel runs an atomic tombstone swap
+   *  so duplicate values don't make `LREM` delete the wrong row. */
+  | { kind: "list-rem"; index: number }
   | { kind: "set-add"; member: string }
   | { kind: "set-rem"; member: string }
   | { kind: "zset-add"; score: number; member: string }
@@ -43,6 +46,13 @@ type Props = {
   onEdit?: (op: RedisEdit) => Promise<void>;
   /** Disabled flag while a Rename / Delete / Edit is in flight. */
   actionBusy?: boolean;
+  /** Loads the next page of a collection key's entries (hash / set /
+   *  list / zset / stream) and appends them to `details.preview`.
+   *  When provided, collection views show a "Load more" button while
+   *  `details.previewTruncated` holds. */
+  onLoadMoreEntries?: () => void;
+  /** Disabled flag while an entry-page load is in flight. */
+  entriesBusy?: boolean;
 };
 
 /**
@@ -59,6 +69,8 @@ export default function RedisKeyDetail({
   onDelete,
   onEdit,
   actionBusy,
+  onLoadMoreEntries,
+  entriesBusy,
 }: Props) {
   const { t } = useI18n();
 
@@ -142,42 +154,56 @@ export default function RedisKeyDetail({
         )}
       </div>
 
+      {/* Key the view on the key name so switching keys remounts it,
+          clearing per-key view state (filter text, value lens, inline
+          edit drafts) instead of leaking it onto the next key. */}
       {isString ? (
         <StringView
+          key={details.key}
           preview={details.preview}
           onEdit={editEnabled ? onEdit : undefined}
         />
       ) : isHash ? (
         <HashView
+          key={details.key}
           preview={details.preview}
+          total={details.length}
           onEdit={editEnabled ? onEdit : undefined}
         />
       ) : isList ? (
         <ListView
+          key={details.key}
           preview={details.preview}
+          total={details.length}
           onEdit={editEnabled ? onEdit : undefined}
         />
       ) : isSet ? (
         <SetView
+          key={details.key}
           preview={details.preview}
+          total={details.length}
           onEdit={editEnabled ? onEdit : undefined}
         />
       ) : isZset ? (
         <ZsetView
+          key={details.key}
           preview={details.preview}
+          total={details.length}
           onEdit={editEnabled ? onEdit : undefined}
         />
       ) : (
         // Stream — keep read-only for now; XADD's field/value
         // pairs need a more elaborate form than this view.
-        <StreamView preview={details.preview} />
+        <StreamView key={details.key} preview={details.preview} total={details.length} />
       )}
 
-      {details.previewTruncated && (
+      {!isString && onLoadMoreEntries && details.previewTruncated ? (
+        <LoadMoreEntries onClick={onLoadMoreEntries} busy={entriesBusy} />
+      ) : isString && details.previewTruncated ? (
         <div className="rds-truncated-note">
           {t("Preview truncated — the value continues beyond what's shown.")}
         </div>
-      )}
+      ) : null}
     </>
   );
 }
@@ -284,6 +310,168 @@ function TtlChip({
 
 // ── String ───────────────────────────────────────────────────────
 
+/** Display lens for a string value. The raw bytes are never mutated —
+ *  these only re-render how the read-only preview is shown, matching
+ *  the "view as" affordance other Redis GUIs expose. */
+type ValueFormat = "text" | "json" | "hex" | "base64";
+
+/** Auto-pick JSON when the value is obviously a JSON document so the
+ *  common case (cached API payloads) lands pretty-printed; otherwise
+ *  fall back to the raw text lens. */
+function detectFormat(raw: string): ValueFormat {
+  const s = raw.trim();
+  const looksJson =
+    (s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"));
+  if (looksJson) {
+    try {
+      JSON.parse(s);
+      return "json";
+    } catch {
+      /* not actually JSON — fall through */
+    }
+  }
+  return "text";
+}
+
+function toHexDump(raw: string): string {
+  const bytes = new TextEncoder().encode(raw);
+  const lines: string[] = [];
+  for (let i = 0; i < bytes.length; i += 16) {
+    const slice = bytes.subarray(i, i + 16);
+    const hex = Array.from(slice, (b) => b.toString(16).padStart(2, "0")).join(" ");
+    const ascii = Array.from(slice, (b) =>
+      b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".",
+    ).join("");
+    const off = i.toString(16).padStart(8, "0");
+    lines.push(`${off}  ${hex.padEnd(47, " ")}  ${ascii}`);
+  }
+  return lines.join("\n");
+}
+
+function decodeBase64(raw: string): string {
+  const bin = atob(raw.trim());
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
+
+function applyFormat(
+  raw: string,
+  fmt: ValueFormat,
+  t: (key: string) => string,
+): { text: string; error?: string } {
+  switch (fmt) {
+    case "json":
+      try {
+        return { text: JSON.stringify(JSON.parse(raw), null, 2) };
+      } catch {
+        return { text: raw, error: t("Not valid JSON") };
+      }
+    case "hex":
+      return { text: toHexDump(raw) };
+    case "base64":
+      try {
+        return { text: decodeBase64(raw) };
+      } catch {
+        return { text: raw, error: t("Not valid Base64") };
+      }
+    case "text":
+    default:
+      return { text: raw };
+  }
+}
+
+// ── Collection chrome (shared by hash / list / set / zset / stream) ─
+
+const FORMAT_ITEMS = (t: (key: string) => string): SelectItems => [
+  { value: "text", label: t("Plain Text") },
+  { value: "json", label: t("JSON") },
+  { value: "hex", label: t("Hex") },
+  { value: "base64", label: t("Base64") },
+];
+
+/** Filter + value-lens state shared by every collection view. The
+ *  filter narrows the *loaded* entries (substring, case-insensitive);
+ *  the lens reformats the value column (Plain Text / JSON / Hex /
+ *  Base64) the same way the string view does. */
+function useEntryView() {
+  const { t } = useI18n();
+  const [query, setQuery] = useState("");
+  const [format, setFormat] = useState<ValueFormat>("text");
+  const fmt = (value: string) => applyFormat(value, format, t).text;
+  const match = (...fields: string[]) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return fields.some((f) => f.toLowerCase().includes(q));
+  };
+  return { query, setQuery, format, setFormat, fmt, match };
+}
+
+function CollectionToolbar({
+  query,
+  onQuery,
+  format,
+  onFormat,
+  loaded,
+  total,
+}: {
+  query: string;
+  onQuery: (v: string) => void;
+  format: ValueFormat;
+  onFormat: (f: ValueFormat) => void;
+  loaded: number;
+  total: number;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="rds-kv-toolbar">
+      <span className="rds-kv-search">
+        <Search size={11} aria-hidden />
+        <input
+          className="rds-kv-search-input"
+          placeholder={t("Filter loaded entries…")}
+          value={query}
+          onChange={(e) => onQuery(e.currentTarget.value)}
+        />
+        {query && (
+          <button
+            type="button"
+            className="mini-button mini-button--ghost"
+            onClick={() => onQuery("")}
+            title={t("Clear filter")}
+          >
+            <X size={9} />
+          </button>
+        )}
+      </span>
+      <span className="rds-kv-count" title={t("Loaded / total")}>
+        {total > loaded ? `${loaded.toLocaleString()} / ${total.toLocaleString()}` : loaded.toLocaleString()}
+      </span>
+      <Select
+        compact
+        mono
+        items={FORMAT_ITEMS(t)}
+        value={format}
+        onChange={(v) => onFormat(v as ValueFormat)}
+        title={t("View as")}
+      />
+    </div>
+  );
+}
+
+function LoadMoreEntries({ onClick, busy }: { onClick: () => void; busy?: boolean }) {
+  const { t } = useI18n();
+  return (
+    <button
+      type="button"
+      className="btn is-ghost is-compact rds-load-more"
+      onClick={onClick}
+      disabled={busy}
+    >
+      {busy ? t("Loading...") : t("Load more entries")}
+    </button>
+  );
+}
+
 function StringView({
   preview,
   onEdit,
@@ -295,32 +483,47 @@ function StringView({
   const original = preview.join("\n");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(original);
-  // Reset the draft whenever the source value changes — typically
-  // after a successful Save the panel re-fetches the key and we get
-  // a fresh `preview` here.
+  const [format, setFormat] = useState<ValueFormat>(() => detectFormat(original));
+  // Reset the draft / lens whenever the source value changes —
+  // typically after a successful Save the panel re-fetches the key
+  // and we get a fresh `preview` here.
   useEffect(() => {
     setDraft(original);
     setEditing(false);
+    setFormat(detectFormat(original));
   }, [original]);
+
+  const formatItems = useMemo(() => FORMAT_ITEMS(t), [t]);
+  const shown = useMemo(() => applyFormat(original, format, t), [original, format, t]);
 
   if (!editing) {
     return (
       <div className="rds-value">
         <div className="rds-value-head">
           {t("VALUE")}
-          {onEdit && (
-            <button
-              type="button"
-              className="mini-button mini-button--ghost"
-              style={{ marginLeft: "auto" }}
-              onClick={() => setEditing(true)}
-              title={t("Edit value")}
-            >
-              <Edit size={9} /> {t("Edit")}
-            </button>
-          )}
+          <span className="rds-value-tools">
+            {shown.error && <span className="rds-value-format-err">{shown.error}</span>}
+            <Select
+              compact
+              mono
+              items={formatItems}
+              value={format}
+              onChange={(v) => setFormat(v as ValueFormat)}
+              title={t("View as")}
+            />
+            {onEdit && (
+              <button
+                type="button"
+                className="mini-button mini-button--ghost"
+                onClick={() => setEditing(true)}
+                title={t("Edit value")}
+              >
+                <Edit size={9} /> {t("Edit")}
+              </button>
+            )}
+          </span>
         </div>
-        <div className="rds-value-body">{original}</div>
+        <div className="rds-value-body">{shown.text}</div>
       </div>
     );
   }
@@ -368,16 +571,23 @@ function StringView({
 
 function HashView({
   preview,
+  total,
   onEdit,
 }: {
   preview: string[];
+  total: number;
   onEdit?: (op: RedisEdit) => Promise<void>;
 }) {
   const { t } = useI18n();
-  const pairs: [string, string][] = [];
-  for (let i = 0; i < preview.length; i += 2) {
-    pairs.push([preview[i], preview[i + 1] ?? ""]);
-  }
+  const { query, setQuery, format, setFormat, fmt, match } = useEntryView();
+  // The backend serializes each hash entry as `field \x01 value`
+  // (one string per field, SOH separator). Split on the first \x01;
+  // field names never contain it, so field/value are unambiguous.
+  const pairs: [string, string][] = preview.map((line) => {
+    const idx = line.indexOf("\u0001");
+    return idx === -1 ? [line, ""] : [line.slice(0, idx), line.slice(idx + 1)];
+  });
+  const visible = pairs.filter(([field, value]) => match(field, value));
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [newField, setNewField] = useState("");
@@ -385,16 +595,24 @@ function HashView({
 
   return (
     <div className="rds-kv">
+      <CollectionToolbar
+        query={query}
+        onQuery={setQuery}
+        format={format}
+        onFormat={setFormat}
+        loaded={pairs.length}
+        total={total}
+      />
       <div className="rds-kv-head">
         <span>{t("FIELD")}</span>
         <span>{t("VALUE")}</span>
         {onEdit && <span className="rds-kv-actions" aria-hidden />}
       </div>
-      {pairs.map(([field, value], i) => {
+      {visible.map(([field, value], i) => {
         const isEditing = editingField === field;
         return (
           <div key={`${field}-${i}`} className="rds-kv-row">
-            <span className="rds-kv-field">{field}</span>
+            <span className="rds-kv-field" title={field}>{field}</span>
             {isEditing ? (
               <input
                 className="rds-input"
@@ -410,7 +628,7 @@ function HashView({
                 }}
               />
             ) : (
-              <span className="rds-kv-value">{value}</span>
+              <span className="rds-kv-value">{fmt(value)}</span>
             )}
             {onEdit && (
               <span className="rds-kv-actions">
@@ -512,24 +730,38 @@ function HashView({
 
 function ListView({
   preview,
+  total,
   onEdit,
 }: {
   preview: string[];
+  total: number;
   onEdit?: (op: RedisEdit) => Promise<void>;
 }) {
   const { t } = useI18n();
+  const { query, setQuery, format, setFormat, fmt, match } = useEntryView();
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [newValue, setNewValue] = useState("");
+  // Keep the *original* index — LSET / LREM address elements by it,
+  // so the filter must not renumber the rows.
+  const rows = preview.map((value, i) => ({ value, i })).filter(({ value }) => match(value));
 
   return (
     <div className="rds-kv">
+      <CollectionToolbar
+        query={query}
+        onQuery={setQuery}
+        format={format}
+        onFormat={setFormat}
+        loaded={preview.length}
+        total={total}
+      />
       <div className="rds-kv-head">
         <span>#</span>
         <span>{t("ELEMENT")}</span>
         {onEdit && <span className="rds-kv-actions" aria-hidden />}
       </div>
-      {preview.map((value, i) => {
+      {rows.map(({ value, i }) => {
         const isEditing = editingIdx === i;
         return (
           <div key={i} className="rds-kv-row">
@@ -549,7 +781,7 @@ function ListView({
                 }}
               />
             ) : (
-              <span className="rds-kv-value">{value}</span>
+              <span className="rds-kv-value">{fmt(value)}</span>
             )}
             {onEdit && (
               <span className="rds-kv-actions">
@@ -591,11 +823,11 @@ function ListView({
                       type="button"
                       className="mini-button mini-button--ghost"
                       onClick={async () => {
-                        if (await confirm({ message: t("Remove the first occurrence of this element (LREM 1)?"), tone: "destructive" })) {
-                          void onEdit({ kind: "list-rem", value, count: 1 });
+                        if (await confirm({ message: t("Remove element at index {index}?", { index: i }), tone: "destructive" })) {
+                          void onEdit({ kind: "list-rem", index: i });
                         }
                       }}
-                      title={t("Remove (LREM)")}
+                      title={t("Remove element at this index")}
                     >
                       <Trash2 size={9} />
                     </button>
@@ -648,25 +880,37 @@ function ListView({
 
 function SetView({
   preview,
+  total,
   onEdit,
 }: {
   preview: string[];
+  total: number;
   onEdit?: (op: RedisEdit) => Promise<void>;
 }) {
   const { t } = useI18n();
+  const { query, setQuery, format, setFormat, fmt, match } = useEntryView();
   const [newMember, setNewMember] = useState("");
+  const rows = preview.map((member, i) => ({ member, i })).filter(({ member }) => match(member));
 
   return (
     <div className="rds-kv">
+      <CollectionToolbar
+        query={query}
+        onQuery={setQuery}
+        format={format}
+        onFormat={setFormat}
+        loaded={preview.length}
+        total={total}
+      />
       <div className="rds-kv-head">
         <span>#</span>
         <span>{t("MEMBER")}</span>
         {onEdit && <span className="rds-kv-actions" aria-hidden />}
       </div>
-      {preview.map((member, i) => (
+      {rows.map(({ member, i }) => (
         <div key={`${member}-${i}`} className="rds-kv-row">
           <span className="rds-kv-field">{i}</span>
-          <span className="rds-kv-value">{member}</span>
+          <span className="rds-kv-value">{fmt(member)}</span>
           {onEdit && (
             <span className="rds-kv-actions">
               <button
@@ -729,13 +973,16 @@ function parseZsetEntry(s: string): { score: string; member: string } {
 
 function ZsetView({
   preview,
+  total,
   onEdit,
 }: {
   preview: string[];
+  total: number;
   onEdit?: (op: RedisEdit) => Promise<void>;
 }) {
   const { t } = useI18n();
-  const entries = preview.map(parseZsetEntry);
+  const { query, setQuery, format, setFormat, fmt, match } = useEntryView();
+  const entries = preview.map(parseZsetEntry).filter(({ score, member }) => match(member, score));
   const [editingMember, setEditingMember] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [newMember, setNewMember] = useState("");
@@ -743,6 +990,14 @@ function ZsetView({
 
   return (
     <div className="rds-kv">
+      <CollectionToolbar
+        query={query}
+        onQuery={setQuery}
+        format={format}
+        onFormat={setFormat}
+        loaded={preview.length}
+        total={total}
+      />
       <div className="rds-kv-head">
         <span>{t("SCORE")}</span>
         <span>{t("MEMBER")}</span>
@@ -771,7 +1026,7 @@ function ZsetView({
             ) : (
               <span className="rds-kv-field">{score}</span>
             )}
-            <span className="rds-kv-value">{member}</span>
+            <span className="rds-kv-value">{fmt(member)}</span>
             {onEdit && (
               <span className="rds-kv-actions">
                 {isEditing ? (
@@ -870,18 +1125,28 @@ function ZsetView({
 
 // ── Stream (read-only) ───────────────────────────────────────────
 
-function StreamView({ preview }: { preview: string[] }) {
+function StreamView({ preview, total }: { preview: string[]; total: number }) {
   const { t } = useI18n();
+  const { query, setQuery, format, setFormat, fmt, match } = useEntryView();
+  const rows = preview.map((value, i) => ({ value, i })).filter(({ value }) => match(value));
   return (
     <div className="rds-kv">
+      <CollectionToolbar
+        query={query}
+        onQuery={setQuery}
+        format={format}
+        onFormat={setFormat}
+        loaded={preview.length}
+        total={total}
+      />
       <div className="rds-kv-head">
         <span>#</span>
         <span>{t("ENTRY")}</span>
       </div>
-      {preview.map((value, i) => (
+      {rows.map(({ value, i }) => (
         <div key={i} className="rds-kv-row">
           <span className="rds-kv-field">{i}</span>
-          <span className="rds-kv-value">{value}</span>
+          <span className="rds-kv-value">{fmt(value)}</span>
         </div>
       ))}
     </div>

@@ -11,6 +11,7 @@ use pier_core::services::docker;
 use pier_core::services::firewall;
 use pier_core::services::git::{CommitInfo, GitClient, StashEntry, UnpushedCommit};
 use pier_core::services::influx::{self, InfluxConfig};
+use pier_core::services::remote_db_cli::{self, CliConn, CliKind};
 use pier_core::services::mysql::{
     self as mysql_service, MysqlClient, MysqlConfig, MysqlProcessRow,
 };
@@ -19,7 +20,6 @@ use pier_core::services::package_manager;
 use pier_core::services::package_mirror;
 use pier_core::services::postgres::{PgActivityRow, PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
-use pier_core::services::remote_db_cli::{self, CliConn, CliKind};
 use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
 use pier_core::services::sqlite_remote;
@@ -681,6 +681,19 @@ struct RedisKeyView {
     encoding: String,
     preview: Vec<String>,
     preview_truncated: bool,
+    /// Continuation cursor for `redis_key_page` — see
+    /// `pier_core::services::redis::KeyDetails::entry_cursor`.
+    entry_cursor: String,
+}
+
+/// One page of a collection key's entries, returned by
+/// `redis_key_page` for the detail view's incremental loading.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RedisKeyPageView {
+    entries: Vec<String>,
+    next_cursor: String,
+    has_more: bool,
 }
 
 /// Enriched key-list row — name plus per-key kind / TTL pulled
@@ -2901,6 +2914,7 @@ fn map_redis_details(details: pier_core::services::redis::KeyDetails) -> RedisKe
         encoding: details.encoding,
         preview: details.preview,
         preview_truncated: details.preview_truncated,
+        entry_cursor: details.entry_cursor,
     }
 }
 
@@ -3490,7 +3504,7 @@ fn create_ssh_terminal_from_config(
     // Audit: every auto-elevate attempt lands in the log file.
     if config.auto_elevate {
         let key = credentials::elevation_credential_id(&config.user, &config.host, config.port);
-        match credentials::get(&key) {
+        match credentials::get_persistent(&key) {
             Ok(Some(pw)) if !pw.is_empty() => {
                 pier_logging::write_event(
                     "INFO",
@@ -5031,19 +5045,28 @@ fn set_elevation_password(
     }
     let key = credentials::elevation_credential_id(&user, &host, port);
     if password.is_empty() {
+        credentials::delete_persistent(&key).map_err(|e| e.to_string())?;
         pier_logging::write_event(
             "INFO",
             "audit",
             &format!("elevation password CLEARED for {user}@{host}:{port}"),
         );
-        return credentials::delete(&key).map_err(|e| e.to_string());
+        return Ok(());
     }
+    // Keyring-first, machine-bound local file as fallback — the backend
+    // we land on goes into the audit line so a shared-workstation owner
+    // can tell whether a remembered password sits in the OS keychain or
+    // the encrypted local store.
+    let backend = credentials::set_persistent(&key, &password).map_err(|e| e.to_string())?;
     pier_logging::write_event(
         "INFO",
         "audit",
-        &format!("elevation password ARMED for {user}@{host}:{port}"),
+        &format!(
+            "elevation password ARMED for {user}@{host}:{port} (store={})",
+            backend.as_str()
+        ),
     );
-    credentials::set(&key, &password).map_err(|e| e.to_string())
+    Ok(())
 }
 
 /// Look up the persisted elevation password for `(user, host,
@@ -5056,7 +5079,7 @@ fn get_elevation_password(user: String, host: String, port: u16) -> Result<Optio
         return Ok(None);
     }
     let key = credentials::elevation_credential_id(&user, &host, port);
-    credentials::get(&key).map_err(|e| e.to_string())
+    credentials::get_persistent(&key).map_err(|e| e.to_string())
 }
 
 /// Drop the persisted elevation password for `(user, host, port)`.
@@ -5070,7 +5093,7 @@ fn forget_elevation_password(user: String, host: String, port: u16) -> Result<()
         "audit",
         &format!("elevation password FORGOTTEN for {user}@{host}:{port}"),
     );
-    credentials::delete(&key).map_err(|e| e.to_string())
+    credentials::delete_persistent(&key).map_err(|e| e.to_string())
 }
 
 /// Collect every credential id that may have been written for a
@@ -6156,6 +6179,58 @@ async fn redis_browse(
     .map_err(|e| format!("redis_browse join: {e}"))?
 }
 
+/// Fetch one more page of a selected key's collection entries,
+/// continuing from `cursor` (the `entryCursor` on the prior view or
+/// page). Lets the detail panel load large hashes / sets / lists /
+/// zsets / streams incrementally instead of capping at the preview.
+#[tauri::command]
+async fn redis_key_page(
+    host: String,
+    port: u16,
+    db: i64,
+    key: String,
+    cursor: Option<String>,
+    count: Option<usize>,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<RedisKeyPageView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved_host = host.trim();
+        if resolved_host.is_empty() {
+            return Err(String::from("Redis host must not be empty."));
+        }
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(String::from("Redis key must not be empty."));
+        }
+
+        let client = RedisClient::connect_blocking(RedisConfig {
+            host: resolved_host.to_string(),
+            port: normalize_redis_port(port),
+            db,
+            username: username.filter(|s| !s.is_empty()),
+            password: password.filter(|s| !s.is_empty()),
+        })
+        .map_err(|error| error.to_string())?;
+
+        let page = client
+            .key_page_blocking(
+                key,
+                &cursor.unwrap_or_default(),
+                count.unwrap_or(200).clamp(1, 1000),
+            )
+            .map_err(|error| error.to_string())?;
+
+        Ok(RedisKeyPageView {
+            entries: page.entries,
+            next_cursor: page.next_cursor,
+            has_more: page.has_more,
+        })
+    })
+    .await
+    .map_err(|e| format!("redis_key_page join: {e}"))?
+}
+
 #[tauri::command]
 async fn redis_execute(
     host: String,
@@ -6277,6 +6352,46 @@ async fn redis_delete_key(
     })
     .await
     .map_err(|e| format!("redis_delete_key join: {e}"))?
+}
+
+/// Remove the list element at `index`. Uses an atomic tombstone
+/// swap server-side (see `RedisClient::list_remove_at`) so lists
+/// with duplicate values delete the row the user actually clicked
+/// instead of the first value match. Returns true when an element
+/// was removed.
+#[tauri::command]
+async fn redis_list_remove_at(
+    host: String,
+    port: u16,
+    db: i64,
+    key: String,
+    index: i64,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved_host = host.trim();
+        if resolved_host.is_empty() {
+            return Err(String::from("Redis host must not be empty."));
+        }
+        let key_name = key.trim();
+        if key_name.is_empty() {
+            return Err(String::from("Key name must not be empty."));
+        }
+        let client = RedisClient::connect_blocking(RedisConfig {
+            host: resolved_host.to_string(),
+            port: normalize_redis_port(port),
+            db,
+            username: username.filter(|s| !s.is_empty()),
+            password: password.filter(|s| !s.is_empty()),
+        })
+        .map_err(|error| error.to_string())?;
+        client
+            .list_remove_at_blocking(key_name, index)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|e| format!("redis_list_remove_at join: {e}"))?
 }
 
 #[tauri::command]
@@ -7360,11 +7475,7 @@ fn map_sqlserver_query_result(
         rows: result
             .rows
             .into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|cell| cell.unwrap_or_default())
-                    .collect()
-            })
+            .map(|row| row.into_iter().map(|cell| cell.unwrap_or_default()).collect())
             .collect(),
         truncated: result.truncated,
         affected_rows: result.affected_rows,
@@ -7430,9 +7541,7 @@ async fn mssql_overview(
         })
         .map_err(|e| e.to_string())?;
 
-        let databases = client
-            .list_databases_blocking()
-            .map_err(|e| e.to_string())?;
+        let databases = client.list_databases_blocking().map_err(|e| e.to_string())?;
         let current_database = client
             .current_database_blocking()
             .map_err(|e| e.to_string())?;
@@ -7629,8 +7738,7 @@ fn remote_cli_query_impl(
         password: db_password,
         service: db_service.trim().to_string(),
     };
-    let r =
-        remote_db_cli::query_blocking(&session, kind, &conn, &sql).map_err(|e| e.to_string())?;
+    let r = remote_db_cli::query_blocking(&session, kind, &conn, &sql).map_err(|e| e.to_string())?;
     if let Some(err) = r.error {
         return Err(err);
     }
@@ -18967,9 +19075,11 @@ pub fn run() {
             sqlite_execute,
             sqlite_execute_script,
             redis_browse,
+            redis_key_page,
             redis_execute,
             redis_rename_key,
             redis_delete_key,
+            redis_list_remove_at,
             ssh_connections_list,
             host_health_probe,
             host_health_deep_probe,

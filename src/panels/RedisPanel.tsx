@@ -91,6 +91,7 @@ function RedisPanelBody({ tab }: Props) {
   const [state, setState] = useState<RedisBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadMoreBusy, setLoadMoreBusy] = useState(false);
+  const [entriesBusy, setEntriesBusy] = useState(false);
   const [error, setError] = useState("");
   const [cmdResult, setCmdResult] = useState<RedisCommandResult | null>(null);
   const [cmdBusy, setCmdBusy] = useState(false);
@@ -476,6 +477,60 @@ function RedisPanelBody({ tab }: Props) {
     }
   }
 
+  // Append the next page of the *selected key's* collection entries
+  // (hash / set / list / zset / stream) using the cursor the detail
+  // view carries. Keeps the already-loaded entries in place so the
+  // detail filter / scroll position survive.
+  async function loadMoreEntries() {
+    const details = state?.details;
+    if (!details || !details.previewTruncated) return;
+    setEntriesBusy(true);
+    setError("");
+    try {
+      const target = await ensureConnectionTarget();
+      const page = await cmd.redisKeyPage({
+        host: target.host,
+        port: target.port,
+        db: d,
+        key: details.key,
+        cursor: details.entryCursor,
+        username: user.trim() || null,
+        password: password || null,
+      });
+      setState((prev) => {
+        if (!prev || !prev.details || prev.details.key !== details.key) return prev;
+        // HSCAN / SSCAN may re-emit an entry across cursor pages when
+        // the key is rehashing, so dedup hash (by field) and set (by
+        // member) on append. Ordered types (list/zset/stream) page by
+        // offset / id and never repeat.
+        const kind = (prev.details.kind || "").toLowerCase();
+        const fieldKey = (e: string) => e.split("\u0001")[0];
+        const existing = prev.details.preview;
+        let appended = page.entries;
+        if (kind === "hash") {
+          const seen = new Set(existing.map(fieldKey));
+          appended = page.entries.filter((e) => !seen.has(fieldKey(e)));
+        } else if (kind === "set") {
+          const seen = new Set(existing);
+          appended = page.entries.filter((e) => !seen.has(e));
+        }
+        return {
+          ...prev,
+          details: {
+            ...prev.details,
+            preview: [...existing, ...appended],
+            entryCursor: page.nextCursor,
+            previewTruncated: page.hasMore,
+          },
+        };
+      });
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setEntriesBusy(false);
+    }
+  }
+
   // ── Key edit actions ─────────────────────────────────────
   // Both rename and delete go through their own confirm-guarded
   // backend command (`RENAMENX` / `DEL`). The panel reloads the
@@ -525,6 +580,22 @@ function RedisPanelBody({ tab }: Props) {
     setError("");
     try {
       const target = await ensureConnectionTarget();
+      // Index-precise list delete can't be a plain LREM (that removes
+      // by value, hitting the wrong row on duplicates) — route it to
+      // the dedicated atomic backend op.
+      if (op.kind === "list-rem") {
+        await cmd.redisListRemoveAt({
+          host: target.host,
+          port: target.port,
+          db: d,
+          key: keyName,
+          index: op.index,
+          username: user.trim() || null,
+          password: password || null,
+        });
+        await browse(keyName);
+        return;
+      }
       const k = quoteRedisArg(keyName);
       let command: string;
       switch (op.kind) {
@@ -542,9 +613,6 @@ function RedisPanelBody({ tab }: Props) {
           break;
         case "list-push":
           command = `${op.side === "L" ? "LPUSH" : "RPUSH"} ${k} ${quoteRedisArg(op.value)}`;
-          break;
-        case "list-rem":
-          command = `LREM ${k} ${op.count} ${quoteRedisArg(op.value)}`;
           break;
         case "set-add":
           command = `SADD ${k} ${quoteRedisArg(op.member)}`;
@@ -1191,6 +1259,8 @@ function RedisPanelBody({ tab }: Props) {
               onDelete={(key) => void deleteKey(key)}
               onEdit={editKey}
               actionBusy={keyActionBusy}
+              onLoadMoreEntries={() => void loadMoreEntries()}
+              entriesBusy={entriesBusy}
             />
           </div>
         </div>

@@ -19,6 +19,7 @@ import DbAddCredentialDialog, {
 } from "../components/DbAddCredentialDialog";
 import PanelHeader from "../components/PanelHeader";
 import Select from "../components/Select";
+import DbAiGenerate from "../components/db/DbAiGenerate";
 
 // SQL Server client, fully aligned with MySQL/PG: saved credentials in
 // the keyring, the shared connect splash, and the SSH tunnel (slot
@@ -321,6 +322,21 @@ function SqlServerBody({ tab }: { tab: TabState }) {
                 <Play size={11} /> {t("Run")}
               </button>
               <span className="dbq-editor__hint">⌘⏎</span>
+              <DbAiGenerate
+                onResult={setSql}
+                schema={() => ({
+                  dialect: "SQL Server (T-SQL)",
+                  database: tab.mssqlDatabase || undefined,
+                  tables: overview.tables.map((tb) => `${tb.schema}.${tb.name}`),
+                  currentTable:
+                    selected && columns && columns.length > 0
+                      ? {
+                          name: selected,
+                          columns: columns.map((c) => ({ name: c.name, type: c.columnType })),
+                        }
+                      : undefined,
+                })}
+              />
               {error && <span className="status-note mono status-note--error">{error}</span>}
             </div>
           </div>

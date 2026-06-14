@@ -235,13 +235,13 @@ function TreeBranch({
         type="button"
         className="rds-row rds-row--folder"
         onClick={() => toggle(node.path)}
-        style={{ paddingLeft: `calc(var(--sp-2-5) + ${depth * 12}px)` }}
+        title={node.path}
+        style={{ paddingLeft: `calc(var(--sp-2-5) + ${depth * 10}px)` }}
       >
         <span className="rds-folder-caret" aria-hidden>
           {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         </span>
         <span className="rds-key">{node.segment}</span>
-        <span className="rds-meta" />
         <span className="rds-meta" style={{ color: "var(--muted)" }}>
           {node.children.size}
         </span>
@@ -302,7 +302,8 @@ function KeyRow({
       type="button"
       className={"rds-row" + (isSelected ? " selected" : "")}
       onClick={() => onSelect(entry.key)}
-      style={depth > 0 ? { paddingLeft: `calc(var(--sp-2-5) + ${depth * 12}px)` } : undefined}
+      title={entry.key}
+      style={depth > 0 ? { paddingLeft: `calc(var(--sp-2-5) + ${depth * 10}px)` } : undefined}
     >
       <RedisTypeBadge kind={kind} />
       <span className="rds-key">
@@ -314,7 +315,6 @@ function KeyRow({
       <span className="rds-meta" title={ttlTitle(entry.ttlSeconds, t)}>
         {formatTtl(entry.ttlSeconds, t)}
       </span>
-      <span className="rds-meta" />
     </button>
   );
 }

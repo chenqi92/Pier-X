@@ -65,6 +65,8 @@ import type {
 import { effectiveShellUser } from "../lib/types";
 import { useSudoElevation } from "../lib/useSudoElevation";
 import { useTabStore } from "../stores/useTabStore";
+import { useSettingsStore } from "../stores/useSettingsStore";
+import { generateSql } from "../lib/aiSql";
 import { softwareKeyForTab, useSoftwareStore } from "../stores/useSoftwareStore";
 import { useSoftwareSnapshot } from "../lib/softwareInstall";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
@@ -147,6 +149,7 @@ function MySqlPanelBody({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
+  const settings = useSettingsStore();
 
   // ── Panel-local state (connection + editor + grid) ─────────
   const [state, setState] = useState<MysqlBrowserState | null>(null);
@@ -527,6 +530,34 @@ function MySqlPanelBody({ tab }: Props) {
    *  formatter is dialect-aware; we pass `mysql`. Failure (e.g.
    *  on a syntactically broken fragment) leaves the SQL alone
    *  with a notice — formatting should never lose work. */
+  async function onAiGenerate(description: string): Promise<string> {
+    if (!settings.aiModel || !settings.aiProviderKind) {
+      throw new Error(t("Configure an AI provider in Settings → AI first."));
+    }
+    return generateSql({
+      provider: {
+        kind: settings.aiProviderKind,
+        baseUrl: settings.aiBaseUrl,
+        model: settings.aiModel,
+        maxTokens: settings.aiMaxTokens > 0 ? settings.aiMaxTokens : null,
+        secretId: settings.aiVendorId,
+      },
+      schema: {
+        dialect: "MySQL",
+        database: state?.databaseName,
+        tables: state?.tables ?? [],
+        currentTable:
+          state?.tableName && state.columns.length > 0
+            ? {
+                name: state.tableName,
+                columns: state.columns.map((c) => ({ name: c.name, type: c.columnType })),
+              }
+            : undefined,
+      },
+      description,
+    });
+  }
+
   function formatActiveSql() {
     const trimmed = sql.trim();
     if (!trimmed) return;
@@ -1286,6 +1317,7 @@ function MySqlPanelBody({ tab }: Props) {
         onExplain={() => void runExplain()}
         onPlan={() => void runPlan()}
         onFormat={formatActiveSql}
+        onAiGenerate={onAiGenerate}
       />
       {plan && (
         <>

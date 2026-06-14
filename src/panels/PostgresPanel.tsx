@@ -64,6 +64,8 @@ import type {
 import { effectiveShellUser } from "../lib/types";
 import { useSudoElevation } from "../lib/useSudoElevation";
 import { useTabStore } from "../stores/useTabStore";
+import { useSettingsStore } from "../stores/useSettingsStore";
+import { generateSql } from "../lib/aiSql";
 import { softwareKeyForTab, useSoftwareStore } from "../stores/useSoftwareStore";
 import { useSoftwareSnapshot } from "../lib/softwareInstall";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
@@ -139,6 +141,35 @@ function PostgresPanelBody({ tab }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
+  const settings = useSettingsStore();
+
+  async function onAiGenerate(description: string): Promise<string> {
+    if (!settings.aiModel || !settings.aiProviderKind) {
+      throw new Error(t("Configure an AI provider in Settings → AI first."));
+    }
+    return generateSql({
+      provider: {
+        kind: settings.aiProviderKind,
+        baseUrl: settings.aiBaseUrl,
+        model: settings.aiModel,
+        maxTokens: settings.aiMaxTokens > 0 ? settings.aiMaxTokens : null,
+        secretId: settings.aiVendorId,
+      },
+      schema: {
+        dialect: "PostgreSQL",
+        database: state?.databaseName,
+        tables: state?.tables ?? [],
+        currentTable:
+          state?.tableName && state.columns.length > 0
+            ? {
+                name: state.tableName,
+                columns: state.columns.map((c) => ({ name: c.name, type: c.columnType })),
+              }
+            : undefined,
+      },
+      description,
+    });
+  }
 
   // PostgreSQL tracks its own `schema` — the current active schema on
   // the server. Local-only (mirrors the returned `state.schemaName`).
@@ -1192,6 +1223,7 @@ function PostgresPanelBody({ tab }: Props) {
         onExplain={() => void runExplain()}
         onPlan={() => void runPlan()}
         onFormat={formatActiveSql}
+        onAiGenerate={onAiGenerate}
       />
       {plan && (
         <>

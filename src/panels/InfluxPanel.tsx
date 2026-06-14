@@ -19,6 +19,7 @@ import DbAddCredentialDialog, {
 } from "../components/DbAddCredentialDialog";
 import PanelHeader from "../components/PanelHeader";
 import Select from "../components/Select";
+import DbAiGenerate from "../components/db/DbAiGenerate";
 
 // InfluxDB client (InfluxQL over HTTP), aligned with the shared credential
 // flow: saved credentials in the keyring + connect splash + SSH tunnel
@@ -297,6 +298,14 @@ function InfluxBody({ tab }: { tab: TabState }) {
                 <Play size={11} /> {t("Run")}
               </button>
               <span className="dbq-editor__hint">⌘⏎</span>
+              <DbAiGenerate
+                onResult={setSql}
+                schema={() => ({
+                  dialect: "InfluxQL (InfluxDB)",
+                  database: tab.influxDatabase || undefined,
+                  tables: overview.measurements,
+                })}
+              />
               {error && <span className="status-note mono status-note--error">{error}</span>}
             </div>
           </div>

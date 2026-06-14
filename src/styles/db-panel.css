@@ -2419,7 +2419,10 @@ input.ui-combo.rg-td-input {
 }
 .rds-row {
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr) 76px 64px;
+  /* badge/caret · key (greedy) · TTL or child-count (content width).
+   * The key column must win the panel's width — Redis keys are the
+   * navigation, so no fixed meta column is allowed to starve them. */
+  grid-template-columns: 46px minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--sp-1-5);
   padding: var(--sp-1) var(--sp-2-5);
@@ -2484,6 +2487,10 @@ input.ui-combo.rg-td-input {
   background: color-mix(in srgb, var(--accent-violet) 22%, transparent);
   color: var(--accent-violet);
 }
+.rds-type--set {
+  background: var(--info-dim);
+  color: var(--info);
+}
 .rds-type--stream {
   background: color-mix(in srgb, var(--syntax-op) 22%, transparent);
   color: var(--syntax-op);
@@ -2496,6 +2503,48 @@ input.ui-combo.rg-td-input {
 .rds-kv {
   min-width: 0;
   padding: 0;
+}
+.rds-kv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1-5) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  min-width: 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.rds-kv-search {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xs);
+  padding: 2px var(--sp-1-5);
+  color: var(--muted);
+}
+.rds-kv-search:focus-within { border-color: var(--accent); }
+.rds-kv-search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+}
+.rds-kv-count {
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  white-space: nowrap;
+  flex: none;
 }
 .rds-kv-head {
   display: grid;
@@ -2570,6 +2619,21 @@ input.ui-combo.rg-td-input {
   gap: var(--sp-1-5);
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+.rds-value-tools {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.rds-value-format-err {
+  color: var(--warn);
+  font-size: var(--size-micro);
+  font-family: var(--mono);
+  text-transform: none;
+  letter-spacing: 0;
 }
 .rds-value-body {
   background: var(--panel);
@@ -3231,4 +3295,72 @@ input.ui-combo.rg-td-input {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
+}
+
+/* ── AI "describe → SQL" inline prompt (DbSqlEditor) ─────────────────── */
+.sq-mini--ai { color: var(--accent); }
+.sq-ai {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1-5) var(--sp-2-5);
+  background: var(--accent-subtle);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.sq-ai__glyph { color: var(--accent); flex: none; }
+.sq-ai__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 var(--sp-2);
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+  outline: none;
+}
+.sq-ai__input:focus { border-color: var(--accent); }
+.sq-ai__err {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--size-small);
+  color: var(--neg);
+}
+
+/* ── AI generate (custom-grid panels: SQL Server / Influx / Oracle / DM) */
+.dbq-ai-btn { color: var(--accent); flex: none; }
+.dbq-ai {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.dbq-ai__glyph { color: var(--accent); flex: none; }
+.dbq-ai__input {
+  flex: 1 1 auto;
+  min-width: 80px;
+  height: 22px;
+  padding: 0 var(--sp-2);
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+  outline: none;
+}
+.dbq-ai__input:focus { border-color: var(--accent); }
+.dbq-ai__err {
+  flex: none;
+  max-width: 35%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--size-micro);
+  color: var(--neg);
 }

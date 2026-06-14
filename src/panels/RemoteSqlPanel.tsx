@@ -16,6 +16,7 @@ import DbAddCredentialDialog, {
   type DbConnectionDraft,
 } from "../components/DbAddCredentialDialog";
 import PanelHeader from "../components/PanelHeader";
+import DbAiGenerate from "../components/db/DbAiGenerate";
 
 // Oracle / Dameng client over the remote host's CLI (sqlplus / disql).
 // Aligned with the shared credential flow (saved creds + keyring + connect
@@ -354,6 +355,13 @@ function RemoteSqlBody({ tab, kind }: { tab: TabState; kind: RemoteKind }) {
                 <Play size={11} /> {t("Run")}
               </button>
               <span className="dbq-editor__hint">⌘⏎</span>
+              <DbAiGenerate
+                onResult={setSql}
+                schema={() => ({
+                  dialect: kind === "oracle" ? "Oracle SQL" : "Dameng SQL (DM8)",
+                  tables,
+                })}
+              />
               {error && <span className="status-note mono status-note--error">{error}</span>}
             </div>
           </div>

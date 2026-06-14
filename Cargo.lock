@@ -4466,6 +4466,7 @@ dependencies = [
 name = "pier-core"
 version = "0.6.0"
 dependencies = [
+ "aes-gcm 0.10.3",
  "anyhow",
  "calamine",
  "chardetng",
@@ -4476,6 +4477,7 @@ dependencies = [
  "encoding_rs",
  "env_logger",
  "futures-util",
+ "getrandom 0.2.17",
  "git2",
  "hex",
  "hmac 0.12.1",
@@ -4502,6 +4504,7 @@ dependencies = [
  "ureq",
  "vte",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]

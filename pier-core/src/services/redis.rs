@@ -45,7 +45,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use redis::aio::ConnectionManager;
 use redis::{
@@ -204,6 +204,25 @@ pub struct KeyDetails {
     pub preview: Vec<String>,
     /// True when `preview` was truncated vs the real value.
     pub preview_truncated: bool,
+    /// Opaque continuation cursor for fetching the next page of
+    /// collection entries via [`RedisClient::key_page`]. For
+    /// hash/set it is the HSCAN/SSCAN cursor after the preview; for
+    /// list/zset it is the next element offset; for stream it is the
+    /// last previewed entry id; empty for string/none.
+    pub entry_cursor: String,
+}
+
+/// One page of a collection key's entries, formatted exactly like
+/// [`KeyDetails::preview`] so the UI can append it in place. Drives
+/// the detail view's incremental "load more" affordance.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EntryPage {
+    /// Entries for this page, same per-type string shape as preview.
+    pub entries: Vec<String>,
+    /// Cursor to pass to the next [`RedisClient::key_page`] call.
+    pub next_cursor: String,
+    /// True when more entries remain beyond this page.
+    pub has_more: bool,
 }
 
 /// Result of an arbitrary Redis command execution.
@@ -221,6 +240,12 @@ pub struct CommandResult {
 const PREVIEW_ITEMS: usize = 32;
 /// Byte cap for string-key previews.
 const PREVIEW_STRING_BYTES: usize = 1024;
+/// Separator between a hash field and its value inside a single
+/// preview/page entry. A SOH control char rather than `" = "` so a
+/// field name that itself contains an `=` can't be mis-split; it is
+/// never shown — the UI splits on it and renders field / value in
+/// separate columns.
+const HASH_FIELD_SEP: char = '\u{1}';
 
 /// Redis client handle. Cheap to clone — the underlying
 /// [`ConnectionManager`] is reference-counted through `Arc`.
@@ -477,6 +502,10 @@ impl RedisClient {
 
         let mut preview: Vec<String> = Vec::new();
         let mut preview_truncated = false;
+        // Continuation cursor for `key_page`: SCAN cursor for
+        // hash/set, next element offset for list/zset, last id for
+        // stream, empty otherwise.
+        let mut entry_cursor = String::new();
         let length: u64 = match kind {
             KeyKind::None => 0,
             KeyKind::String => {
@@ -509,6 +538,7 @@ impl RedisClient {
                     .await
                     .unwrap_or_default();
                 preview_truncated = (len as usize) > items.len();
+                entry_cursor = items.len().to_string();
                 preview = items;
                 len.max(0) as u64
             }
@@ -520,7 +550,7 @@ impl RedisClient {
                     .unwrap_or(0);
                 // SSCAN one page so we don't pay for the whole
                 // set on large keys.
-                let (_next, items): (u64, Vec<String>) = redis::cmd("SSCAN")
+                let (next, items): (u64, Vec<String>) = redis::cmd("SSCAN")
                     .arg(key)
                     .arg(0)
                     .arg("COUNT")
@@ -529,6 +559,7 @@ impl RedisClient {
                     .await
                     .unwrap_or((0, Vec::new()));
                 preview_truncated = (len as usize) > items.len();
+                entry_cursor = next.to_string();
                 preview = items;
                 len.max(0) as u64
             }
@@ -547,6 +578,7 @@ impl RedisClient {
                     .await
                     .unwrap_or_default();
                 preview_truncated = (len as usize) > items.len();
+                entry_cursor = items.len().to_string();
                 preview = items
                     .into_iter()
                     .map(|(m, s)| format!("{s}  {m}"))
@@ -559,7 +591,7 @@ impl RedisClient {
                     .query_async(&mut *conn)
                     .await
                     .unwrap_or(0);
-                let (_next, entries): (u64, Vec<String>) = redis::cmd("HSCAN")
+                let (next, entries): (u64, Vec<String>) = redis::cmd("HSCAN")
                     .arg(key)
                     .arg(0)
                     .arg("COUNT")
@@ -571,11 +603,12 @@ impl RedisClient {
                 preview = entries
                     .chunks(2)
                     .map(|pair| match pair {
-                        [f, v] => format!("{f} = {v}"),
+                        [f, v] => format!("{f}{HASH_FIELD_SEP}{v}"),
                         _ => pair.join(""),
                     })
                     .collect();
                 preview_truncated = (len as usize) > preview.len();
+                entry_cursor = next.to_string();
                 len.max(0) as u64
             }
             KeyKind::Stream => {
@@ -601,6 +634,7 @@ impl RedisClient {
                         preview.push(String::from_utf8_lossy(raw).into_owned());
                     }
                 }
+                entry_cursor = preview.last().cloned().unwrap_or_default();
                 len.max(0) as u64
             }
         };
@@ -613,12 +647,150 @@ impl RedisClient {
             encoding,
             preview,
             preview_truncated,
+            entry_cursor,
         })
     }
 
     /// Blocking wrapper for [`Self::inspect`].
     pub fn inspect_blocking(&self, key: &str) -> Result<KeyDetails> {
         runtime::shared().block_on(self.inspect(key))
+    }
+
+    /// Fetch one more page of a collection key's entries, continuing
+    /// from `cursor` (the value carried in [`KeyDetails::entry_cursor`]
+    /// or a prior page's `next_cursor`). Entries use the same per-type
+    /// string shape as [`KeyDetails::preview`]. String / none keys
+    /// have nothing to page and return an empty, terminal page.
+    pub async fn key_page(&self, key: &str, cursor: &str, count: usize) -> Result<EntryPage> {
+        let count = count.clamp(1, 1000);
+        let mut conn = self.manager.lock().await;
+
+        let type_reply: String = redis::cmd("TYPE").arg(key).query_async(&mut *conn).await?;
+        match KeyKind::parse(&type_reply) {
+            KeyKind::Hash => {
+                let (next, entries): (u64, Vec<String>) = redis::cmd("HSCAN")
+                    .arg(key)
+                    .arg(cursor.parse::<u64>().unwrap_or(0))
+                    .arg("COUNT")
+                    .arg(count as i64)
+                    .query_async(&mut *conn)
+                    .await?;
+                let formatted = entries
+                    .chunks(2)
+                    .map(|pair| match pair {
+                        [f, v] => format!("{f}{HASH_FIELD_SEP}{v}"),
+                        _ => pair.join(""),
+                    })
+                    .collect();
+                Ok(EntryPage {
+                    entries: formatted,
+                    next_cursor: next.to_string(),
+                    has_more: next != 0,
+                })
+            }
+            KeyKind::Set => {
+                let (next, members): (u64, Vec<String>) = redis::cmd("SSCAN")
+                    .arg(key)
+                    .arg(cursor.parse::<u64>().unwrap_or(0))
+                    .arg("COUNT")
+                    .arg(count as i64)
+                    .query_async(&mut *conn)
+                    .await?;
+                Ok(EntryPage {
+                    entries: members,
+                    next_cursor: next.to_string(),
+                    has_more: next != 0,
+                })
+            }
+            KeyKind::List => {
+                let start: i64 = cursor.parse().unwrap_or(0);
+                let items: Vec<String> = redis::cmd("LRANGE")
+                    .arg(key)
+                    .arg(start)
+                    .arg(start + count as i64 - 1)
+                    .query_async(&mut *conn)
+                    .await?;
+                let llen: i64 = redis::cmd("LLEN")
+                    .arg(key)
+                    .query_async(&mut *conn)
+                    .await
+                    .unwrap_or(0);
+                let next = start + items.len() as i64;
+                Ok(EntryPage {
+                    entries: items,
+                    next_cursor: next.to_string(),
+                    has_more: next < llen,
+                })
+            }
+            KeyKind::ZSet => {
+                let start: i64 = cursor.parse().unwrap_or(0);
+                let items: Vec<(String, f64)> = redis::cmd("ZRANGE")
+                    .arg(key)
+                    .arg(start)
+                    .arg(start + count as i64 - 1)
+                    .arg("WITHSCORES")
+                    .query_async(&mut *conn)
+                    .await?;
+                let zcard: i64 = redis::cmd("ZCARD")
+                    .arg(key)
+                    .query_async(&mut *conn)
+                    .await
+                    .unwrap_or(0);
+                let next = start + items.len() as i64;
+                let entries = items
+                    .into_iter()
+                    .map(|(m, s)| format!("{s}  {m}"))
+                    .collect();
+                Ok(EntryPage {
+                    entries,
+                    next_cursor: next.to_string(),
+                    has_more: next < zcard,
+                })
+            }
+            KeyKind::Stream => {
+                // `cursor` is the last id already shown; page the
+                // exclusive range after it. Empty cursor → from start.
+                let start = if cursor.is_empty() {
+                    String::from("-")
+                } else {
+                    format!("({cursor}")
+                };
+                // Over-fetch by one so we can tell "exactly a page left"
+                // from "a page plus more" without an XLEN round trip.
+                let rows: Vec<Vec<redis::Value>> = redis::cmd("XRANGE")
+                    .arg(key)
+                    .arg(&start)
+                    .arg("+")
+                    .arg("COUNT")
+                    .arg(count as i64 + 1)
+                    .query_async(&mut *conn)
+                    .await?;
+                let mut entries = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    if let Some(redis::Value::BulkString(raw)) = row.first() {
+                        entries.push(String::from_utf8_lossy(raw).into_owned());
+                    }
+                }
+                let has_more = entries.len() > count;
+                entries.truncate(count);
+                let last = entries.last().cloned().unwrap_or_default();
+                Ok(EntryPage {
+                    has_more,
+                    next_cursor: last,
+                    entries,
+                })
+            }
+            KeyKind::String | KeyKind::None => Ok(EntryPage {
+                entries: Vec::new(),
+                next_cursor: String::new(),
+                has_more: false,
+            }),
+        }
+    }
+
+    /// Blocking wrapper for [`Self::key_page`].
+    pub fn key_page_blocking(&self, key: &str, cursor: &str, count: usize) -> Result<EntryPage> {
+        runtime::shared().block_on(self.key_page(key, cursor, count))
     }
 
     /// Run `INFO <section>` and return the server's `k: v`
@@ -713,6 +885,45 @@ impl RedisClient {
     /// Blocking wrapper for [`Self::del`].
     pub fn del_blocking(&self, key: &str) -> Result<bool> {
         runtime::shared().block_on(self.del(key))
+    }
+
+    /// Remove the list element at a specific `index`. Redis has no
+    /// "remove by index" primitive — `LREM` deletes by *value* and
+    /// would hit the wrong element when the list holds duplicates.
+    /// So overwrite the slot with a unique tombstone and `LREM` that,
+    /// run as one atomic `EVAL` so no concurrent writer can shift the
+    /// index between the two commands. Returns true when an element
+    /// was removed. An out-of-range index surfaces the server's
+    /// `LSET` error.
+    pub async fn list_remove_at(&self, key: &str, index: i64) -> Result<bool> {
+        if key.is_empty() {
+            return Err(RedisError::InvalidConfig(
+                "LREM key must not be empty".into(),
+            ));
+        }
+        // NUL-wrapped nanosecond tombstone — astronomically unlikely
+        // to equal a real element, so LREM can only match the slot we
+        // just stamped.
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tombstone = format!("\u{0}__pierx_rm_{nanos}_{index}\u{0}");
+        let mut conn = self.manager.lock().await;
+        let removed: i64 = redis::cmd("EVAL")
+            .arg("redis.call('LSET', KEYS[1], ARGV[1], ARGV[2]); return redis.call('LREM', KEYS[1], 1, ARGV[2])")
+            .arg(1)
+            .arg(key)
+            .arg(index)
+            .arg(&tombstone)
+            .query_async(&mut *conn)
+            .await?;
+        Ok(removed >= 1)
+    }
+
+    /// Blocking wrapper for [`Self::list_remove_at`].
+    pub fn list_remove_at_blocking(&self, key: &str, index: i64) -> Result<bool> {
+        runtime::shared().block_on(self.list_remove_at(key, index))
     }
 }
 
@@ -978,6 +1189,7 @@ mod tests {
             encoding: String::new(),
             preview: vec![],
             preview_truncated: false,
+            entry_cursor: String::new(),
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(json.contains("\"ttl_seconds\":-2"));

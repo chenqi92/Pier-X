@@ -41,6 +41,8 @@ import type {
 import { effectiveSshTarget, effectiveShellUser, isSshTargetReady } from "../lib/types";
 import { useSudoElevation } from "../lib/useSudoElevation";
 import { softwareKeyForTab } from "../stores/useSoftwareStore";
+import { useSettingsStore } from "../stores/useSettingsStore";
+import { generateSql } from "../lib/aiSql";
 import { useSoftwareSnapshot } from "../lib/softwareInstall";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 
@@ -66,6 +68,7 @@ export default function SqlitePanel(props: Props) {
 
 function SqlitePanelBody({ tab }: Props) {
   const { t } = useI18n();
+  const settings = useSettingsStore();
   const formatError = (error: unknown) => localizeError(error, t);
 
   const sshTarget = tab ? effectiveSshTarget(tab) : null;
@@ -269,6 +272,33 @@ function SqlitePanelBody({ tab }: Props) {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function onAiGenerate(description: string): Promise<string> {
+    if (!settings.aiModel || !settings.aiProviderKind) {
+      throw new Error(t("Configure an AI provider in Settings → AI first."));
+    }
+    return generateSql({
+      provider: {
+        kind: settings.aiProviderKind,
+        baseUrl: settings.aiBaseUrl,
+        model: settings.aiModel,
+        maxTokens: settings.aiMaxTokens > 0 ? settings.aiMaxTokens : null,
+        secretId: settings.aiVendorId,
+      },
+      schema: {
+        dialect: "SQLite",
+        tables: state?.tables ?? [],
+        currentTable:
+          state?.tableName && state.columns.length > 0
+            ? {
+                name: state.tableName,
+                columns: state.columns.map((c) => ({ name: c.name, type: c.colType })),
+              }
+            : undefined,
+      },
+      description,
+    });
   }
 
   async function runQuery() {
@@ -854,6 +884,7 @@ function SqlitePanelBody({ tab }: Props) {
         onAddFavorite={(sql, name) => sqlTabs.addFavorite({ sql, name })}
         onRemoveFavorite={sqlTabs.removeFavorite}
         onPickFavorite={sqlTabs.loadFavorite}
+        onAiGenerate={onAiGenerate}
       />
       <DbResultGrid
         preview={state.preview}

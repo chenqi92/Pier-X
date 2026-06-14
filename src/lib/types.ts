@@ -604,6 +604,19 @@ export type RedisKeyView = {
   encoding: string;
   preview: string[];
   previewTruncated: boolean;
+  /** Continuation cursor for `redisKeyPage`. For hash/set it's the
+   *  HSCAN/SSCAN cursor after the preview; for list/zset the next
+   *  element offset; for stream the last previewed id; empty for
+   *  string/none. */
+  entryCursor: string;
+};
+
+/** One page of a collection key's entries, returned by `redisKeyPage`.
+ *  `entries` share `RedisKeyView.preview`'s per-type string shape. */
+export type RedisKeyPage = {
+  entries: string[];
+  nextCursor: string;
+  hasMore: boolean;
 };
 
 /** Per-row enrichment for the Redis key list. The kind / TTL

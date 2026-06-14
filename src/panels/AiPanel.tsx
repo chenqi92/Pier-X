@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CircleStop,
   Copy,
+  FileDown,
   Paperclip,
   SendHorizontal,
   ShieldAlert,
@@ -193,6 +194,30 @@ export default function AiPanel({ tab, isActive }: Props) {
     flashNote(t("Copied."));
   };
 
+  // Copy / export the whole assistant reply as raw markdown — `m.text`
+  // is already the model's markdown source (fences and all), so it
+  // round-trips cleanly to clipboard or a `.md` file.
+  const copyMessage = async (text: string) => {
+    await writeClipboardText(text.replace(/\s+$/, "")).catch(() => {});
+    flashNote(t("Copied."));
+  };
+
+  const exportMarkdown = async (text: string) => {
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const picked = await dialog.save({
+        title: t("Save reply as Markdown"),
+        defaultPath: defaultMarkdownName(text),
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+      });
+      if (typeof picked !== "string") return;
+      await cmd.localWriteTextFile(picked, text.replace(/\s+$/, "") + "\n");
+      flashNote(t("Exported to {path}", { path: picked }));
+    } catch (e) {
+      flashNote(String(e));
+    }
+  };
+
   const configured = settings.aiModel.trim().length > 0;
   const messages = conv?.messages ?? [];
   const running = conv?.running ?? false;
@@ -363,7 +388,7 @@ export default function AiPanel({ tab, isActive }: Props) {
         </IconButton>
       </div>
 
-      <div className="ai-panel__list" ref={listRef}>
+      <div className="ai-panel__list ux-selectable" ref={listRef}>
         {messages.length === 0 && (
           <div className="ai-empty">
             {t("Ask about this host, paste an error to explain, or describe what you want done.")}
@@ -378,6 +403,8 @@ export default function AiPanel({ tab, isActive }: Props) {
             canInsert={terminalSessionId !== null}
             onInsert={insertToTerminal}
             onCopy={copyCode}
+            onCopyMessage={copyMessage}
+            onExport={exportMarkdown}
           />
         ))}
       </div>
@@ -450,6 +477,24 @@ function messageKey(m: AiUiMessage, index: number): string {
   return m.type === "tool" ? `tool-${m.callId}` : `${m.type}-${index}`;
 }
 
+// Suggested filename for an exported reply: a slug from the first
+// non-empty line (heading markers stripped), capped, with a stable
+// fallback so the save dialog always opens with something sensible.
+function defaultMarkdownName(text: string): string {
+  const firstLine =
+    text
+      .split("\n")
+      .map((l) => l.replace(/^#+\s*/, "").trim())
+      .find((l) => l.length > 0) ?? "";
+  const slug = firstLine
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/g, "");
+  return (slug || "ai-reply") + ".md";
+}
+
 function Message({
   m,
   t,
@@ -457,6 +502,8 @@ function Message({
   canInsert,
   onInsert,
   onCopy,
+  onCopyMessage,
+  onExport,
 }: {
   m: AiUiMessage;
   t: (s: string) => string;
@@ -464,6 +511,8 @@ function Message({
   canInsert: boolean;
   onInsert: (code: string) => void;
   onCopy: (code: string) => void;
+  onCopyMessage: (text: string) => void;
+  onExport: (text: string) => void;
 }) {
   if (m.type === "user") {
     const { head, atts } = splitUserAttachments(m.text);
@@ -486,6 +535,26 @@ function Message({
     const segs = splitFences(m.text);
     return (
       <div className="ai-msg is-assistant">
+        {!m.streaming && m.text && (
+          <div className="ai-msg__actions ux-chrome">
+            <button
+              type="button"
+              className="ai-msg__btn"
+              title={t("Copy message")}
+              onClick={() => onCopyMessage(m.text)}
+            >
+              <Copy size={12} />
+            </button>
+            <button
+              type="button"
+              className="ai-msg__btn"
+              title={t("Export as Markdown")}
+              onClick={() => onExport(m.text)}
+            >
+              <FileDown size={12} />
+            </button>
+          </div>
+        )}
         {segs.map((seg, i) =>
           seg.kind === "text" ? (
             // Markdown for the prose between top-level code fences:

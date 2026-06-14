@@ -1,4 +1,4 @@
-import { Activity, ChevronLeft, ChevronRight, Edit, FileText, GitBranch, History, Lock, Play, Plus, Star, Unlock, Wand2, X } from "lucide-react";
+import { Activity, ChevronLeft, ChevronRight, Edit, FileText, GitBranch, History, Loader2, Lock, Play, Plus, Sparkles, Star, Unlock, Wand2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
@@ -93,6 +93,11 @@ type Props = {
    *  When omitted, the button shows the existing "coming soon"
    *  disabled state. */
   onFormat?: () => void;
+
+  /** Optional AI generate handler. When provided, a sparkle button opens
+   *  an inline prompt; the parent gathers schema context, calls the AI,
+   *  and resolves with the generated SQL which replaces the editor body. */
+  onAiGenerate?: (description: string) => Promise<string>;
 };
 
 /**
@@ -128,6 +133,7 @@ export default function DbSqlEditor({
   onExplain,
   onPlan,
   onFormat,
+  onAiGenerate,
 }: Props) {
   const { t } = useI18n();
   const lines = useMemo(() => sql.split("\n"), [sql]);
@@ -169,6 +175,32 @@ export default function DbSqlEditor({
   }, []);
   const scrollTabs = (dir: -1 | 1) => {
     tabListRef.current?.scrollBy({ left: dir * 160, behavior: "smooth" });
+  };
+
+  // AI "describe → SQL" prompt state.
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiText, setAiText] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const runAi = async () => {
+    const desc = aiText.trim();
+    if (!desc || !onAiGenerate) return;
+    setAiBusy(true);
+    setAiError("");
+    try {
+      const generated = await onAiGenerate(desc);
+      if (generated.trim()) {
+        onChange(generated.trim());
+        setAiOpen(false);
+        setAiText("");
+      } else {
+        setAiError(t("The model returned no SQL."));
+      }
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiBusy(false);
+    }
   };
 
   return (
@@ -297,8 +329,50 @@ export default function DbSqlEditor({
         >
           <Wand2 size={11} />
         </button>
+        {onAiGenerate && (
+          <button
+            type="button"
+            className={"sq-mini sq-mini--ai" + (aiOpen ? " on" : "")}
+            onClick={() => setAiOpen((v) => !v)}
+            title={t("Generate SQL with AI")}
+          >
+            <Sparkles size={11} />
+          </button>
+        )}
         </div>
       </div>
+
+      {onAiGenerate && aiOpen && (
+        <div className="sq-ai">
+          <Sparkles size={12} className="sq-ai__glyph" />
+          <input
+            className="sq-ai__input mono"
+            value={aiText}
+            placeholder={t("Describe the query in plain language…")}
+            autoFocus
+            disabled={aiBusy}
+            onChange={(e) => setAiText(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void runAi();
+              } else if (e.key === "Escape") {
+                setAiOpen(false);
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="btn is-primary is-compact"
+            disabled={aiBusy || !aiText.trim()}
+            onClick={() => void runAi()}
+          >
+            {aiBusy ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />}
+            {aiBusy ? t("Generating…") : t("Generate")}
+          </button>
+          {aiError && <span className="sq-ai__err mono">{aiError}</span>}
+        </div>
+      )}
 
       <div className="sq-editor-wrap">
         <div className="sq-gutter" aria-hidden>

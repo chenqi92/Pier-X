@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { localizeError } from "../i18n/localizeMessage";
 import * as cmd from "../lib/commands";
 import { useConnectionStore } from "../stores/useConnectionStore";
@@ -115,7 +116,7 @@ export default function DbPasswordUpdateDialog({
   }
 
   return (
-    <div className="cmdp-overlay" onClick={onClose}>
+    <div className="cmdp-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className="dlg"
         style={{ ...dialogStyle, maxWidth: 420 }}

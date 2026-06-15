@@ -69,6 +69,7 @@ import IconButton from "./IconButton";
 import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { localizeError } from "../i18n/localizeMessage";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useThemeStore } from "../stores/useThemeStore";
@@ -232,7 +233,6 @@ export default function SftpEditorDialog({
   const [cursor, setCursor] = useState<{ line: number; col: number; selLen: number; totalLines: number }>({ line: 1, col: 1, selLen: 0, totalLines: 0 });
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [copiedPath, setCopiedPath] = useState(false);
-  const overlayDownRef = useRef(false);
 
   // In-dialog Find/Replace bar state — drives CodeMirror via setSearchQuery
   // + findNext/findPrevious/replaceNext/replaceAll, instead of CM's bottom panel.
@@ -891,11 +891,7 @@ export default function SftpEditorDialog({
     <>
     <div
       className="dlg-overlay"
-      onMouseDown={(e) => { overlayDownRef.current = e.target === e.currentTarget; }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget && overlayDownRef.current) requestClose();
-        overlayDownRef.current = false;
-      }}
+      onMouseDown={shakeDialogOverlay}
     >
       <div
         className="dlg dlg--editor"

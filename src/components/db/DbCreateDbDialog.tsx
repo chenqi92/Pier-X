@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import IconButton from "../IconButton";
 import { useDraggableDialog } from "../useDraggableDialog";
 import { useI18n } from "../../i18n/useI18n";
+import { shakeDialogOverlay } from "../../lib/dialogShake";
 
 type Props = {
   open: boolean;
@@ -77,7 +78,7 @@ export default function DbCreateDbDialog({ open, kind, onCancel, onSubmit }: Pro
   };
 
   return (
-    <div className="cmdp-overlay" onClick={onCancel}>
+    <div className="cmdp-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className="dlg"
         style={{ ...dialogStyle, maxWidth: 460 }}

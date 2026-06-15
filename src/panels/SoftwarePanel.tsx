@@ -63,6 +63,7 @@ import {
 } from "../lib/bundleSchedule";
 import { effectiveShellUser, effectiveSshTarget, isSshTargetReady, type TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { localizeError } from "../i18n/localizeMessage";
 import {
   activePackageId,
@@ -7862,7 +7863,7 @@ function WebhookExportConfirmDialog({
   })();
 
   return (
-    <div className="dlg-overlay" onClick={onCancel}>
+    <div className="dlg-overlay" onMouseDown={shakeDialogOverlay}>
       <div className="dlg" onClick={(e) => e.stopPropagation()}>
         <div className="dlg-head">
           <span className="dlg-title">{t("Export webhook config")}</span>

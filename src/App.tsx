@@ -593,7 +593,7 @@ function App() {
         sshHost: params.host,
         sshPort: params.port,
         sshUser: params.user,
-        sshAuthMode: params.authKind as "password" | "agent" | "key",
+        sshAuthMode: params.authKind as "password" | "agent" | "key" | "auto",
         sshPassword: params.password,
         sshKeyPath: params.keyPath,
         rightTool: "monitor",
@@ -1301,7 +1301,7 @@ function App() {
                     if (t.sshSavedConnectionIndex !== savedIndex) continue;
                     store.updateTab(t.id, {
                       sshPassword: authKind === "password" ? password : "",
-                      sshAuthMode: authKind as "password" | "agent" | "key",
+                      sshAuthMode: authKind as "password" | "agent" | "key" | "auto",
                       // Clearing terminalSessionId signals the create
                       // effect to spin up a fresh session on the next
                       // tick rather than reuse a dead handle.

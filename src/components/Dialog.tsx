@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { useI18n } from "../i18n/useI18n";
 
 type Size = "sm" | "md" | "lg" | "xl";
@@ -35,7 +36,10 @@ export default function Dialog({
   subtitle,
   size = "md",
   tall = false,
-  closeOnOverlay = true,
+  // Desktop modals do not dismiss on a backdrop click — a stray click
+  // outside would discard the dialog's state. Opt in explicitly if a
+  // dialog genuinely wants click-away dismissal.
+  closeOnOverlay = false,
   closeOnEscape = true,
   initialFocusRef,
   onClose,
@@ -82,7 +86,9 @@ export default function Dialog({
     <div
       className="dlg-overlay"
       onMouseDown={(event) => {
-        if (closeOnOverlay && event.target === event.currentTarget) onClose();
+        if (event.target !== event.currentTarget) return;
+        if (closeOnOverlay) onClose();
+        else shakeDialogOverlay(event);
       }}
     >
       <div className={className} style={dialogStyle} onMouseDown={(e) => e.stopPropagation()}>

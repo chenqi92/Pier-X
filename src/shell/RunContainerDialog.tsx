@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import IconButton from "../components/IconButton";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import type { DockerRunOptions } from "../lib/commands";
 
 type Props = {
@@ -84,7 +85,7 @@ export default function RunContainerDialog({ open, busy, defaultImage, onClose, 
   // context and scrim covers the whole window, matching every other app
   // dialog (NewConnection, Settings, DiffDialog).
   return createPortal(
-    <div className="cmdp-overlay" onClick={onClose}>
+    <div className="cmdp-overlay" onMouseDown={shakeDialogOverlay}>
       <div className="dlg dlg--runctr" style={dialogStyle} onClick={(e) => e.stopPropagation()}>
         <div className="dlg-head" {...handleProps}>
           <span className="dlg-title">

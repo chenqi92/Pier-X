@@ -62,6 +62,7 @@ import ComboInput from "./ComboInput";
 import SudoPasswordDialog from "./SudoPasswordDialog";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import * as aiCmd from "../lib/ai";
 import { AI_VENDOR_GROUP_LABELS, aiVendorById, aiVendorsByGroup } from "../lib/aiVendors";
 import {
@@ -2537,7 +2538,7 @@ export default function SettingsDialog({
   if (!open) return null;
 
   return (
-    <div className="cmdp-overlay" onClick={onClose}>
+    <div className="cmdp-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className="dlg dlg--settings"
         style={dialogStyle}

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { localizeError } from "../i18n/localizeMessage";
 import * as cmd from "../lib/commands";
 import { DB_THEMES } from "./db/dbTheme";
@@ -352,7 +353,7 @@ export default function DbAddCredentialDialog({
     : canPersist ? t("Save & connect") : t("Connect");
 
   return (
-    <div className="cmdp-overlay" onClick={onClose}>
+    <div className="cmdp-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className="dlg dlg--newconn"
         style={dialogStyle}

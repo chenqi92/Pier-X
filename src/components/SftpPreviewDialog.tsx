@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import {
   Download,
   ExternalLink,
@@ -12,6 +12,7 @@ import {
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { formatBytes } from "../lib/dbConnCache";
 import * as cmd from "../lib/commands";
 import type { PreviewKind } from "../lib/sftpEditorMeta";
@@ -81,7 +82,6 @@ export default function SftpPreviewDialog({
 }: Props) {
   const { t } = useI18n();
   const { dialogStyle, handleProps } = useDraggableDialog(open);
-  const overlayDownRef = useRef(false);
   // The text streamer may discover the file is actually binary and
   // ask us to fall back to the hex viewer.
   const [forceHex, setForceHex] = useState(false);
@@ -193,13 +193,7 @@ export default function SftpPreviewDialog({
   return (
     <div
       className="dlg-overlay"
-      onMouseDown={(e) => {
-        overlayDownRef.current = e.target === e.currentTarget;
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget && overlayDownRef.current) onClose();
-        overlayDownRef.current = false;
-      }}
+      onMouseDown={shakeDialogOverlay}
     >
       <div className="dlg dlg--preview" style={dialogStyle} onClick={(e) => e.stopPropagation()}>
         <div className="dlg-head" {...handleProps}>

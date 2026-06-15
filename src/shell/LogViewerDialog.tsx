@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { describeLogSource } from "../lib/logSource";
 import type { LogSource } from "../lib/types";
 
@@ -76,7 +77,6 @@ export default function LogViewerDialog({
   const [contextLines, setContextLines] = useState(0);
   const [range, setRange] = useState<Range>("all");
   const [selected, setSelected] = useState<number | null>(null);
-  const overlayDownRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   // Close on Escape
@@ -224,11 +224,7 @@ export default function LogViewerDialog({
   return (
     <div
       className="dlg-overlay"
-      onMouseDown={(e) => { overlayDownRef.current = e.target === e.currentTarget; }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget && overlayDownRef.current) onClose();
-        overlayDownRef.current = false;
-      }}
+      onMouseDown={shakeDialogOverlay}
     >
       <div className="dlg dlg--logviewer" style={dialogStyle} onClick={(e) => e.stopPropagation()}>
         <div className="lv-top" {...handleProps}>

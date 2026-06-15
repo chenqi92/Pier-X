@@ -81,6 +81,8 @@ export const sshConnectionSave = (params: {
   envTag?: string | null;
   egressId?: string | null;
   autoElevate?: boolean;
+  protocol?: "ssh" | "rdp" | "vnc";
+  domain?: string | null;
 }) => invoke<void>("ssh_connection_save", {
   name: params.name,
   host: params.host,
@@ -93,6 +95,8 @@ export const sshConnectionSave = (params: {
   envTag: params.envTag && params.envTag.trim() ? params.envTag.trim() : null,
   egressId: params.egressId && params.egressId.trim() ? params.egressId.trim() : null,
   autoElevate: params.autoElevate ?? false,
+  protocol: params.protocol ?? "ssh",
+  domain: params.domain && params.domain.trim() ? params.domain.trim() : null,
 });
 export const sshConnectionUpdate = (params: {
   index: number;
@@ -107,6 +111,8 @@ export const sshConnectionUpdate = (params: {
   envTag?: string | null;
   egressId?: string | null;
   autoElevate?: boolean;
+  protocol?: "ssh" | "rdp" | "vnc";
+  domain?: string | null;
 }) => invoke<void>("ssh_connection_update", {
   index: params.index,
   name: params.name,
@@ -116,6 +122,8 @@ export const sshConnectionUpdate = (params: {
   authMode: params.authKind,
   password: params.password || null,
   keyPath: params.keyPath || null,
+  protocol: params.protocol ?? "ssh",
+  domain: params.domain && params.domain.trim() ? params.domain.trim() : null,
   group: params.group === undefined
     ? null
     : params.group && params.group.trim() ? params.group.trim() : "",

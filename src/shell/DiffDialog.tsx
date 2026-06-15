@@ -12,6 +12,7 @@ import type { ReactNode } from "react";
 import IconButton from "../components/IconButton";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import {
   pairHunkLines,
   parseUnifiedDiff,
@@ -136,7 +137,7 @@ export default function DiffDialog({ open, onClose, files, activeId, onSelectFil
   const hasChanges = annotated.count > 0;
 
   return createPortal(
-    <div className="dlg-overlay" onClick={onClose}>
+    <div className="dlg-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className="dlg dlg--diff"
         style={dialogStyle}

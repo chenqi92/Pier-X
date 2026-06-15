@@ -2008,24 +2008,24 @@ function ServerItem({
   // drag handler has the right context. Reference it to keep TS happy.
   void groupKey;
   const isRemoteDesktop = conn.protocol === "rdp" || conn.protocol === "vnc";
-  const AuthIcon: LucideIcon = isRemoteDesktop
-    ? Monitor
-    : conn.authKind === "key"
-      ? Key
-      : conn.authKind === "agent"
-        ? Shield
-        : Lock;
+  // Protocol chip: SSH terminal vs RDP / VNC remote desktop. For
+  // RDP / VNC this replaces the auth icon (which was just a redundant
+  // Monitor glyph); SSH keeps its auth-method icon below.
+  const protoKind: "ssh" | "rdp" | "vnc" =
+    conn.protocol === "rdp" ? "rdp" : conn.protocol === "vnc" ? "vnc" : "ssh";
+  const protoLabel = protoKind.toUpperCase();
+  const AuthIcon: LucideIcon =
+    conn.authKind === "key" ? Key : conn.authKind === "agent" || conn.authKind === "auto" ? Shield : Lock;
   const { t } = useI18n();
   const addr = `${conn.user ? `${conn.user}@` : ""}${conn.host}${conn.port !== 22 ? `:${conn.port}` : ""}`;
   const chips = detectedTools
     ? SERVICE_META.filter((m) => detectedTools.has(m.tool))
     : [];
-  const authLabel = isRemoteDesktop
-    ? conn.protocol.toUpperCase()
-    : conn.authKind === "key"
+  const authLabel =
+    conn.authKind === "key"
       ? t("Key file")
-      : conn.authKind === "agent"
-        ? t("Agent")
+      : conn.authKind === "agent" || conn.authKind === "auto"
+        ? t(conn.authKind === "auto" ? "Auto" : "Agent")
         : t("Password");
   return (
     <div
@@ -2064,9 +2064,17 @@ function ServerItem({
           <div className="srv-name">{conn.display}</div>
           <div className="srv-addr">{addr}</div>
         </div>
-        <span className="srv-auth" title={`${t("Authentication")}: ${authLabel}`}>
-          <AuthIcon size={10} />
+        <span
+          className={"srv-proto srv-proto--" + protoKind}
+          title={`${t("Protocol")}: ${protoLabel}`}
+        >
+          {protoLabel}
         </span>
+        {!isRemoteDesktop && (
+          <span className="srv-auth" title={`${t("Authentication")}: ${authLabel}`}>
+            <AuthIcon size={10} />
+          </span>
+        )}
         <div className="srv-actions" onClick={(e) => e.stopPropagation()}>
           <button className="mini-btn" onClick={onConnect} title={connectLabel} type="button">
             {isRemoteDesktop ? <Monitor /> : <Terminal />}

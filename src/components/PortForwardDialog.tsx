@@ -4,6 +4,7 @@ import IconButton from "./IconButton";
 import Select from "./Select";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { toast } from "../stores/useToastStore";
 import * as cmd from "../lib/commands";
@@ -75,7 +76,7 @@ export default function PortForwardDialog({ open, onClose }: Props) {
         host: selectedConn.host,
         port: selectedConn.port,
         user: selectedConn.user,
-        authMode: selectedConn.authKind as "password" | "agent" | "key",
+        authMode: selectedConn.authKind as "password" | "agent" | "key" | "auto",
         password: "",
         keyPath: selectedConn.keyPath ?? "",
         remoteHost: remoteHost.trim(),
@@ -113,7 +114,7 @@ export default function PortForwardDialog({ open, onClose }: Props) {
   if (!open) return null;
 
   return (
-    <div className="cmdp-overlay" onClick={onClose}>
+    <div className="cmdp-overlay" onMouseDown={shakeDialogOverlay}>
       <div className="dlg" style={{ ...dialogStyle, minWidth: 560, maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
         <div className="dlg-head" {...handleProps}>
           <span className="dlg-title">

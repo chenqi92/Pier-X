@@ -10,6 +10,7 @@ import type { LogEventView, TabState } from "../lib/types";
 import { detectLogLevel, type LogLevel } from "../lib/logLevels";
 import { effectiveSshTarget } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 
 type Props = {
@@ -205,7 +206,7 @@ export default function ContainerLogsDialog({ open, tab, containerId, containerN
   if (!open) return null;
 
   return createPortal(
-    <div className="cmdp-overlay" onClick={onClose}>
+    <div className="cmdp-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className="dlg dlg--logs"
         style={dialogStyle}

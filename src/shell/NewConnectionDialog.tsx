@@ -5,6 +5,7 @@ import IconButton from "../components/IconButton";
 import Select from "../components/Select";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { localizeError } from "../i18n/localizeMessage";
 import * as cmd from "../lib/commands";
 import type { SavedSshConnection } from "../lib/types";
@@ -36,6 +37,8 @@ type ConnectionDraft = {
   protocol: "ssh" | "rdp" | "vnc";
   domain: string;
 };
+
+type AuthMode = "password" | "agent" | "key" | "auto";
 
 type Props = {
   open: boolean;
@@ -93,7 +96,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const [host, setHost] = useState(initialDraft.host);
   const [port, setPort] = useState(String(initialDraft.port));
   const [user, setUser] = useState(initialDraft.user);
-  const [authMode, setAuthMode] = useState<"password" | "agent" | "key">(initialDraft.authKind as "password" | "agent" | "key");
+  const [authMode, setAuthMode] = useState<AuthMode>(initialDraft.authKind as AuthMode);
   const [password, setPassword] = useState("");
   const [keyPath, setKeyPath] = useState(initialDraft.keyPath);
   const [protocol, setProtocol] = useState<"ssh" | "rdp" | "vnc">(initialDraft.protocol);
@@ -158,7 +161,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
     setHost(next.host);
     setPort(String(next.port));
     setUser(next.user);
-    setAuthMode(next.authKind as "password" | "agent" | "key");
+    setAuthMode(next.authKind as AuthMode);
     setPassword("");
     setKeyPath(next.keyPath);
     setProtocol(next.protocol);
@@ -210,7 +213,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const userOk = isRemoteDesktop && protocol === "vnc" ? true : user.trim().length > 0;
   const credsOk = isRemoteDesktop
     ? password.length > 0 || isEditingKept
-    : authMode === "agent"
+    : authMode === "agent" || authMode === "auto"
       || (authMode === "password"
         ? password.length > 0 || isEditingKept
         : keyPath.trim().length > 0 || isEditingKept);
@@ -259,6 +262,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       protocol,
       domain: protocol === "rdp" ? domain.trim() : "",
     };
+    // [diag] remove after the protocol-save bug is confirmed fixed.
+    console.warn("[pierx][save] protocol state =", protocol, "| params.protocol =", params.protocol);
 
     if (isEditing && typeof initialDraft.index === "number") {
       await update({
@@ -439,7 +444,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   }
 
   return (
-    <div className="cmdp-overlay" onClick={onClose}>
+    <div className="cmdp-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className={"dlg dlg--newconn" + (egressPaneOpen ? " dlg--newconn-wide" : "")}
         style={dialogStyle}
@@ -495,7 +500,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
               </div>
             </div>
             <div className="dlg-row">
-              <label className="dlg-row-label">{t("Group")}</label>
+              <label className="dlg-row-label">{t("Connection group")}</label>
               <ComboInput
                 className="dlg-input"
                 onChange={(v) => setGroup(v)}
@@ -628,6 +633,15 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
                 >
                   {t("Agent")}
                 </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={authMode === "auto"}
+                  className={"dlg-opt" + (authMode === "auto" ? " active" : "")}
+                  onClick={() => setAuthMode("auto")}
+                >
+                  {t("Auto")}
+                </button>
               </div>
             </div>
             )}
@@ -665,6 +679,9 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
             )}
             {authMode === "agent" && (
               <div className="dlg-note">{t("Agent auth uses the system SSH agent.")}</div>
+            )}
+            {authMode === "auto" && (
+              <div className="dlg-note">{t("Auto auth tries the system SSH agent and default keys in ~/.ssh.")}</div>
             )}
             {protocol === "ssh" && (
             <>

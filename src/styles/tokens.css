@@ -95,6 +95,13 @@
   --svc-software: #c49eff;
   --svc-search: #f0c969;
 
+  /* ── Connection protocol tints (sidebar server type chips) ──
+   * Stable hues that do NOT follow the active accent, so RDP-blue
+   * never collides with VNC-purple even when [data-accent] is set
+   * to violet. SSH uses the neutral chip surface (no chroma). */
+  --proto-rdp: var(--info);
+  --proto-vnc: var(--accent-violet);
+
   /* ── Legacy aliases (Phase A/B/C compat) ─────────────────── */
   --bg-canvas: var(--bg);
   --bg-chrome: var(--surface);
@@ -173,6 +180,9 @@
   --syntax-op: #0e9488;
   --syntax-var: #7a4bd4;
   --syntax-path: #0e9488;
+
+  /* Protocol tint: the dark violet is too light on a white chip. */
+  --proto-vnc: #7a4bd4;
 
   /* ── Legacy aliases ──────────────────────────────────────── */
   --bg-hover: rgba(0, 0, 0, 0.05);

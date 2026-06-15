@@ -3,6 +3,7 @@ import { Lock, X } from "lucide-react";
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { modeToSymbolic } from "../lib/sftpEditorMeta";
 
 type Props = {
@@ -91,7 +92,7 @@ export default function ChmodDialog({ open, path, initialMode, onSubmit, onClose
   const symbolic = modeToSymbolic(mode);
 
   return (
-    <div className="dlg-overlay" onClick={onClose}>
+    <div className="dlg-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className="dlg dlg--chmod"
         style={dialogStyle}

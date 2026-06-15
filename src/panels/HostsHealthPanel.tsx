@@ -1469,6 +1469,8 @@ function authLabel(
       return t("Agent");
     case "key":
       return t("Key");
+    case "auto":
+      return t("Auto");
   }
 }
 

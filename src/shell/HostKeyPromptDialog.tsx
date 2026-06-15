@@ -15,6 +15,7 @@ import { Copy, KeyRound, ShieldAlert, X } from "lucide-react";
 
 import * as cmd from "../lib/shellCommands";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { toast } from "../stores/useToastStore";
 import { useHostKeyPromptStore } from "../stores/useHostKeyPromptStore";
 
@@ -79,7 +80,7 @@ export default function HostKeyPromptDialog() {
   const changed = request.kind === "changed";
 
   return (
-    <div className="dlg-overlay" onClick={() => void decide(false)}>
+    <div className="dlg-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className="dlg dlg--host-key"
         role="dialog"

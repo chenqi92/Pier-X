@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, RefreshCw, Square, X } from "lucide-react";
 import { useI18n } from "../../i18n/useI18n";
+import { shakeDialogOverlay } from "../../lib/dialogShake";
 import { localizeError } from "../../i18n/localizeMessage";
 import * as cmd from "../../lib/commands";
 import type { PgActivityRow } from "../../lib/commands";
@@ -147,7 +148,7 @@ export default function PostgresActivityDialog({
   if (!open) return null;
 
   return (
-    <div className="cmdp-overlay" onClick={onClose}>
+    <div className="cmdp-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className="dlg pg-activity"
         onClick={(e) => e.stopPropagation()}

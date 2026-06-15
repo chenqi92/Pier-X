@@ -4,6 +4,7 @@ import * as cmd from "../lib/commands";
 import type { SshParams, WebServerKind } from "../lib/commands";
 import Select from "../components/Select";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { localizeError } from "../i18n/localizeMessage";
 
 // Wizard for spinning up a new site config without touching an AST.
@@ -144,7 +145,7 @@ export default function NewWebServerSite({ kind, sshParams, onClose, onCreated }
   };
 
   return (
-    <div className="ws-newdialog__scrim" onClick={onClose}>
+    <div className="ws-newdialog__scrim" onMouseDown={shakeDialogOverlay}>
       <div
         className="ws-newdialog"
         onClick={(e) => e.stopPropagation()}

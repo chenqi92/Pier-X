@@ -4842,10 +4842,15 @@ pub fn redis_open_remote_blocking(session: &SshSession) -> Result<PostgresAction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProvisionFieldKind {
+    /// Single-line free text.
     Text,
+    /// Masked secret; the UI offers a generator and never logs it.
     Password,
+    /// TCP port; validated to the 1–65535 range.
     Port,
+    /// Filesystem path on the remote host.
     Path,
+    /// Boolean toggle (checkbox / switch).
     Bool,
 }
 
@@ -4856,10 +4861,12 @@ pub struct ProvisionField {
     pub key: &'static str,
     /// Human label.
     pub label: &'static str,
+    /// Which input widget + client-side validation this field uses.
     pub kind: ProvisionFieldKind,
     /// Prefilled default. NEVER a real secret — password fields leave
     /// this empty and the UI offers a "generate" button.
     pub default: &'static str,
+    /// Field must be non-empty before the form can submit.
     pub required: bool,
     /// Mask in the UI; offer a random generator; never logged.
     pub secret: bool,
@@ -4877,8 +4884,11 @@ pub struct ProvisionSpec {
     /// installers (minio) it's its own id surfaced in a separate card
     /// section.
     pub id: &'static str,
+    /// Card / form title shown in the panel.
     pub title: &'static str,
+    /// One-line description shown under the title.
     pub summary: &'static str,
+    /// Form fields, in display order.
     pub fields: &'static [ProvisionField],
     /// Surface the form automatically right after a successful install
     /// (the "install → configure" flow). `false` for standalone

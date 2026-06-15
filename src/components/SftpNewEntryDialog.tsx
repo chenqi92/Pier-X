@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 
 type Props = {
   open: boolean;
@@ -64,7 +65,7 @@ export default function SftpNewEntryDialog({
   const Icon = kind === "dir" ? FolderPlus : FilePlus2;
 
   return (
-    <div className="dlg-overlay" onClick={onClose}>
+    <div className="dlg-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className="dlg dlg--new-entry"
         style={dialogStyle}

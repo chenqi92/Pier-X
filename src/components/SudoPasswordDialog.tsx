@@ -105,7 +105,6 @@ export default function SudoPasswordDialog({
       }
       subtitle={hostLabel}
       size="sm"
-      closeOnOverlay={!busy}
       closeOnEscape={!busy}
       onClose={() => {
         if (!busy) onCancel();

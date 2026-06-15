@@ -25,6 +25,7 @@ import * as cmd from "../lib/commands";
 import type { DockerContainerView, DockerOverview, TabState } from "../lib/types";
 import { effectiveShellUser, effectiveSshTarget, isSshTargetReady, parseDockerLabels } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DbConnRow from "../components/DbConnRow";
 import DismissibleNote from "../components/DismissibleNote";
@@ -1810,10 +1811,7 @@ function DockerPanelBody({ tab }: Props) {
         {inspectCtrId && inspectJson && createPortal(
           <div
             className="dlg-overlay"
-            onClick={() => {
-              setInspectCtrId(null);
-              setInspectJson("");
-            }}
+            onMouseDown={shakeDialogOverlay}
           >
             <div
               className="dlg dlg--inspect"

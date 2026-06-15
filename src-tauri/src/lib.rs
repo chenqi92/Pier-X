@@ -4513,6 +4513,7 @@ fn ssh_connection_save(
     let resolved_user = user.trim();
     let resolved_name = name.trim();
     let proto = parse_protocol(protocol.as_deref());
+    eprintln!("[pierx][conn_save] protocol param = {protocol:?} -> {proto:?}");
 
     // VNC standard auth has no user (password only); SSH and RDP require one.
     if resolved_host.is_empty()
@@ -4533,6 +4534,7 @@ fn ssh_connection_save(
     config.port = normalize_ssh_port(port);
     config.auth = match auth_mode.trim() {
         "agent" => AuthMethod::Agent,
+        "auto" => AuthMethod::Auto,
         "key" => {
             let resolved_key_path = key_path
                 .map(|value| value.trim().to_string())
@@ -4646,6 +4648,7 @@ fn ssh_connection_update(
     let resolved_user = user.trim();
     let resolved_name = name.trim();
     let proto = parse_protocol(protocol.as_deref());
+    eprintln!("[pierx][conn_update] protocol param = {protocol:?} -> {proto:?}");
 
     if resolved_host.is_empty()
         || (resolved_user.is_empty() && proto != ConnectionProtocol::Vnc)
@@ -4673,6 +4676,7 @@ fn ssh_connection_update(
     config.port = normalize_ssh_port(port);
     config.auth = match auth_mode.trim() {
         "agent" => AuthMethod::Agent,
+        "auto" => AuthMethod::Auto,
         "key" => {
             let resolved_key_path = key_path
                 .map(|value| value.trim().to_string())

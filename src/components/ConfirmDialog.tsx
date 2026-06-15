@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { useI18n } from "../i18n/useI18n";
 
 type Tone = "neutral" | "destructive";
@@ -110,7 +111,7 @@ export default function ConfirmDialog({
   return (
     <div
       className={"cmdp-overlay" + (anchor ? " cmdp-overlay--anchored" : "")}
-      onClick={onCancel}
+      onMouseDown={shakeDialogOverlay}
     >
       <div
         ref={dialogRef}

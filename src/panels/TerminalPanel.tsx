@@ -31,6 +31,7 @@ import {
   suggestFromHistory,
 } from "../stores/useTerminalHistoryStore";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { isMissingKeychainError, localizeError } from "../i18n/localizeMessage";
 import type {
   TabState,
@@ -3558,7 +3559,7 @@ function TerminalSnippetsDialog({
   }
 
   return (
-    <div className="dlg-overlay" onClick={onClose}>
+    <div className="dlg-overlay" onMouseDown={shakeDialogOverlay}>
       <div className="dlg" onClick={(e) => e.stopPropagation()}>
         <div className="dlg-head">
           <span className="dlg-title">{t("Terminal snippets")}</span>

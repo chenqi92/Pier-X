@@ -864,6 +864,10 @@ export const zhExtra: Record<string, string> = {
   "Group": "用户组",
   "Other": "其他",
   "Octal": "八进制",
+  "Connection group": "连接分组",
+  "Auto": "自动",
+  "Auto auth tries the system SSH agent and default keys in ~/.ssh.":
+    "自动认证会尝试系统 SSH Agent 和 ~/.ssh 下的默认密钥。",
 
   // SFTP — editor dialog
   "Find / Replace": "查找 / 替换",

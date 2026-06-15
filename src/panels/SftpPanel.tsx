@@ -30,6 +30,7 @@ import { SFTP_PROGRESS_EVENT, type SftpProgressEvent } from "../lib/commands";
 import type { SftpBrowseState, SftpEntryView, TabState } from "../lib/types";
 import { effectiveShellUser, effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { treeRowHeightForDensity, useThemeStore } from "../stores/useThemeStore";
 import { localizeError } from "../i18n/localizeMessage";
 import StatusDot from "../components/StatusDot";
@@ -1984,7 +1985,7 @@ function SftpPanelBody({ tab }: Props) {
 
 
         {propsTarget && (
-          <div className="dlg-overlay" onClick={() => setPropsTarget(null)}>
+          <div className="dlg-overlay" onMouseDown={shakeDialogOverlay}>
             <div
               className="dlg dlg--props"
               onClick={(e) => e.stopPropagation()}
@@ -2221,7 +2222,7 @@ function SftpRemoteCopyDialog({
   const canSubmit = !!dest && destPath.trim().length > 0 && !isSameAsSource;
 
   return (
-    <div className="dlg-overlay" onClick={onClose}>
+    <div className="dlg-overlay" onMouseDown={shakeDialogOverlay}>
       <div className="dlg" onClick={(e) => e.stopPropagation()}>
         <div className="dlg-head">
           <span className="dlg-title">{t("Copy to other host")}</span>

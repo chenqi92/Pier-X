@@ -12,6 +12,7 @@ import { Send, X } from "lucide-react";
 
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { useTabStore } from "../stores/useTabStore";
 import { toast } from "../stores/useToastStore";
 import "../styles/broadcast-dialog.css";
@@ -118,7 +119,7 @@ export default function BroadcastDialog({
   }
 
   return (
-    <div className="dlg-overlay" onClick={onClose}>
+    <div className="dlg-overlay" onMouseDown={shakeDialogOverlay}>
       <div
         className="dlg dlg--broadcast"
         onClick={(e) => e.stopPropagation()}

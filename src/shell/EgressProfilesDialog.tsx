@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import IconButton from "../components/IconButton";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 import { localizeError } from "../i18n/localizeMessage";
 import { readClipboardText } from "../lib/clipboard";
 import {
@@ -291,7 +292,7 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
   }
 
   return createPortal(
-    <div className="cmdp-overlay" onClick={onClose}>
+    <div className="cmdp-overlay" onMouseDown={shakeDialogOverlay}>
       <div className="dlg dlg--egress" style={{ ...dialogStyle, minWidth: 640 }} onClick={(e) => e.stopPropagation()}>
         <div className="dlg-head" {...handleProps}>
           <span className="dlg-title">

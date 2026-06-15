@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import IconButton from "../components/IconButton";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import { shakeDialogOverlay } from "../lib/dialogShake";
 
 type Props = {
   open: boolean;
@@ -54,7 +55,7 @@ export default function RegistryProxyDialog({ open, mirror, proxy, onClose, onSa
   };
 
   return createPortal(
-    <div className="cmdp-overlay" onClick={onClose}>
+    <div className="cmdp-overlay" onMouseDown={shakeDialogOverlay}>
       <div className="dlg dlg--proxy" style={dialogStyle} onClick={(e) => e.stopPropagation()}>
         <div className="dlg-head" {...handleProps}>
           <span className="dlg-title">

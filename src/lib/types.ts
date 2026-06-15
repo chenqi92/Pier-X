@@ -249,7 +249,7 @@ export type SavedSshConnection = {
   protocol: "ssh" | "rdp" | "vnc";
   /** RDP-only Windows domain. Empty / undefined otherwise. */
   domain?: string | null;
-  authKind: "password" | "agent" | "key";
+  authKind: "password" | "agent" | "key" | "auto";
   keyPath: string;
   /** Explicit sidebar group label. Missing / empty means the
    *  connection lives in the implicit "default" bucket. */

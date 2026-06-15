@@ -4464,7 +4464,7 @@ dependencies = [
 
 [[package]]
 name = "pier-core"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "aes-gcm 0.10.3",
  "anyhow",
@@ -4522,7 +4522,7 @@ dependencies = [
 
 [[package]]
 name = "pierx"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "pier-core",
  "serde",

@@ -54,7 +54,7 @@ pub(crate) async fn run(
     // ── X.224 negotiation up to the TLS boundary ─────────────────────
     let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
         .await
-        .map_err(|e| RemoteDesktopError::Connect(format!("RDP negotiation: {e}")))?;
+        .map_err(|e| RemoteDesktopError::Connect(format!("RDP negotiation: {}", describe_err(&e))))?;
 
     // ── TLS upgrade ──────────────────────────────────────────────────
     let initial_stream = framed.into_inner_no_leftover();
@@ -78,7 +78,7 @@ pub(crate) async fn run(
         None,
     )
     .await
-    .map_err(|e| RemoteDesktopError::Auth(format!("RDP activation: {e}")))?;
+    .map_err(|e| RemoteDesktopError::Auth(format!("RDP activation: {}", describe_err(&e))))?;
 
     let desktop = connection_result.desktop_size;
     let mut image = DecodedImage::new(PixelFormat::RgbA32, desktop.width, desktop.height);
@@ -244,6 +244,20 @@ fn to_operations(ev: &InputEvent) -> Vec<Operation> {
         // PDU stream — a follow-up. Ignore for now.
         InputEvent::SetClipboard(_) => Vec::new(),
     }
+}
+
+/// Flatten an error's `source()` chain into one string so the leaf cause
+/// (a connection reset / unexpected EOF / decode failure behind IronRDP's
+/// generic "custom error") reaches the user.
+fn describe_err<E: std::error::Error>(err: &E) -> String {
+    let mut out = err.to_string();
+    let mut src = err.source();
+    while let Some(inner) = src {
+        out.push_str(" :: ");
+        out.push_str(&inner.to_string());
+        src = inner.source();
+    }
+    out
 }
 
 /// Build the IronRDP connector config from our protocol-agnostic config.

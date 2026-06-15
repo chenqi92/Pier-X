@@ -1019,7 +1019,8 @@ AI 通过 tool-use 协议调用 Pier-X 已有能力——**不新开能力面，
 - **传输**：帧以二进制 `tauri::ipc::Channel` 推送（`Response::new(Vec<u8>)` → ArrayBuffer，无 base64）；输入经 `remote_desktop_input` 命令回传，键码用 noVNC 风格的 scancode/keysym 表映射。
 - **布局**：远程桌面 tab 激活时 `.app.is-fullbleed` 收起右侧工具区，canvas 横跨中区+右区；左侧服务器栏与顶部 tab 栏保持。会话随 tab 切换保活（`display:none`）。
 - **目标矩阵**：Windows/macOS → Windows（RDP）；Windows/macOS → macOS（VNC + ARD）；以及任意标准 VNC 服务器（Linux/Windows）。
-- **非目标（v1）**：剪贴板双向同步、动态分辨率（服务端 resize 需重连）、RDP 域 Kerberos、音频/重定向。
+- **已支持的交互**：鼠标（移动 / 左中右键 / 滚轮）、键盘（scancode+keysym，失焦自动释放按键）、**VNC 剪贴板双向同步**（远端→本地仅同步激活 tab；本地→远端在聚焦时推送）。
+- **非目标（v1）**：RDP 剪贴板（CLIPRDR）、文件传输（RDP 驱动重定向 / VNC 无此协议；SSH 主机可用 SFTP 面板）、VNC Tight/ZRLE 编码（回退 Raw）、动态分辨率（服务端 resize 需重连）、RDP 域 Kerberos、音频重定向。
 
 ---
 

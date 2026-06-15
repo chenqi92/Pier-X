@@ -365,6 +365,7 @@ function MySqlPanelBody({ tab }: Props) {
           savedConnectionIndex: ssh.savedConnectionIndex,
           database: tab.mysqlDatabase.trim() || null,
           sql,
+          readOnly,
           ...elev.getElevationArgs(),
         });
       } else {
@@ -376,6 +377,7 @@ function MySqlPanelBody({ tab }: Props) {
           password: tab.mysqlPassword,
           database: tab.mysqlDatabase.trim() || null,
           sql,
+          readOnly,
         });
       }
       setQueryResult(r);

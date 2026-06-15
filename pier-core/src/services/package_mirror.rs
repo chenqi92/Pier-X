@@ -867,11 +867,14 @@ async fn run_root_sh(
     manager_name: &str,
     sudo_password: Option<&str>,
 ) -> Result<MirrorActionReport> {
-    use super::package_manager::{sanitize_sudo_output, wrap_sudo_sh, SudoCommand};
+    use super::package_manager::{exec_sudo, sanitize_sudo_output, wrap_sudo_sh, SudoCommand};
     let env = super::package_manager::probe_host_env(session).await;
-    let SudoCommand { full: command, display: command_display } =
-        wrap_sudo_sh(env.is_root, inner, sudo_password);
-    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let SudoCommand {
+        full: command,
+        display: command_display,
+        stdin: sudo_stdin,
+    } = wrap_sudo_sh(env.is_root, inner, sudo_password);
+    let (exit_code, stdout) = exec_sudo(session, &command, sudo_stdin.as_deref()).await?;
     let stdout_clean = sanitize_sudo_output(&stdout, sudo_password);
     let output_tail = stdout_clean
         .lines()

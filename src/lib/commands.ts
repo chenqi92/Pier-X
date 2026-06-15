@@ -448,6 +448,10 @@ export const sshConnectionSave = (params: {
    *  pipes `sudo -i` + the keychain elevation password. Off by
    *  default. */
   autoElevate?: boolean;
+  /** `"ssh"` (default) / `"rdp"` / `"vnc"`. Selects the connection kind. */
+  protocol?: "ssh" | "rdp" | "vnc";
+  /** RDP-only Windows domain. */
+  domain?: string | null;
 }) => invoke<void>("ssh_connection_save", {
   name: params.name,
   host: params.host,
@@ -460,6 +464,8 @@ export const sshConnectionSave = (params: {
   envTag: params.envTag && params.envTag.trim() ? params.envTag.trim() : null,
   egressId: params.egressId && params.egressId.trim() ? params.egressId.trim() : null,
   autoElevate: params.autoElevate ?? false,
+  protocol: params.protocol ?? "ssh",
+  domain: params.domain && params.domain.trim() ? params.domain.trim() : null,
 });
 
 export const sshConnectionUpdate = (params: {
@@ -482,6 +488,10 @@ export const sshConnectionUpdate = (params: {
   /** When `undefined`, the backend preserves the existing flag.
    *  Pass `true` / `false` to explicitly toggle. */
   autoElevate?: boolean;
+  /** `"ssh"` / `"rdp"` / `"vnc"`. Omit to keep `"ssh"`. */
+  protocol?: "ssh" | "rdp" | "vnc";
+  /** RDP-only Windows domain. */
+  domain?: string | null;
 }) => invoke<void>("ssh_connection_update", {
   index: params.index,
   name: params.name,
@@ -491,6 +501,8 @@ export const sshConnectionUpdate = (params: {
   authMode: params.authKind,
   password: params.password || null,
   keyPath: params.keyPath || null,
+  protocol: params.protocol ?? "ssh",
+  domain: params.domain && params.domain.trim() ? params.domain.trim() : null,
   group: params.group === undefined
     ? null
     : params.group && params.group.trim() ? params.group.trim() : "",
@@ -929,7 +941,15 @@ export const mysqlExecute = (params: {
   password: string;
   database?: string | null;
   sql: string;
-}) => invoke<QueryExecutionResult>("mysql_execute", params);
+  /** When true, the backend rejects any statement that isn't a single
+   *  read-only query — defense in depth behind the panel's lock. The
+   *  query editor passes its lock state; other callers omit it. */
+  readOnly?: boolean;
+}) =>
+  invoke<QueryExecutionResult>("mysql_execute", {
+    ...params,
+    readOnly: params.readOnly ?? false,
+  });
 
 /** Socket-CLI MySQL browse — runs the remote host's own `mysql` client
  *  over SSH **as the terminal's effective user** (auth_socket), so the
@@ -962,11 +982,13 @@ export const mysqlExecuteSocket = (
     sql: string;
     sudoPassword?: string | null;
     effectiveUser?: string | null;
+    readOnly?: boolean;
   },
 ) =>
   invoke<QueryExecutionResult>("mysql_execute_socket", {
     ...params,
     database: params.database ?? null,
+    readOnly: params.readOnly ?? false,
   });
 
 /** One row of `information_schema.processlist` (the
@@ -1018,8 +1040,8 @@ export const mysqlKillConnection = (params: {
 export const sqliteBrowse = (path: string, table?: string | null) =>
   invoke<SqliteBrowserState>("sqlite_browse", { path, table: table ?? null });
 
-export const sqliteExecute = (path: string, sql: string) =>
-  invoke<QueryExecutionResult>("sqlite_execute", { path, sql });
+export const sqliteExecute = (path: string, sql: string, readOnly = false) =>
+  invoke<QueryExecutionResult>("sqlite_execute", { path, sql, readOnly });
 
 /** Run a script with multiple `;`-separated statements. Each
  *  statement returns its own [QueryExecutionResult] with
@@ -1160,7 +1182,15 @@ export const postgresExecute = (params: {
   password: string;
   database?: string | null;
   sql: string;
-}) => invoke<QueryExecutionResult>("postgres_execute", params);
+  /** When true, the backend rejects any statement that isn't a single
+   *  read-only query — defense in depth behind the panel's lock. The
+   *  query editor passes its lock state; other callers omit it. */
+  readOnly?: boolean;
+}) =>
+  invoke<QueryExecutionResult>("postgres_execute", {
+    ...params,
+    readOnly: params.readOnly ?? false,
+  });
 
 // ── SQL Server (tiberius / TDS) ─────────────────────────────────────
 
@@ -1180,7 +1210,15 @@ export const mssqlExecute = (params: {
   password: string;
   database?: string | null;
   sql: string;
-}) => invoke<QueryExecutionResult>("mssql_execute", params);
+  /** When true, the backend rejects any statement that isn't a single
+   *  read-only query — defense in depth behind the panel's lock. The
+   *  query editor passes its lock state; other callers omit it. */
+  readOnly?: boolean;
+}) =>
+  invoke<QueryExecutionResult>("mssql_execute", {
+    ...params,
+    readOnly: params.readOnly ?? false,
+  });
 
 /** Database list + base tables for the active SQL Server database. */
 export const mssqlOverview = (params: {
@@ -1300,11 +1338,13 @@ export const postgresExecuteSocket = (
     sql: string;
     sudoPassword?: string | null;
     dbOsUser?: string | null;
+    readOnly?: boolean;
   },
 ) =>
   invoke<QueryExecutionResult>("postgres_execute_socket", {
     ...params,
     database: params.database ?? null,
+    readOnly: params.readOnly ?? false,
   });
 
 /** One row of `pg_stat_activity` as returned by
@@ -2801,8 +2841,13 @@ export const sqliteExecuteRemote = (
     supportsJson: boolean;
     sudoPassword?: string | null;
     effectiveUser?: string | null;
+    readOnly?: boolean;
   },
-) => invoke<QueryExecutionResult>("sqlite_execute_remote", params);
+) =>
+  invoke<QueryExecutionResult>("sqlite_execute_remote", {
+    ...params,
+    readOnly: params.readOnly ?? false,
+  });
 
 export const sqliteFindInDir = (
   params: SshParams & { directory: string; maxDepth?: number | null },
@@ -3471,26 +3516,29 @@ export const sftpPreviewCsv = (params: SftpConnArgs & {
 }) => invoke<SftpTablePreview>("sftp_preview_csv", params);
 
 /** Build a `pierfs://` URL the WebView can fetch / `<img src>` /
- *  `<video src>` / hand to pdf.js. The connection identity rides in
- *  the query string; the backend resolves the already-open SFTP
- *  session from it (no secrets in the URL). */
-export const pierfsUrl = (
+ *  `<video src>` / hand to pdf.js. Async: it first mints a short-lived,
+ *  unguessable capability token on the backend bound to this exact
+ *  (connection, path), then puts only that token in the URL. The token —
+ *  not a guessable host/user/path — authorizes the read, so an injected
+ *  `pierfs://` reference (crafted filename, document-embedded URL, CSS
+ *  `url()`) can't exfiltrate arbitrary files from the active session. */
+export const pierfsUrl = async (
   args: { host: string; port: number; user: string; authMode: string },
   path: string,
-): string => {
-  // `convertFileSrc` gives the platform-correct origin
-  // (`pierfs://localhost/…` on macOS/Linux, `http://pierfs.localhost/…`
-  // on Windows). The remote path also rides in the query (authoritative
-  // on the backend) so percent-encoded slashes survive any path-segment
-  // normalization the platform applies.
-  const base = convertFileSrc(path, "pierfs");
-  const q = new URLSearchParams({
+): Promise<string> => {
+  const token = await invoke<string>("pierfs_grant", {
     host: args.host,
-    port: String(args.port),
+    port: args.port,
     user: args.user,
     authMode: args.authMode,
     path,
   });
+  // `convertFileSrc` gives the platform-correct origin
+  // (`pierfs://localhost/…` on macOS/Linux, `http://pierfs.localhost/…`
+  // on Windows). The path rides in the query too so percent-encoded
+  // slashes survive any path-segment normalization the platform applies.
+  const base = convertFileSrc(path, "pierfs");
+  const q = new URLSearchParams({ token, path });
   return `${base}?${q.toString()}`;
 };
 

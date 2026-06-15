@@ -136,8 +136,18 @@ pub fn set_persistent(key: &str, value: &str) -> Result<Backend, CredentialError
 /// there wins, and the local copy is only consulted when the keyring has
 /// nothing (the "keyring was down when we saved" case).
 pub fn get_persistent(key: &str) -> Result<Option<String>, CredentialError> {
-    if let Some(value) = get(key)? {
-        return Ok(Some(value));
+    // A hard keyring error (backend unavailable / locked / corrupt entry)
+    // is NOT the same as "no value". Propagating it via `?` would shadow a
+    // value previously written to the local fallback when the keyring was
+    // down — exactly the case [`set_persistent`] exists for. So treat a
+    // keyring failure the same as a miss: log it and consult the fallback,
+    // mirroring `set_persistent`'s "keyring unusable → take the fallback".
+    match get(key) {
+        Ok(Some(value)) => return Ok(Some(value)),
+        Ok(None) => {}
+        Err(e) => {
+            log::warn!("keyring get({key}) failed, consulting local fallback: {e}");
+        }
     }
     local_secret_store::get(key).map_err(|e| CredentialError::LocalStore(e.to_string()))
 }

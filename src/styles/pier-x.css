@@ -109,6 +109,15 @@ body.is-panel-animating .rightzone {
 .resizer.is-right { right: calc(var(--rightpanel-w) + var(--toolstrip-w) - 2px); }
 .app.is-right-collapsed .resizer.is-right { display: none; }
 
+/* Remote-desktop takeover: collapse the right column to 0 and hide the right
+ * zone + its splitter so the canvas spans from the sidebar edge to the window
+ * edge. The left sidebar and tab bar are untouched. */
+.app.is-fullbleed {
+  grid-template-columns: var(--sidebar-w) minmax(var(--center-min-w, 0px), 1fr) 0;
+}
+.app.is-fullbleed .rightzone { display: none; }
+.app.is-fullbleed .resizer.is-right { display: none; }
+
 /* Grid-area slots */
 .titlebar  { grid-area: title;  }
 .sidebar   { grid-area: side;   }

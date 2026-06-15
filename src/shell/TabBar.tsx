@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, FileText, FolderTree, Plus, Server, SquareTerminal, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileText, FolderTree, Monitor, Plus, Server, SquareTerminal, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/useI18n";
 import { TAB_COLORS, type TabState } from "../lib/types";
@@ -13,6 +13,8 @@ function backendIcon(backend: TabState["backend"]) {
       return <FolderTree className="tab-icon" size={13} />;
     case "markdown":
       return <FileText className="tab-icon" size={13} />;
+    case "remote-desktop":
+      return <Monitor className="tab-icon" size={13} />;
     default:
       return <SquareTerminal className="tab-icon" size={13} />;
   }

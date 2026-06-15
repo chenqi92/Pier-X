@@ -19,8 +19,9 @@ export default function DocxView({ sshArgs, path }: ViewerProps) {
     let cancelled = false;
     setStatus("loading");
     setError("");
-    const url = cmd.pierfsUrl(sshArgs, path);
-    fetch(url)
+    cmd
+      .pierfsUrl(sshArgs, path)
+      .then((url) => fetch(url))
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.arrayBuffer();

@@ -78,6 +78,7 @@ import "./styles/shell.css";
 import "./styles/pier-x.css";
 
 const TerminalPanel = lazy(() => import("./panels/TerminalPanel"));
+const RemoteDesktopPanel = lazy(() => import("./panels/RemoteDesktopPanel"));
 const HostsHealthPanel = lazy(() => import("./panels/HostsHealthPanel"));
 const CommandPalette = lazy(() => import("./shell/CommandPalette"));
 const SettingsDialog = lazy(() => import("./components/SettingsDialog"));
@@ -270,6 +271,10 @@ function App() {
   const i18n = useMemo(() => makeI18n(locale), [locale]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+  // A remote-desktop tab takes over the whole center+right area: the canvas
+  // spans the freed columns and the right tool strip / sidebar are hidden.
+  // The left sidebar and the tab bar stay put.
+  const isRemoteDesktop = activeTab?.backend === "remote-desktop";
   // Resolve the displayed right tool to one the active tab can
   // actually reach. The persisted value on the tab can become stale
   // when an SSH overlay disappears (nested `exit`, key changes) — we
@@ -667,6 +672,36 @@ function App() {
             /* fall through — backend terminal will still work via saved-index path */
           });
       }
+    },
+    [addTab],
+  );
+
+  // Open a saved RDP / VNC connection as a remote-desktop tab. The password
+  // is resolved from the keyring FIRST so the panel connects with credentials
+  // on its first mount (unlike the terminal path, the remote-desktop panel
+  // doesn't re-handshake when the password lands later).
+  const openRemoteDesktopSaved = useCallback(
+    (index: number) => {
+      const conn = useConnectionStore.getState().connections.find((c) => c.index === index);
+      if (!conn) return;
+      useRecentConnectionsStore.getState().touch(index);
+      const protocol = conn.protocol === "vnc" ? "vnc" : "rdp";
+      const create = (password: string) =>
+        addTab({
+          backend: "remote-desktop",
+          title: conn.name || `${conn.user}@${conn.host}`,
+          rdProtocol: protocol,
+          rdHost: conn.host,
+          rdPort: conn.port,
+          rdUser: conn.user,
+          rdDomain: conn.domain ?? "",
+          rdPassword: password,
+          sshSavedConnectionIndex: conn.index,
+        });
+      cmd
+        .sshConnectionResolvePassword(conn.index)
+        .then((password) => create(password ?? ""))
+        .catch(() => create(""));
     },
     [addTab],
   );
@@ -1077,7 +1112,9 @@ function App() {
     <I18nContext.Provider value={i18n}>
       <Stage>
         <div
-          className={`app${isRightCollapsed ? " is-right-collapsed" : ""}`}
+          className={`app${isRightCollapsed ? " is-right-collapsed" : ""}${
+            isRemoteDesktop ? " is-fullbleed" : ""
+          }`}
           style={appStyle}
         >
           <TopBar
@@ -1097,6 +1134,7 @@ function App() {
           <Sidebar
             onOpenLocalTerminal={openLocalTerminal}
             onConnectSaved={openSshSaved}
+            onConnectRemoteDesktop={openRemoteDesktopSaved}
             onNewConnection={openNewConnectionDialog}
             onEditConnection={openEditConnectionDialog}
             onPathChange={setBrowserPath}
@@ -1148,6 +1186,12 @@ function App() {
                       onConnectSaved={openSshSaved}
                       onEditConnection={openEditConnectionDialog}
                       onNewConnection={openNewConnectionDialog}
+                    />
+                  ) : tab.backend === "remote-desktop" ? (
+                    <RemoteDesktopPanel
+                      key={tab.id}
+                      tab={tab}
+                      isActive={tab.id === activeTabId}
                     />
                   ) : (
                     <TerminalPanel
@@ -1243,6 +1287,7 @@ function App() {
                 }}
                 onConnect={openSshTab}
                 onConnectSaved={openSshSaved}
+                onConnectRemoteDesktop={openRemoteDesktopSaved}
                 onSaved={(savedIndex, password, authKind) => {
                   // Push the freshly-typed credentials into any open tabs
                   // that point at this saved connection. The terminal

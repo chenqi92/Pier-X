@@ -47,6 +47,7 @@ function scrubRuntimeFields(tab: TabState): TabState {
     terminalSessionId: null,
     currentShellUser: "",
     sshPassword: "",
+    rdPassword: "",
     // Nested-ssh state is purely runtime — set by the SSH watcher
     // when it sees an `ssh` child inside an existing PTY. After a
     // restart there is no live PTY, so any persisted value is by
@@ -356,6 +357,12 @@ function makeDefaultTab(
     nestedSshTarget: partial.nestedSshTarget ?? null,
     lastCwd: partial.lastCwd ?? null,
     sftpLastPath: partial.sftpLastPath ?? null,
+    rdProtocol: partial.rdProtocol ?? "rdp",
+    rdHost: partial.rdHost ?? "",
+    rdPort: partial.rdPort ?? 0,
+    rdUser: partial.rdUser ?? "",
+    rdPassword: partial.rdPassword ?? "",
+    rdDomain: partial.rdDomain ?? "",
   };
 }
 

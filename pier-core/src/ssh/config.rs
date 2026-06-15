@@ -16,9 +16,34 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Which protocol a saved connection speaks. `ssh` (the default for every
+/// pre-existing entry) opens a terminal; `rdp` / `vnc` open a remote-desktop
+/// tab handled by [`crate::remote_desktop`]. For `rdp` / `vnc` only the
+/// addressing + password auth fields are meaningful — `databases`,
+/// `egress_id`, `auto_elevate`, key/agent auth are SSH-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionProtocol {
+    /// SSH terminal (default).
+    #[default]
+    Ssh,
+    /// Microsoft Remote Desktop.
+    Rdp,
+    /// RFB / VNC (incl. macOS Screen Sharing).
+    Vnc,
+}
+
 /// Addressing + auth for one SSH connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SshConfig {
+    /// Connection protocol. Defaults to [`ConnectionProtocol::Ssh`] so saved
+    /// connections written before remote-desktop support deserialize cleanly.
+    #[serde(default)]
+    pub protocol: ConnectionProtocol,
+    /// RDP only: optional Windows domain / NetBIOS name. Ignored for
+    /// SSH and VNC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
     /// Human-readable label, shown in the sidebar. Not part of the
     /// SSH protocol — purely UI.
     pub name: String,
@@ -89,6 +114,8 @@ impl SshConfig {
     /// the display label if you don't override it.
     pub fn new(name: impl Into<String>, host: impl Into<String>, user: impl Into<String>) -> Self {
         Self {
+            protocol: ConnectionProtocol::Ssh,
+            domain: None,
             name: name.into(),
             host: host.into(),
             port: 22,
@@ -414,6 +441,8 @@ mod tests {
     #[test]
     fn round_trips_through_json() {
         let original = SshConfig {
+            protocol: ConnectionProtocol::Ssh,
+            domain: None,
             name: "prod".into(),
             host: "db.example.com".into(),
             port: 2222,
@@ -590,6 +619,8 @@ mod tests {
     #[test]
     fn direct_password_round_trips() {
         let c = SshConfig {
+            protocol: ConnectionProtocol::Ssh,
+            domain: None,
             name: "tmp".into(),
             host: "h".into(),
             port: 22,

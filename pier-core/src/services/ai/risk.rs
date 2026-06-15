@@ -124,6 +124,104 @@ pub fn classify_write_path(path: &str) -> RiskAssessment {
     out
 }
 
+/// Classify a path the model wants to **read the contents of**
+/// (`read_file`). Reading a credential store — a private key, a `.env`,
+/// cloud/kube creds, `/etc/shadow` — would pull secrets straight into the
+/// model's context on an L0 auto-run, so those raise to L2 (always asks,
+/// never allow-listable). Everything else stays L0 (auto-read).
+///
+/// Pattern-based and deliberately conservative: a false positive just
+/// adds one approval click; a false negative leaks a secret, so the list
+/// errs toward catching the common secret stores.
+pub fn classify_read_path(path: &str) -> RiskAssessment {
+    match sensitive_path_reason(path) {
+        Some(reason) => {
+            let mut out = RiskAssessment::new(RiskLevel::L2);
+            out.reasons.push(format!("reads {reason}"));
+            out
+        }
+        None => RiskAssessment::new(RiskLevel::L0),
+    }
+}
+
+/// Classify a path the model wants to **list** (`list_dir`). Listing a
+/// credential directory (`~/.ssh`, `~/.aws`, `~/.kube`) leaks secret
+/// *names* but not contents, so it raises to L1 (approval card,
+/// allow-listable) rather than L2. Everything else stays L0.
+pub fn classify_list_path(path: &str) -> RiskAssessment {
+    match sensitive_path_reason(path) {
+        Some(reason) => {
+            let mut out = RiskAssessment::new(RiskLevel::L1);
+            out.reasons.push(format!("lists {reason}"));
+            out
+        }
+        None => RiskAssessment::new(RiskLevel::L0),
+    }
+}
+
+/// Shared sensitivity matcher: returns a short reason when `path` looks
+/// like a credential / secret store, else `None`. Used by both
+/// [`classify_read_path`] and [`classify_list_path`].
+fn sensitive_path_reason(path: &str) -> Option<&'static str> {
+    let p = path.trim().replace('\\', "/").to_ascii_lowercase();
+    if p.is_empty() {
+        return None;
+    }
+    let base = p.rsplit('/').next().unwrap_or(p.as_str());
+
+    // `.env` family: `.env`, `.env.local`, `.env.production`, …
+    if base == ".env" || base.starts_with(".env.") {
+        return Some("an environment file (.env)");
+    }
+    // Well-known credential / secret filenames.
+    const SECRET_FILES: &[&str] = &[
+        ".netrc",
+        "_netrc",
+        ".pgpass",
+        ".my.cnf",
+        ".git-credentials",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+        "kubeconfig",
+        "shadow",
+        "gshadow",
+        "htpasswd",
+        "credentials",
+    ];
+    if SECRET_FILES.contains(&base) {
+        return Some("a credential/secret file");
+    }
+    // Private-key / certificate material by extension.
+    const KEY_EXTS: &[&str] = &[
+        ".pem", ".key", ".pfx", ".p12", ".keystore", ".jks", ".ppk", ".asc", ".gpg",
+    ];
+    if KEY_EXTS.iter().any(|e| base.ends_with(e)) {
+        return Some("private key / certificate material");
+    }
+    // Credential directories: match whether the target IS the dir
+    // (`~/.ssh`) or sits UNDER it (`~/.ssh/config`), so a trailing slash
+    // isn't required. Segment-exact so `/home/sshfoo` doesn't match.
+    const SECRET_DIR_NAMES: &[&str] = &[".ssh", ".aws", ".kube", ".gnupg", ".docker", ".azure"];
+    if p.split('/').any(|seg| SECRET_DIR_NAMES.contains(&seg)) {
+        return Some("a credential directory (.ssh / .aws / .kube / …)");
+    }
+    // Cloud-CLI credential dirs that live under `.config`.
+    if p.contains("/.config/gcloud") || p.contains("/.config/gh") {
+        return Some("a cloud CLI credential directory");
+    }
+    // System credential stores.
+    if p == "/etc/shadow"
+        || p == "/etc/gshadow"
+        || p == "/etc/sudoers"
+        || p.starts_with("/etc/sudoers.d/")
+    {
+        return Some("a system credential file");
+    }
+    None
+}
+
 // ── Compound splitting (quote-aware) ───────────────────────────────
 
 struct Segment {
@@ -1334,6 +1432,29 @@ mod tests {
         assert_eq!(classify_write_path("/etc/sudoers.d/extra").level, RiskLevel::L3);
         assert_eq!(classify_write_path("/var/log/auth.log").level, RiskLevel::L3);
         assert_eq!(classify_write_path("/dev/sda").level, RiskLevel::L3);
+    }
+
+    #[test]
+    fn read_path_sensitivity() {
+        // Ordinary files auto-read (L0).
+        assert_eq!(classify_read_path("/var/www/app/main.rs").level, RiskLevel::L0);
+        assert_eq!(classify_read_path("/home/me/notes.txt").level, RiskLevel::L0);
+        // Secret stores require explicit approval on read (L2)…
+        assert_eq!(classify_read_path("/home/me/.env").level, RiskLevel::L2);
+        assert_eq!(classify_read_path("/srv/app/.env.production").level, RiskLevel::L2);
+        assert_eq!(classify_read_path("/home/me/.ssh/id_ed25519").level, RiskLevel::L2);
+        assert_eq!(classify_read_path("/home/me/.ssh/config").level, RiskLevel::L2);
+        assert_eq!(classify_read_path("/home/me/.aws/credentials").level, RiskLevel::L2);
+        assert_eq!(classify_read_path("C:\\Users\\me\\.kube\\config").level, RiskLevel::L2);
+        assert_eq!(classify_read_path("/etc/shadow").level, RiskLevel::L2);
+        assert_eq!(classify_read_path("/opt/tls/server.pem").level, RiskLevel::L2);
+        // …but listing a secret dir is only L1 (names, not contents) —
+        // caught with or without a trailing slash — and a plain dir
+        // (incl. a lookalike like `sshfoo`) stays L0.
+        assert_eq!(classify_list_path("/home/me/.ssh").level, RiskLevel::L1);
+        assert_eq!(classify_list_path("/home/me/.ssh/").level, RiskLevel::L1);
+        assert_eq!(classify_list_path("/home/me/project").level, RiskLevel::L0);
+        assert_eq!(classify_list_path("/home/sshfoo").level, RiskLevel::L0);
     }
 
     // Red line #1 — root-level recursive delete / permission rewrite.

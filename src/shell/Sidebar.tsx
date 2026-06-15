@@ -58,6 +58,8 @@ import {
 type Props = {
   onOpenLocalTerminal: (path?: string) => void;
   onConnectSaved: (index: number, rightTool?: RightTool) => void;
+  /** Open a saved RDP / VNC connection as a remote-desktop tab. */
+  onConnectRemoteDesktop: (index: number) => void;
   onNewConnection: () => void;
   onEditConnection: (index: number) => void;
   onPathChange?: (path: string) => void;
@@ -458,7 +460,7 @@ function shortPathLabel(path: string, homeDir: string): string {
   return normalized;
 }
 
-export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConnection, onEditConnection, onPathChange, onFileSelect, selectedFilePath, workspaceRoot, onBroadcastToIndices, coreInfo }: Props) {
+export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onConnectRemoteDesktop, onNewConnection, onEditConnection, onPathChange, onFileSelect, selectedFilePath, workspaceRoot, onBroadcastToIndices, coreInfo }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<0 | 1>(0);
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -1210,6 +1212,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onNewConn
           serverSearch={serverSearch}
           onSearchChange={setServerSearch}
           onConnect={onConnectSaved}
+          onConnectRemoteDesktop={onConnectRemoteDesktop}
           onEdit={onEditConnection}
           onRemove={(index) => { void remove(index).catch(reportError); }}
           onNew={onNewConnection}
@@ -1351,6 +1354,7 @@ function ServersPane({
   serverSearch,
   onSearchChange,
   onConnect,
+  onConnectRemoteDesktop,
   onEdit,
   onRemove,
   onNew,
@@ -1365,6 +1369,7 @@ function ServersPane({
   serverSearch: string;
   onSearchChange: (s: string) => void;
   onConnect: (index: number, rightTool?: RightTool) => void;
+  onConnectRemoteDesktop: (index: number) => void;
   onEdit: (index: number) => void;
   onRemove: (index: number) => void;
   onNew: () => void;
@@ -1464,6 +1469,13 @@ function ServersPane({
 
   const groupLabel = (key: GroupKey) => (key === "" ? t("Default") : key);
 
+  // Route a saved connection to the right opener: rdp/vnc become a
+  // remote-desktop tab, everything else an SSH terminal.
+  const connectServer = (conn: SavedSshConnection) => {
+    if (conn.protocol === "rdp" || conn.protocol === "vnc") onConnectRemoteDesktop(conn.index);
+    else onConnect(conn.index);
+  };
+
   const applyReorder = (
     order: number[],
     groupLabels: Array<string | null>,
@@ -1476,16 +1488,23 @@ function ServersPane({
     event.preventDefault();
     const items: ContextMenuItem[] = [];
 
-    // Primary actions: open a terminal, or open straight onto a built-in
-    // service panel (Redis / MySQL / … land the tab on that right tool so
-    // the user skips the monitor → tool switch).
-    items.push({ label: t("Open terminal"), action: () => onConnect(conn.index) });
-    const SERVER_MENU_TOOLS: RightTool[] = ["redis", "mysql", "postgres", "docker"];
-    for (const tool of SERVER_MENU_TOOLS) {
+    // Primary actions. RDP / VNC connections open straight into a
+    // remote-desktop tab; SSH connections open a terminal or land directly
+    // on a built-in service panel (skipping the monitor → tool switch).
+    if (conn.protocol === "rdp" || conn.protocol === "vnc") {
       items.push({
-        label: t("Open {tool}", { tool: RIGHT_TOOL_META[tool].label }),
-        action: () => onConnect(conn.index, tool),
+        label: t("Open remote desktop"),
+        action: () => onConnectRemoteDesktop(conn.index),
       });
+    } else {
+      items.push({ label: t("Open terminal"), action: () => onConnect(conn.index) });
+      const SERVER_MENU_TOOLS: RightTool[] = ["redis", "mysql", "postgres", "docker"];
+      for (const tool of SERVER_MENU_TOOLS) {
+        items.push({
+          label: t("Open {tool}", { tool: RIGHT_TOOL_META[tool].label }),
+          action: () => onConnect(conn.index, tool),
+        });
+      }
     }
     items.push({ divider: true });
     items.push({ label: t("Edit"), action: () => onEdit(conn.index) });
@@ -1541,7 +1560,7 @@ function ServersPane({
         disabled: rowCount === 0,
         action: () => {
           if (!grp) return;
-          for (const row of grp.servers) onConnect(row.index);
+          for (const row of grp.servers) connectServer(row);
         },
       });
       items.push({
@@ -1789,7 +1808,7 @@ function ServersPane({
                     online={det?.online ?? false}
                     detectedTools={det?.tools}
                     onToggle={() => setOpenRow((cur) => (cur === s.index ? null : s.index))}
-                    onConnect={() => onConnect(s.index)}
+                    onConnect={() => connectServer(s)}
                     onEdit={() => onEdit(s.index)}
                     onRemove={() => onRemove(s.index)}
                     onContextMenu={(e) => openServerMenu(e, s)}
@@ -1988,14 +2007,22 @@ function ServerItem({
   // groupKey isn't rendered directly — it's only here so the parent's
   // drag handler has the right context. Reference it to keep TS happy.
   void groupKey;
-  const AuthIcon: LucideIcon = conn.authKind === "key" ? Key : conn.authKind === "agent" ? Shield : Lock;
+  const isRemoteDesktop = conn.protocol === "rdp" || conn.protocol === "vnc";
+  const AuthIcon: LucideIcon = isRemoteDesktop
+    ? Monitor
+    : conn.authKind === "key"
+      ? Key
+      : conn.authKind === "agent"
+        ? Shield
+        : Lock;
   const { t } = useI18n();
-  const addr = `${conn.user}@${conn.host}${conn.port !== 22 ? `:${conn.port}` : ""}`;
+  const addr = `${conn.user ? `${conn.user}@` : ""}${conn.host}${conn.port !== 22 ? `:${conn.port}` : ""}`;
   const chips = detectedTools
     ? SERVICE_META.filter((m) => detectedTools.has(m.tool))
     : [];
-  const authLabel =
-    conn.authKind === "key"
+  const authLabel = isRemoteDesktop
+    ? conn.protocol.toUpperCase()
+    : conn.authKind === "key"
       ? t("Key file")
       : conn.authKind === "agent"
         ? t("Agent")
@@ -2042,7 +2069,7 @@ function ServerItem({
         </span>
         <div className="srv-actions" onClick={(e) => e.stopPropagation()}>
           <button className="mini-btn" onClick={onConnect} title={connectLabel} type="button">
-            <Terminal />
+            {isRemoteDesktop ? <Monitor /> : <Terminal />}
           </button>
           <button className="mini-btn" onClick={onEdit} title={editLabel} type="button">
             <Pencil />

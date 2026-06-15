@@ -23,13 +23,31 @@ pub mod markdown;
 pub mod paths;
 pub mod preview;
 pub(crate) mod process_util;
+pub mod remote_desktop;
 pub mod services;
+pub mod sql_guard;
 pub mod ssh;
 pub mod sudo;
 pub mod terminal;
 
 /// Crate version, derived from `Cargo.toml` at compile time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Generate a cryptographically-random, lowercase-hex token of
+/// `byte_len` random bytes (the returned string is `2 * byte_len`
+/// characters). Backed by the OS CSPRNG via `getrandom`. Used for
+/// capability tokens that must be unguessable — e.g. the `pierfs`
+/// asset-protocol grants in the Tauri layer.
+pub fn random_hex_token(byte_len: usize) -> std::io::Result<String> {
+    let mut buf = vec![0u8; byte_len];
+    getrandom::getrandom(&mut buf)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    use std::fmt::Write as _;
+    Ok(buf.iter().fold(String::with_capacity(byte_len * 2), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    }))
+}
 
 #[cfg(test)]
 mod tests {

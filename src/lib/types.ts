@@ -243,6 +243,12 @@ export type SavedSshConnection = {
   host: string;
   port: number;
   user: string;
+  /** Connection protocol. `"ssh"` (default) opens a terminal; `"rdp"` /
+   *  `"vnc"` open a remote-desktop tab. Drives the sidebar icon + which
+   *  tab kind the connect action creates. */
+  protocol: "ssh" | "rdp" | "vnc";
+  /** RDP-only Windows domain. Empty / undefined otherwise. */
+  domain?: string | null;
   authKind: "password" | "agent" | "key";
   keyPath: string;
   /** Explicit sidebar group label. Missing / empty means the
@@ -1210,7 +1216,22 @@ export type TabState = {
   id: string;
   title: string;
   tabColor: number; // -1 = none, 0..7 = color index
-  backend: "local" | "ssh" | "sftp" | "markdown" | "hosts-health";
+  backend: "local" | "ssh" | "sftp" | "markdown" | "hosts-health" | "remote-desktop";
+  // ── Remote desktop (when backend === "remote-desktop") ──
+  /** Which remote-desktop protocol this tab speaks. */
+  rdProtocol: "rdp" | "vnc";
+  /** Target host / IP. */
+  rdHost: string;
+  /** TCP port (RDP 3389, VNC 5900 by default). */
+  rdPort: number;
+  /** Login user. May be empty for password-only VNC. */
+  rdUser: string;
+  /** Password / secret. Runtime only — scrubbed from localStorage; the
+   *  backend re-resolves it from the keyring on reconnect via the saved
+   *  connection, like `sshPassword`. */
+  rdPassword: string;
+  /** RDP-only Windows domain. Empty otherwise. */
+  rdDomain: string;
   // SSH credentials
   sshHost: string;
   sshPort: number;

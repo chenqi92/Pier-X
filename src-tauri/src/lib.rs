@@ -33,8 +33,8 @@ use pier_core::ssh::sftp_parallel::{
     upload_chunked_parallel_blocking, upload_tree_parallel_blocking, ParallelOpts,
 };
 use pier_core::ssh::{
-    AuthMethod, ExecStream, HostKeyDecision, HostKeyPromptCb, HostKeyPromptRequest,
-    HostKeyVerifier, SftpClient, SshConfig, SshSession, Tunnel,
+    AuthMethod, ConnectionProtocol, ExecStream, HostKeyDecision, HostKeyPromptCb,
+    HostKeyPromptRequest, HostKeyVerifier, SftpClient, SshConfig, SshSession, Tunnel,
 };
 use pier_core::terminal::{Cell, Color, NotifyEvent, NotifyFn, PierTerminal};
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,11 @@ use ai::*;
 
 mod git_panel;
 use git_panel::*;
+
+mod remote_desktop;
+use remote_desktop::{
+    remote_desktop_close, remote_desktop_connect, remote_desktop_input, remote_desktop_resize,
+};
 
 mod ssh_mux;
 
@@ -195,6 +200,20 @@ struct AppState {
     /// elevation method (root → `sudo`, other user → `sudo -u`). In-memory
     /// only; never authentication material.
     host_effective_user: Mutex<HashMap<String, String>>,
+    /// Capability tokens for the `pierfs` asset protocol. Each maps an
+    /// unguessable token to the single (SFTP session, remote path) it
+    /// authorizes, plus an expiry. The protocol handler serves bytes only
+    /// for a live token, so a guessed / injected `pierfs://` URL can no
+    /// longer read arbitrary files from an active session. See
+    /// [`pierfs_grant`] / [`pierfs_respond`].
+    pierfs_grants: Mutex<HashMap<String, PierfsGrant>>,
+    /// Monotonic id source for remote-desktop session keys (`rd-<n>`).
+    next_remote_desktop_id: AtomicU64,
+    /// Live remote-desktop (RDP / VNC) sessions, keyed by the `rd-<n>` id
+    /// handed back to the frontend. Each value owns the protocol task; the
+    /// frontend frees one via `remote_desktop_close` (which drops the
+    /// session, closing the connection). In-memory only.
+    remote_desktops: Mutex<HashMap<String, pier_core::remote_desktop::RemoteDesktopSession>>,
 }
 
 /// Bookkeeping for one in-flight "edit remote file with the OS
@@ -231,6 +250,9 @@ impl Default for AppState {
             vpn_processes: Mutex::new(HashMap::new()),
             host_elevation: Mutex::new(HashMap::new()),
             host_effective_user: Mutex::new(HashMap::new()),
+            pierfs_grants: Mutex::new(HashMap::new()),
+            next_remote_desktop_id: AtomicU64::new(1),
+            remote_desktops: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -1072,6 +1094,13 @@ struct SavedSshConnection {
     host: String,
     port: u16,
     user: String,
+    /// `"ssh"` (default) opens a terminal; `"rdp"` / `"vnc"` open a
+    /// remote-desktop tab. Drives the sidebar icon + which tab kind the
+    /// connect action creates.
+    protocol: &'static str,
+    /// RDP-only Windows domain; empty / missing otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    domain: Option<String>,
     auth_kind: &'static str,
     key_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2986,6 +3015,12 @@ fn map_saved_connection(index: usize, config: &SshConfig) -> SavedSshConnection 
         host: config.host.clone(),
         port: config.port,
         user: config.user.clone(),
+        protocol: protocol_str(config.protocol),
+        domain: config
+            .domain
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         auth_kind: auth_kind(&config.auth),
         key_path: match &config.auth {
             AuthMethod::PublicKeyFile {
@@ -3015,6 +3050,22 @@ fn map_saved_connection(index: usize, config: &SshConfig) -> SavedSshConnection 
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn protocol_str(p: ConnectionProtocol) -> &'static str {
+    match p {
+        ConnectionProtocol::Ssh => "ssh",
+        ConnectionProtocol::Rdp => "rdp",
+        ConnectionProtocol::Vnc => "vnc",
+    }
+}
+
+fn parse_protocol(s: Option<&str>) -> ConnectionProtocol {
+    match s.map(str::trim) {
+        Some("rdp") => ConnectionProtocol::Rdp,
+        Some("vnc") => ConnectionProtocol::Vnc,
+        _ => ConnectionProtocol::Ssh,
+    }
 }
 
 fn db_kind_str(k: DbKind) -> &'static str {
@@ -4455,13 +4506,19 @@ fn ssh_connection_save(
     env_tag: Option<String>,
     egress_id: Option<String>,
     auto_elevate: Option<bool>,
+    protocol: Option<String>,
+    domain: Option<String>,
 ) -> Result<(), String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
     let resolved_name = name.trim();
+    let proto = parse_protocol(protocol.as_deref());
 
-    if resolved_host.is_empty() || resolved_user.is_empty() {
-        return Err(String::from("SSH host and user must not be empty."));
+    // VNC standard auth has no user (password only); SSH and RDP require one.
+    if resolved_host.is_empty()
+        || (resolved_user.is_empty() && proto != ConnectionProtocol::Vnc)
+    {
+        return Err(String::from("Host and user must not be empty."));
     }
 
     let mut config = SshConfig::new(
@@ -4522,6 +4579,10 @@ fn ssh_connection_save(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     config.auto_elevate = auto_elevate.unwrap_or(false);
+    config.protocol = proto;
+    config.domain = domain
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
     store.add(config);
@@ -4578,13 +4639,18 @@ fn ssh_connection_update(
     env_tag: Option<String>,
     egress_id: Option<String>,
     auto_elevate: Option<bool>,
+    protocol: Option<String>,
+    domain: Option<String>,
 ) -> Result<(), String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
     let resolved_name = name.trim();
+    let proto = parse_protocol(protocol.as_deref());
 
-    if resolved_host.is_empty() || resolved_user.is_empty() {
-        return Err(String::from("SSH host and user must not be empty."));
+    if resolved_host.is_empty()
+        || (resolved_user.is_empty() && proto != ConnectionProtocol::Vnc)
+    {
+        return Err(String::from("Host and user must not be empty."));
     }
 
     let mut store = ConnectionStore::load_default().map_err(|error| error.to_string())?;
@@ -4718,6 +4784,10 @@ fn ssh_connection_update(
     // whatever the previous save had so non-elevation-aware callers
     // can't toggle it back to false by accident.
     config.auto_elevate = auto_elevate.unwrap_or(existing.auto_elevate);
+    config.protocol = proto;
+    config.domain = domain
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let new_auth = config.auth.clone();
     store.connections[index] = config;
@@ -5979,7 +6049,11 @@ async fn mysql_execute_socket(
     sql: String,
     sudo_password: Option<String>,
     effective_user: Option<String>,
+    read_only: bool,
 ) -> Result<QueryExecutionResult, String> {
+    if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
+        return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         use pier_core::services::mysql_cli as cli;
         let state: tauri::State<'_, AppState> = app.state();
@@ -6402,7 +6476,11 @@ async fn mysql_execute(
     password: String,
     database: Option<String>,
     sql: String,
+    read_only: bool,
 ) -> Result<QueryExecutionResult, String> {
+    if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
+        return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let resolved_host = host.trim();
         let resolved_user = user.trim();
@@ -6513,7 +6591,14 @@ async fn mysql_kill_connection(
 }
 
 #[tauri::command]
-async fn sqlite_execute(path: String, sql: String) -> Result<QueryExecutionResult, String> {
+async fn sqlite_execute(
+    path: String,
+    sql: String,
+    read_only: bool,
+) -> Result<QueryExecutionResult, String> {
+    if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
+        return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let resolved_path = path.trim();
         let resolved_sql = sql.trim();
@@ -7401,7 +7486,11 @@ async fn postgres_execute_socket(
     sql: String,
     sudo_password: Option<String>,
     db_os_user: Option<String>,
+    read_only: bool,
 ) -> Result<QueryExecutionResult, String> {
+    if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
+        return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         use pier_core::services::postgres_cli as cli;
         let state: tauri::State<'_, AppState> = app.state();
@@ -7440,7 +7529,11 @@ async fn postgres_execute(
     password: String,
     database: Option<String>,
     sql: String,
+    read_only: bool,
 ) -> Result<QueryExecutionResult, String> {
+    if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
+        return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let client = PostgresClient::connect_blocking(PostgresConfig {
             host: host.trim().to_string(),
@@ -7504,7 +7597,11 @@ async fn mssql_execute(
     password: String,
     database: Option<String>,
     sql: String,
+    read_only: bool,
 ) -> Result<QueryExecutionResult, String> {
+    if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
+        return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let mut client = SqlServerClient::connect_blocking(SqlServerConfig {
             host: host.trim().to_string(),
@@ -13869,7 +13966,11 @@ async fn sqlite_execute_remote(
     supports_json: bool,
     sudo_password: Option<String>,
     effective_user: Option<String>,
+    read_only: bool,
 ) -> Result<QueryExecutionResult, String> {
+    if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
+        return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
+    }
     run_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         sqlite_execute_remote_impl(
@@ -16379,6 +16480,93 @@ fn pierfs_mime_for_path(path: &str) -> &'static str {
     }
 }
 
+/// TTL for a `pierfs` capability token. Long enough to view a large PDF
+/// (pdf.js range-fetches many times) yet short enough that a leaked token
+/// stops working soon after the preview closes. Refreshed (sliding) on
+/// every successful read so an actively-viewed file never expires mid-use.
+const PIERFS_GRANT_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// One `pierfs` capability grant: binds an unguessable token to exactly
+/// one (SFTP session, remote path). Minted by [`pierfs_grant`], consumed
+/// by [`pierfs_respond`].
+struct PierfsGrant {
+    /// SFTP session this token may read from — an `sftp_cache_key`.
+    cache_key: String,
+    /// The single remote path this token authorizes.
+    path: String,
+    /// Rejected once `Instant::now()` passes this.
+    expires_at: Instant,
+}
+
+/// Mint a short-lived capability token authorizing the `pierfs` protocol
+/// to read exactly `path` from the SFTP session identified by the
+/// connection coordinates. The frontend embeds the returned token in the
+/// `pierfs://` URL instead of the (guessable) host/user/path, so an
+/// injected URL — a crafted filename, a document-embedded `pierfs://`
+/// reference, a CSS `url()` — can no longer exfiltrate session files.
+#[tauri::command]
+fn pierfs_grant(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    path: String,
+) -> Result<String, String> {
+    if host.trim().is_empty() || user.trim().is_empty() || path.is_empty() {
+        return Err("pierfs_grant: host, user, and path are required".into());
+    }
+    let cache_key = sftp_cache_key(&host, port, &user, &auth_mode);
+    // 32 bytes (256 bits) of OS CSPRNG → unguessable. Minted in pier-core
+    // so src-tauri needs no extra crate dependency.
+    let token = pier_core::random_hex_token(32).map_err(|e| format!("pierfs_grant rng: {e}"))?;
+    let now = Instant::now();
+    if let Ok(mut grants) = state.pierfs_grants.lock() {
+        // Opportunistic GC so the map tracks live previews, not every
+        // file ever previewed this session.
+        grants.retain(|_, g| g.expires_at > now);
+        grants.insert(
+            token.clone(),
+            PierfsGrant {
+                cache_key,
+                path,
+                expires_at: now + PIERFS_GRANT_TTL,
+            },
+        );
+    }
+    Ok(token)
+}
+
+/// Resolve + slide a `pierfs` token to the `(cache_key, path)` it grants.
+/// Returns `None` for an empty / unknown / expired token.
+fn pierfs_resolve_grant(state: &AppState, token: &str) -> Option<(String, String)> {
+    if token.is_empty() {
+        return None;
+    }
+    let now = Instant::now();
+    let mut grants = state.pierfs_grants.lock().ok()?;
+    grants.retain(|_, g| g.expires_at > now);
+    let grant = grants.get_mut(token)?;
+    grant.expires_at = now + PIERFS_GRANT_TTL; // sliding: keep live previews alive
+    Some((grant.cache_key.clone(), grant.path.clone()))
+}
+
+/// Apply the `pierfs` CORS policy to an already-built response: echo the
+/// caller's origin (never `*`) so cross-origin `fetch` from the app window
+/// still works, while the token — not CORS — gates access. No-op when the
+/// request carried no `Origin` (plain `<img>` / `<video>` loads don't).
+fn pierfs_cors(
+    mut resp: tauri::http::Response<Vec<u8>>,
+    origin: Option<&str>,
+) -> tauri::http::Response<Vec<u8>> {
+    if let Some(o) = origin {
+        if let Ok(val) = o.parse() {
+            resp.headers_mut().insert("access-control-allow-origin", val);
+        }
+    }
+    resp
+}
+
 /// Build the actual `pierfs://` response (runs on a worker thread so
 /// the SFTP I/O never blocks the UI thread).
 fn pierfs_respond(
@@ -16387,48 +16575,48 @@ fn pierfs_respond(
 ) -> tauri::http::Response<Vec<u8>> {
     use tauri::http::{Response, StatusCode};
 
+    // Reflect the requesting (app) origin instead of `*`. With the token
+    // gate below, CORS is no longer the access boundary; echoing the
+    // caller's origin just keeps cross-origin `fetch` (pdf.js, docx)
+    // working without handing the resource to every origin.
+    let allow_origin = request
+        .headers()
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     let err = |code: StatusCode| -> Response<Vec<u8>> {
-        Response::builder()
-            .status(code)
-            .header("Access-Control-Allow-Origin", "*")
-            .body(Vec::new())
-            .expect("static error response builds")
+        pierfs_cors(
+            Response::builder()
+                .status(code)
+                .body(Vec::new())
+                .expect("static error response builds"),
+            allow_origin.as_deref(),
+        )
     };
 
     let uri = request.uri();
 
-    // Connection identity + remote path from the query string. The
-    // path is authoritative here (not the URL path segment) so
-    // percent-encoded slashes survive platform URL normalization.
-    let mut host = String::new();
-    let mut port: u16 = 22;
-    let mut user = String::new();
-    let mut auth_mode = String::from("password");
-    let mut remote_path = String::new();
+    // The URL carries only an unguessable capability token (minted by
+    // `pierfs_grant`). The token — not a guessable host/user/path — is
+    // what authorizes the read, so an injected `pierfs://` URL can't
+    // exfiltrate arbitrary files from the active SFTP session.
+    let mut token = String::new();
     for pair in uri.query().unwrap_or("").split('&') {
         if let Some((k, v)) = pair.split_once('=') {
-            // Query values are form-encoded: `+` means space.
-            let val = pierfs_percent_decode(&v.replace('+', " "));
-            match k {
-                "host" => host = val,
-                "port" => port = val.parse().unwrap_or(22),
-                "user" => user = val,
-                "authMode" => auth_mode = val,
-                "path" => remote_path = val,
-                _ => {}
+            if k == "token" {
+                // Query values are form-encoded: `+` means space.
+                token = pierfs_percent_decode(&v.replace('+', " "));
             }
         }
     }
-    // Fall back to the path segment if the query omitted `path`.
-    if remote_path.is_empty() {
-        remote_path = pierfs_percent_decode(uri.path().trim_start_matches('/'));
-    }
-    if remote_path.is_empty() || host.is_empty() || user.is_empty() {
-        return err(StatusCode::BAD_REQUEST);
-    }
 
     let state: tauri::State<'_, AppState> = app.state();
-    let key = sftp_cache_key(&host, port, &user, &auth_mode);
+    // Resolve the token to the single (session, path) it grants. Absent /
+    // unknown / expired → 403, with no fallback to URL-supplied coords.
+    let Some((key, remote_path)) = pierfs_resolve_grant(&state, &token) else {
+        return err(StatusCode::FORBIDDEN);
+    };
     let sftp = match state.sftp_clients.lock() {
         Ok(cache) => cache.get(&key).cloned(),
         Err(_) => None,
@@ -16463,13 +16651,15 @@ fn pierfs_respond(
             Ok(p) => p,
             Err(_) => return err(StatusCode::UNSUPPORTED_MEDIA_TYPE),
         };
-        return Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "image/png")
-            .header("Access-Control-Allow-Origin", "*")
-            .header("Content-Length", png.len().to_string())
-            .body(png)
-            .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR));
+        return pierfs_cors(
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "image/png")
+                .header("Content-Length", png.len().to_string())
+                .body(png)
+                .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR)),
+            allow_origin.as_deref(),
+        );
     }
 
     let mime = pierfs_mime_for_path(&remote_path);
@@ -16488,15 +16678,17 @@ fn pierfs_respond(
             };
             let got = bytes.len() as u64;
             let real_end = if got == 0 { start } else { start + got - 1 };
-            Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header("Content-Type", mime)
-                .header("Accept-Ranges", "bytes")
-                .header("Access-Control-Allow-Origin", "*")
-                .header("Content-Range", format!("bytes {start}-{real_end}/{size}"))
-                .header("Content-Length", got.to_string())
-                .body(bytes)
-                .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR))
+            pierfs_cors(
+                Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header("Content-Type", mime)
+                    .header("Accept-Ranges", "bytes")
+                    .header("Content-Range", format!("bytes {start}-{real_end}/{size}"))
+                    .header("Content-Length", got.to_string())
+                    .body(bytes)
+                    .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR)),
+                allow_origin.as_deref(),
+            )
         }
         None => {
             // No Range. Return the whole file when it's small enough;
@@ -16515,15 +16707,17 @@ fn pierfs_respond(
                 .status(status)
                 .header("Content-Type", mime)
                 .header("Accept-Ranges", "bytes")
-                .header("Access-Control-Allow-Origin", "*")
                 .header("Content-Length", bytes.len().to_string());
             if status == StatusCode::PARTIAL_CONTENT {
                 let real_end = bytes.len().saturating_sub(1) as u64;
                 builder = builder.header("Content-Range", format!("bytes 0-{real_end}/{size}"));
             }
-            builder
-                .body(bytes)
-                .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR))
+            pierfs_cors(
+                builder
+                    .body(bytes)
+                    .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR)),
+                allow_origin.as_deref(),
+            )
         }
     }
 }
@@ -19208,6 +19402,11 @@ pub fn run() {
             local_create_dir,
             local_rename,
             local_remove,
+            pierfs_grant,
+            remote_desktop_connect,
+            remote_desktop_input,
+            remote_desktop_resize,
+            remote_desktop_close,
             git_overview,
             git_panel_state,
             git_init_repo,

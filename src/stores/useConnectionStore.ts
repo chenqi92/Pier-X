@@ -22,6 +22,8 @@ type ConnectionStore = {
     envTag?: string | null;
     egressId?: string | null;
     autoElevate?: boolean;
+    protocol?: "ssh" | "rdp" | "vnc";
+    domain?: string | null;
   }) => Promise<void>;
   update: (params: {
     index: number;
@@ -36,6 +38,8 @@ type ConnectionStore = {
     envTag?: string | null;
     egressId?: string | null;
     autoElevate?: boolean;
+    protocol?: "ssh" | "rdp" | "vnc";
+    domain?: string | null;
   }) => Promise<void>;
   remove: (index: number) => Promise<void>;
   /** Atomic reorder + group-reassign across the whole list. */

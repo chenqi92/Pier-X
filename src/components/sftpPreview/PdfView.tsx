@@ -36,12 +36,16 @@ export default function PdfView({ sshArgs, path }: ViewerProps) {
     setStatus("loading");
     setError("");
     setPage(1);
-    const url = cmd.pierfsUrl(sshArgs, path);
-    const task = pdfjsLib.getDocument({ url });
-    loadTaskRef.current = task;
-    task.promise
+    cmd
+      .pierfsUrl(sshArgs, path)
+      .then((url) => {
+        if (cancelled) return undefined;
+        const task = pdfjsLib.getDocument({ url });
+        loadTaskRef.current = task;
+        return task.promise;
+      })
       .then((doc) => {
-        if (cancelled) return;
+        if (cancelled || !doc) return;
         docRef.current = doc;
         setNumPages(doc.numPages);
         setStatus("ready");

@@ -31,8 +31,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
 use pier_core::services::ai::{
-    classify_command, classify_write_path, provider, redact, ChatMessage, ProviderConfig,
-    ProviderKind, RiskAssessment, RiskLevel, StopKind, ToolCall, ToolSpec,
+    classify_command, classify_list_path, classify_read_path, classify_write_path, provider,
+    redact, ChatMessage, ProviderConfig, ProviderKind, RiskAssessment, RiskLevel, StopKind,
+    ToolCall, ToolSpec,
 };
 
 const AI_CHAT_EVENT: &str = "ai-chat";
@@ -775,11 +776,12 @@ fn handle_tool_call(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            (
-                format!("read_file {path}"),
-                path,
-                RiskAssessment::new(RiskLevel::L0),
-            )
+            // Sensitive files (private keys, `.env`, cloud/kube creds,
+            // /etc/shadow) are raised above the L0 auto-run so their
+            // contents can't be slurped into the model context without
+            // explicit human approval. Ordinary files stay L0.
+            let risk = classify_read_path(&path);
+            (format!("read_file {path}"), path, risk)
         }
         "list_dir" => {
             let path = args
@@ -787,11 +789,11 @@ fn handle_tool_call(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            (
-                format!("list_dir {path}"),
-                path,
-                RiskAssessment::new(RiskLevel::L0),
-            )
+            // Listing a credential directory leaks secret *names* — gate
+            // it at L1 (approvable) rather than auto-running. Ordinary
+            // directories stay L0.
+            let risk = classify_list_path(&path);
+            (format!("list_dir {path}"), path, risk)
         }
         "monitor_snapshot" => (
             "monitor_snapshot".into(),

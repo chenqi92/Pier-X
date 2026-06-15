@@ -191,6 +191,41 @@ calamine = "0.35"
 csv = "1"
 image = { version = "0.25", default-features = false, features = ["tiff", "png", "bmp", "gif", "jpeg"] }
 
+# ── Remote desktop (RDP + VNC) ──────────────────────────────────────
+# VNC is implemented in-crate (see `remote_desktop::vnc`) as a small RFB
+# 3.8 client so we own the security handshake — in particular Apple's ARD
+# auth (RFB security type 30, used by modern macOS Screen Sharing), which
+# no published Rust VNC crate implements. The auth primitives:
+#   * `des`     — VNC Authentication (type 2): DES-encrypt the 16-byte
+#                 server challenge with the (bit-reversed) password.
+#   * `num-bigint` + `md-5` + `aes` — Apple ARD (type 30): Diffie-Hellman
+#                 key agreement → MD5(shared secret) → AES-128-ECB of the
+#                 128-byte username/password block.
+# `flate2` decodes the zlib-wrapped Tight/ZRLE tiles VNC servers send.
+des = "0.8"
+md-5 = "0.10"
+aes = "0.8"
+num-bigint = "0.4"
+flate2 = "1"
+
+# RDP via IronRDP (Devolutions) — a headless, UI-agnostic protocol stack.
+# Behind the default `rdp` feature so the VNC path (and the rest of the
+# crate) still builds with `--no-default-features` while the heavier RDP
+# dependency tree (rustls + the CredSSP/NLA stack) is iterated on.
+# `ironrdp-tokio`'s `reqwest` feature provides the async `NetworkClient`
+# that `connect_finalize` requires (it is only actually used for Kerberos
+# KDC traffic; username/password NLA runs NTLM in-band).
+ironrdp = { version = "0.15", default-features = false, features = ["connector", "session", "input", "graphics", "pdu"], optional = true }
+ironrdp-tokio = { version = "0.9", features = ["reqwest"], optional = true }
+ironrdp-tls = { version = "0.2", default-features = false, features = ["rustls"], optional = true }
+
+[features]
+default = ["rdp"]
+# Compile the IronRDP-backed RDP client. On by default; disable with
+# `--no-default-features` to build only the in-crate VNC client plus the
+# rest of pier-core (faster iteration, no rustls build).
+rdp = ["dep:ironrdp", "dep:ironrdp-tokio", "dep:ironrdp-tls"]
+
 # Unix PTY — forkpty + ioctl wrappers live in libc. Only pulled in on
 # Unix targets; Windows uses the ConPTY-backed implementation below.
 # Once the Unix impl needs safer wrappers the `nix` crate slots in here.

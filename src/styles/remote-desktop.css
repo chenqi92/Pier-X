@@ -1,0 +1,137 @@
+/* ── Remote Desktop panel (RDP / VNC) ──────────────────────────────────── */
+
+.rd-panel {
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+  outline: none;
+}
+
+.rd-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+
+.rd-panel__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
+  font-weight: var(--weight-medium);
+  min-width: 0;
+  overflow: hidden;
+}
+.rd-panel__title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rd-panel__title svg {
+  color: var(--accent);
+  flex: none;
+}
+
+.rd-panel__proto {
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--accent);
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--sp-1-5);
+  letter-spacing: 0.04em;
+}
+
+.rd-panel__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+}
+
+.rd-panel__stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.rd-canvas {
+  display: block;
+  /* Width/height are set inline (in remote px, scaled to the stage); the
+     server paints its own cursor into the framebuffer, so hide the local one. */
+  cursor: none;
+  box-shadow: var(--shadow-popover);
+  image-rendering: auto;
+  background: var(--surface);
+}
+
+.rd-panel__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-scrim);
+}
+
+.rd-panel__overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6);
+  max-width: 80%;
+  text-align: center;
+  color: var(--ink-2);
+  font-family: var(--sans);
+  font-size: var(--ui-fs);
+}
+.rd-panel__overlay-card svg {
+  color: var(--muted);
+}
+
+.rd-panel__overlay-title {
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+}
+
+.rd-panel__overlay-detail {
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+  font-family: var(--mono);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.rd-spinner {
+  width: var(--sp-6);
+  height: var(--sp-6);
+  border-radius: 50%;
+  border: 2px solid var(--line-2);
+  border-top-color: var(--accent);
+  animation: rd-spin 0.8s linear infinite;
+}
+
+@keyframes rd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

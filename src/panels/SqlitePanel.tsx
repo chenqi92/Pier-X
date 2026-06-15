@@ -345,6 +345,7 @@ function SqlitePanelBody({ tab }: Props) {
           ...remoteBase(),
           dbPath: path.trim(),
           sql,
+          readOnly,
         });
       } else if (isScript) {
         const all = await cmd.sqliteExecuteScript(path.trim(), sql);
@@ -361,7 +362,7 @@ function SqlitePanelBody({ tab }: Props) {
             t("{ms} ms total", { ms: totalMs }),
         );
       } else {
-        r = await cmd.sqliteExecute(path.trim(), sql);
+        r = await cmd.sqliteExecute(path.trim(), sql, readOnly);
       }
       setQueryResult(r);
       if (!isScript) {

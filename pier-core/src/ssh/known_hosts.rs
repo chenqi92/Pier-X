@@ -345,19 +345,39 @@ enum Decision {
 impl Default for HostKeyVerifier {
     fn default() -> Self {
         // Default to the real verifier pointing at the
-        // OpenSSH-standard location. If the platform doesn't
-        // expose a home directory (which should never happen in
-        // practice on Unix / Windows / macOS), fall back to the
-        // accept-all variant and log — failing loudly here would
-        // keep pier-x from running at all on an unusual setup.
-        match default_known_hosts_path() {
-            Some(path) => Self::open_ssh_known_hosts(path),
-            None => {
-                log::warn!("no resolvable home directory; falling back to AcceptAllLogFingerprint",);
-                Self::accept_all_log_fingerprint()
-            }
+        // OpenSSH-standard location.
+        if let Some(path) = default_known_hosts_path() {
+            return Self::open_ssh_known_hosts(path);
         }
+        // No home directory (should never happen on Unix / Windows /
+        // macOS). Rather than fail *open* — accept-all silently trusts
+        // any host key, which is the one thing a host-key check exists to
+        // prevent — pin keys in the app's own data dir. That keeps TOFU
+        // verification working and survives restarts. Only when even the
+        // app data dir is unresolvable do we degrade to accept-all.
+        if let Some(path) = app_data_known_hosts_path() {
+            log::warn!(
+                "no resolvable home directory; pinning host keys in app data dir at {}",
+                path.display()
+            );
+            return Self::open_ssh_known_hosts(path);
+        }
+        log::warn!(
+            "no resolvable home or app-data directory; falling back to AcceptAllLogFingerprint",
+        );
+        Self::accept_all_log_fingerprint()
     }
+}
+
+/// Fallback `known_hosts` location inside the app's own data dir, used
+/// only when the user has no resolvable home directory. Creates the
+/// parent dir best-effort so the first `learn` can write the file.
+fn app_data_known_hosts_path() -> Option<PathBuf> {
+    let dir = crate::paths::data_dir()?;
+    // Best-effort: a failure here just means the first learn() will also
+    // fail and surface its own error, which is preferable to fail-open.
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("known_hosts"))
 }
 
 /// Resolve `~/.ssh/known_hosts` for the current user without

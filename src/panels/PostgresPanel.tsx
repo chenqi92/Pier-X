@@ -364,6 +364,7 @@ function PostgresPanelBody({ tab }: Props) {
           savedConnectionIndex: ssh.savedConnectionIndex,
           database: tab.pgDatabase.trim() || null,
           sql,
+          readOnly,
           sudoPassword: elev.getElevationArgs().sudoPassword,
         });
       } else {
@@ -375,6 +376,7 @@ function PostgresPanelBody({ tab }: Props) {
           password: tab.pgPassword,
           database: tab.pgDatabase.trim() || null,
           sql,
+          readOnly,
         });
       }
       setQueryResult(r);

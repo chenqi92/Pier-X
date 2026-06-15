@@ -3183,8 +3183,9 @@ pub async fn compose_apply_inline(
     let SudoCommand {
         full: command,
         display: command_display,
+        stdin: sudo_stdin,
     } = wrap_sudo_sh(env.is_root, &inner, sudo_password);
-    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let (exit_code, stdout) = exec_sudo(session, &command, sudo_stdin.as_deref()).await?;
     let stdout_clean = sanitize_sudo_output(&stdout, sudo_password);
     let output_tail = stdout_clean
         .lines()
@@ -3245,8 +3246,9 @@ pub async fn compose_down(
     let SudoCommand {
         full: command,
         display: command_display,
+        stdin: sudo_stdin,
     } = wrap_sudo_sh(env.is_root, &inner, sudo_password);
-    let (exit_code, stdout) = session.exec_command(&command).await?;
+    let (exit_code, stdout) = exec_sudo(session, &command, sudo_stdin.as_deref()).await?;
     let stdout_clean = sanitize_sudo_output(&stdout, sudo_password);
     let output_tail = stdout_clean
         .lines()
@@ -4512,13 +4514,29 @@ async fn run_mysql(
     root_password: Option<&str>,
 ) -> Result<PostgresActionReport> {
     let env = probe_host_env(session).await;
+    let has_password = matches!(root_password, Some(p) if !p.is_empty());
     let pwd_env = match root_password {
         Some(p) if !p.is_empty() => format!("MYSQL_PWD={} ", shell_single_quote(p)),
         _ => String::new(),
     };
     let inner = format!("{pwd_env}mysql -u root -e {} 2>&1", shell_single_quote(sql),);
     let command = format!("sh -c {} 2>&1", shell_single_quote(&inner));
+    // Report-safe form: the executed `command` carries `MYSQL_PWD` (so the
+    // secret reaches `mysql` via its environment, never its argv), but it
+    // must not ride back to the frontend in the report's `command` field.
+    // Redact the assignment the same way `minio_install_native` does.
+    let redacted_command = if has_password {
+        let redacted_inner = format!(
+            "MYSQL_PWD=*** mysql -u root -e {} 2>&1",
+            shell_single_quote(sql)
+        );
+        format!("sh -c {} 2>&1", shell_single_quote(&redacted_inner))
+    } else {
+        command.clone()
+    };
     let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
+    // Defence in depth: drop any output line that echoes the password.
+    let stdout = sanitize_sudo_output(&stdout, root_password);
     let output_tail = stdout
         .lines()
         .rev()
@@ -4537,7 +4555,7 @@ async fn run_mysql(
     };
     Ok(PostgresActionReport {
         status: status.to_string(),
-        command,
+        command: redacted_command,
         exit_code,
         output_tail,
     })
@@ -5742,6 +5760,7 @@ where
     let SudoCommand {
         full: setup_command,
         display: setup_command_display,
+        stdin: setup_stdin,
     } = wrap_sudo_sh(env.is_root, setup_inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
@@ -5752,9 +5771,10 @@ where
         }
     };
 
-    let setup_exit = match session
-        .exec_command_streaming(
+    let setup_exit = match exec_sudo_streaming(
+            session,
             &setup_command,
+            setup_stdin.as_deref(),
             |line| {
                 on_line(line);
                 push_tail(line, &mut tail_lines);
@@ -5897,12 +5917,14 @@ where
     let SudoCommand {
         full: command,
         display: command_display,
+        stdin: sudo_stdin,
     } = wrap_sudo_sh(env.is_root, &install_inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
-    let (exit_code, _full) = session
-        .exec_command_streaming(
+    let (exit_code, _full) = exec_sudo_streaming(
+            session,
             &command,
+            sudo_stdin.as_deref(),
             |line| {
                 on_line(line);
                 tail_lines.push(line.to_string());
@@ -6266,6 +6288,7 @@ where
     let SudoCommand {
         full: exec_command,
         display: exec_command_display,
+        stdin: exec_stdin,
     } = if needs_sudo {
         wrap_sudo_sh(false, &exec_inner, sudo_password)
     } else {
@@ -6274,9 +6297,10 @@ where
         wrap_sudo_sh(true, &exec_inner, None)
     };
 
-    let exec_exit = match session
-        .exec_command_streaming(
+    let exec_exit = match exec_sudo_streaming(
+            session,
             &exec_command,
+            exec_stdin.as_deref(),
             |line| {
                 on_line(line);
                 push_tail(line, &mut tail_lines);
@@ -6348,11 +6372,15 @@ where
                 env.is_root,
                 &format!("systemctl enable --now {unit} || true"),
                 sudo_password,
+            );
+            let _ = exec_sudo_streaming(
+                session,
+                &svc_cmd.full,
+                svc_cmd.stdin.as_deref(),
+                &mut on_line,
+                None,
             )
-            .full;
-            let _ = session
-                .exec_command_streaming(&svc_cmd, &mut on_line, None)
-                .await;
+            .await;
             Some(systemctl_is_active(session, unit).await)
         } else {
             None
@@ -6485,12 +6513,14 @@ where
     let SudoCommand {
         full: command,
         display: command_display,
+        stdin: sudo_stdin,
     } = wrap_sudo_sh(env.is_root, &install_inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
-    let (exit_code, _full) = session
-        .exec_command_streaming(
+    let (exit_code, _full) = exec_sudo_streaming(
+            session,
             &command,
+            sudo_stdin.as_deref(),
             |line| {
                 on_line(line);
                 tail_lines.push(line.to_string());
@@ -6564,11 +6594,15 @@ where
                 env.is_root,
                 &format!("systemctl enable --now {unit} || true"),
                 sudo_password,
+            );
+            let _ = exec_sudo_streaming(
+                session,
+                &svc_cmd.full,
+                svc_cmd.stdin.as_deref(),
+                &mut on_line,
+                cancel.clone(),
             )
-            .full;
-            let _ = session
-                .exec_command_streaming(&svc_cmd, &mut on_line, cancel.clone())
-                .await;
+            .await;
             Some(systemctl_is_active(session, unit).await)
         } else {
             None
@@ -6681,12 +6715,14 @@ where
     let SudoCommand {
         full: command,
         display: command_display,
+        stdin: sudo_stdin,
     } = wrap_sudo_sh(env.is_root, &inner, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
-    let (exit_code, _full) = session
-        .exec_command_streaming(
+    let (exit_code, _full) = exec_sudo_streaming(
+            session,
             &command,
+            sudo_stdin.as_deref(),
             |line| {
                 on_line(line);
                 tail_lines.push(line.to_string());
@@ -6789,12 +6825,14 @@ where
     let SudoCommand {
         full: command,
         display: command_display,
+        stdin: sudo_stdin,
     } = build_systemctl_command(action, unit, env.is_root, sudo_password);
 
     let mut tail_lines: Vec<String> = Vec::new();
-    let (exit_code, _full) = session
-        .exec_command_streaming(
+    let (exit_code, _full) = exec_sudo_streaming(
+            session,
             &command,
+            sudo_stdin.as_deref(),
             |line| {
                 on_line(line);
                 tail_lines.push(line.to_string());
@@ -6883,6 +6921,7 @@ fn build_systemctl_command(
     SudoCommand {
         full: format!("{}{suffix}", pfx.full),
         display: format!("{}{suffix}", pfx.display),
+        stdin: pfx.stdin,
     }
 }
 
@@ -7513,47 +7552,57 @@ fn build_pkg_installed_check(manager: PackageManager, package: &str) -> String {
 /// is what we surface in reports.
 ///
 /// When the caller didn't supply a password (or we're already root) the
-/// two are identical. When a password is supplied, `full` pipes it via
-/// `printf | sudo -S -p ''` so sudo reads it from stdin, and `display`
-/// substitutes a plain `sudo ` so the password never lands in
-/// `command` strings, history logs, or error output_tails.
+/// two are identical and `stdin` is `None`. When a password is supplied,
+/// `full` is the `sudo -S -p ''` form and the password is returned in
+/// `stdin` to be piped on the command's standard input — never placed in
+/// the command string (where `/proc/<pid>/cmdline` would expose it). The
+/// `display` form substitutes a plain `sudo ` for reports.
 pub struct SudoPrefix {
-    /// Real prefix sent to SSH. Carries the password when one is set.
+    /// Real prefix sent to SSH (e.g. `sudo -S -p '' `). Never contains
+    /// the password — that rides on stdin via [`SudoPrefix::stdin`].
     pub full: String,
     /// Same shape with the password redacted; safe to surface in
     /// reports, logs, and history entries.
     pub display: String,
+    /// Password to pipe to the command's stdin (trailing newline
+    /// included) when `full` is the `sudo -S` form; `None` for root or
+    /// the passwordless `sudo -n` path.
+    pub stdin: Option<String>,
 }
 
 /// Build the sudo prefix to put in front of `sh -c '...'` (or any
 /// other root-required command). Three cases:
 ///
-/// - `is_root` → empty prefix; both fields are `""`.
-/// - `password = Some(_)` → `printf '%s\n' '<pw>' | sudo -S -p '' `,
-///   with the display form rewritten to plain `sudo `.
-/// - `password = None` → `sudo -n ` (the old non-interactive default,
-///   still used everywhere a caller hasn't pushed a password).
+/// - `is_root` → empty prefix; both fields are `""`, `stdin` is `None`.
+/// - `password = Some(_)` → `LC_ALL=C sudo -S -p '' `, with the password
+///   returned in `stdin` (to be piped on the command's standard input)
+///   and the display form rewritten to plain `sudo `.
+/// - `password = None` → `sudo -n ` (the non-interactive default, still
+///   used everywhere a caller hasn't pushed a password).
 ///
-/// `-p ''` blanks the prompt so sudo doesn't echo `[sudo] password
-/// for user:` into the captured output. `printf` (rather than `echo`)
-/// because some `/bin/sh`s aliasing `echo` mangle backslashes. The
-/// password is shell-single-quoted so embedded `'`, `$`, `\` are
-/// literal — same escape that all other inner snippets use.
+/// `-S` makes sudo read the password from stdin so it never appears in
+/// the command string / `/proc/<pid>/cmdline`. `-p ''` blanks the prompt
+/// so sudo doesn't echo `[sudo] password for user:` into the captured
+/// output. `LC_ALL=C` keeps sudo's own diagnostics ASCII so the
+/// auth-failure heuristics match on localized hosts.
 pub fn build_sudo_prefix(is_root: bool, password: Option<&str>) -> SudoPrefix {
     if is_root {
         return SudoPrefix {
             full: String::new(),
             display: String::new(),
+            stdin: None,
         };
     }
     match password.filter(|p| !p.is_empty()) {
         Some(pw) => SudoPrefix {
-            full: format!("printf '%s\\n' {} | sudo -S -p '' ", shell_single_quote(pw)),
+            full: "LC_ALL=C sudo -S -p '' ".to_string(),
             display: "sudo ".to_string(),
+            stdin: Some(format!("{pw}\n")),
         },
         None => SudoPrefix {
             full: "sudo -n ".to_string(),
             display: "sudo -n ".to_string(),
+            stdin: None,
         },
     }
 }
@@ -7576,16 +7625,21 @@ pub fn sanitize_sudo_output(output: &str, password: Option<&str>) -> String {
         .join("\n")
 }
 
-/// Wrap `inner` in `<prefix>sh -c '<inner>' 2>&1`, returning both the
-/// executable form (carrying the password through `sudo -S`) and a
-/// display form with the password redacted. Use the executable form
-/// for `session.exec_command*`, and the display form anywhere the
-/// command string surfaces back to the UI / activity log.
+/// Wrap `inner` in `<prefix>sh -c '<inner>' 2>&1`, returning the
+/// executable form (the `sudo -S` form — never carrying the password),
+/// the redacted display form, and any password to pipe on stdin. Run it
+/// through [`exec_sudo`] / [`exec_sudo_streaming`] so the password lands
+/// on stdin; use `display` anywhere the command surfaces to the UI /
+/// activity log.
 pub struct SudoCommand {
-    /// Executable form: send this to `session.exec_command*`.
+    /// Executable form: run via [`exec_sudo`] / [`exec_sudo_streaming`].
+    /// Never contains the password.
     pub full: String,
     /// Display form (password redacted): use this in reports.
     pub display: String,
+    /// Password to feed the command's stdin, or `None` when no password
+    /// is involved (root or the `sudo -n` path).
+    pub stdin: Option<String>,
 }
 
 /// Helper: wrap `inner` in `<prefix>sh -c '<inner>' 2>&1` for both the
@@ -7596,6 +7650,44 @@ pub fn wrap_sudo_sh(is_root: bool, inner: &str, password: Option<&str>) -> SudoC
     SudoCommand {
         full: format!("{}sh -c {} 2>&1", pfx.full, quoted),
         display: format!("{}sh -c {} 2>&1", pfx.display, quoted),
+        stdin: pfx.stdin,
+    }
+}
+
+/// Run a [`SudoCommand`]'s executable form, piping `stdin` (its password,
+/// when present) on the command's standard input so the secret never
+/// lands on the remote command line. Non-streaming. Pass
+/// `cmd.stdin.as_deref()` for `stdin`.
+pub async fn exec_sudo(
+    session: &SshSession,
+    command: &str,
+    stdin: Option<&str>,
+) -> Result<(i32, String)> {
+    match stdin {
+        Some(s) => session.exec_command_with_stdin(command, s).await,
+        None => session.exec_command(command).await,
+    }
+}
+
+/// Streaming counterpart to [`exec_sudo`]: pipes the password on stdin
+/// (when present) and streams every output line through `on_line`.
+pub async fn exec_sudo_streaming<F>(
+    session: &SshSession,
+    command: &str,
+    stdin: Option<&str>,
+    on_line: F,
+    cancel: Option<CancellationToken>,
+) -> Result<(i32, String)>
+where
+    F: FnMut(&str),
+{
+    match stdin {
+        Some(s) => {
+            session
+                .exec_command_streaming_with_stdin(command, s, on_line, cancel)
+                .await
+        }
+        None => session.exec_command_streaming(command, on_line, cancel).await,
     }
 }
 
@@ -8812,10 +8904,12 @@ mod tests {
     #[test]
     fn build_systemctl_command_with_password_pipes_via_stdin() {
         let cmd = build_systemctl_command(ServiceAction::Stop, "redis", false, Some("hunter2"));
-        // Full carries the password through `printf | sudo -S`.
-        assert!(cmd
-            .full
-            .starts_with("printf '%s\\n' 'hunter2' | sudo -S -p '' systemctl stop "));
+        // Full is the `sudo -S` form and must NOT contain the password —
+        // it rides on stdin so `/proc/<pid>/cmdline` can't leak it.
+        assert!(cmd.full.starts_with("LC_ALL=C sudo -S -p '' systemctl stop "));
+        assert!(!cmd.full.contains("hunter2"));
+        // The password is handed back on stdin with a trailing newline.
+        assert_eq!(cmd.stdin.as_deref(), Some("hunter2\n"));
         // Display redacts the password and reads as plain `sudo`.
         assert!(cmd.display.starts_with("sudo systemctl stop "));
         assert!(!cmd.display.contains("hunter2"));

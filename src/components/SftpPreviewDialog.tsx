@@ -86,11 +86,41 @@ export default function SftpPreviewDialog({
   // ask us to fall back to the hex viewer.
   const [forceHex, setForceHex] = useState(false);
   const [imageActual, setImageActual] = useState(false);
+  // The direct-render kinds (image / video / audio) need a `pierfs://`
+  // URL, which is now minted asynchronously (it carries a backend
+  // capability token). Fetch it off the render path and hold it in state.
+  const [url, setUrl] = useState("");
 
   useEffect(() => {
     setForceHex(false);
     setImageActual(false);
   }, [path]);
+
+  useEffect(() => {
+    const needsUrl =
+      kind === "image" ||
+      kind === "svg" ||
+      kind === "tiff" ||
+      kind === "video" ||
+      kind === "audio";
+    if (!open || !needsUrl) {
+      setUrl("");
+      return;
+    }
+    let cancelled = false;
+    setUrl("");
+    cmd
+      .pierfsUrl(sshArgs, path)
+      .then((u) => {
+        if (!cancelled) setUrl(u);
+      })
+      .catch(() => {
+        if (!cancelled) setUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, kind, path, sshArgs.host, sshArgs.port, sshArgs.user, sshArgs.authMode]);
 
   useEffect(() => {
     if (!open) return;
@@ -103,7 +133,6 @@ export default function SftpPreviewDialog({
 
   if (!open) return null;
 
-  const url = cmd.pierfsUrl(sshArgs, path);
   const viewer = (() => {
     const props = { sshArgs, path, name, size };
     if (forceHex) return <HexView {...props} />;
@@ -111,7 +140,7 @@ export default function SftpPreviewDialog({
       case "image":
       case "svg":
       case "tiff":
-        return (
+        return url ? (
           <div className="spv-image-scroll">
             <img
               className={"spv-image " + (imageActual ? "is-actual" : "is-fit")}
@@ -119,18 +148,24 @@ export default function SftpPreviewDialog({
               alt={name}
             />
           </div>
+        ) : (
+          <Fallback />
         );
       case "video":
-        return (
+        return url ? (
           <div className="spv-media">
             <video src={url} controls />
           </div>
+        ) : (
+          <Fallback />
         );
       case "audio":
-        return (
+        return url ? (
           <div className="spv-media">
             <audio src={url} controls />
           </div>
+        ) : (
+          <Fallback />
         );
       case "pdf":
         return <PdfView {...props} />;

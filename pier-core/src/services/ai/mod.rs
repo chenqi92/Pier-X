@@ -27,5 +27,5 @@ pub mod risk;
 pub mod types;
 
 pub use redact::scrub;
-pub use risk::{classify_command, classify_write_path};
+pub use risk::{classify_command, classify_list_path, classify_read_path, classify_write_path};
 pub use types::*;

@@ -62,7 +62,8 @@ pub mod tunnel;
 
 pub use channel::SshChannelPty;
 pub use config::{
-    AuthMethod, DbCredential, DbCredentialSource, DbKind, DbPasswordStorage, SshConfig,
+    AuthMethod, ConnectionProtocol, DbCredential, DbCredentialSource, DbKind, DbPasswordStorage,
+    SshConfig,
 };
 pub use db_detect::{
     detect as db_detect, detect_blocking as db_detect_blocking, DbDetectionReport,

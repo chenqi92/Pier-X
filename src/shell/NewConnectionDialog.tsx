@@ -1,4 +1,4 @@
-import { Key, Server, Shield, ShieldCheck, X } from "lucide-react";
+import { Key, Monitor, Server, Shield, ShieldCheck, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import ComboInput from "../components/ComboInput";
 import IconButton from "../components/IconButton";
@@ -33,6 +33,8 @@ type ConnectionDraft = {
   envTag: string;
   egressId: string;
   autoElevate: boolean;
+  protocol: "ssh" | "rdp" | "vnc";
+  domain: string;
 };
 
 type Props = {
@@ -49,6 +51,8 @@ type Props = {
   }) => void;
   /** Connect using a saved connection index — backend resolves credentials. */
   onConnectSaved?: (index: number) => void;
+  /** Open a saved RDP / VNC connection (by index) as a remote-desktop tab. */
+  onConnectRemoteDesktop?: (index: number) => void;
   /** Fired after a successful save/edit of a saved connection. Lets the
    *  caller propagate the freshly-typed password into open tabs that
    *  reference this saved index, so a stalled terminal session (e.g.
@@ -71,10 +75,12 @@ function toDraft(connection?: SavedSshConnection | null): ConnectionDraft {
     envTag: connection?.envTag ?? "",
     egressId: connection?.egressId ?? "",
     autoElevate: connection?.autoElevate ?? false,
+    protocol: connection?.protocol ?? "ssh",
+    domain: connection?.domain ?? "",
   };
 }
 
-export default function NewConnectionDialog({ open, onClose, onConnect, onConnectSaved, onSaved, initialConnection }: Props) {
+export default function NewConnectionDialog({ open, onClose, onConnect, onConnectSaved, onConnectRemoteDesktop, onSaved, initialConnection }: Props) {
   const { t } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const save = useConnectionStore((s) => s.save);
@@ -90,6 +96,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
   const [authMode, setAuthMode] = useState<"password" | "agent" | "key">(initialDraft.authKind as "password" | "agent" | "key");
   const [password, setPassword] = useState("");
   const [keyPath, setKeyPath] = useState(initialDraft.keyPath);
+  const [protocol, setProtocol] = useState<"ssh" | "rdp" | "vnc">(initialDraft.protocol);
+  const [domain, setDomain] = useState(initialDraft.domain);
   // Optional sudo / privilege-escalation password. Stored in the OS
   // keychain under `pier-x.elev.<user>@<host>:<port>` only when set
   // via this field; the host's interactive panels (Docker / firewall
@@ -153,6 +161,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
     setAuthMode(next.authKind as "password" | "agent" | "key");
     setPassword("");
     setKeyPath(next.keyPath);
+    setProtocol(next.protocol);
+    setDomain(next.domain);
     setSudoPasswordInput("");
     setHasStoredSudoPassword(false);
     setAutoElevate(next.autoElevate);
@@ -195,27 +205,40 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
 
   const p = Number.parseInt(port, 10);
   const isEditingKept = isEditing && initialConnection?.authKind === authMode;
-  const canSave =
-    host.trim() &&
-    user.trim() &&
-    Number.isFinite(p) &&
-    p > 0 &&
-    (authMode === "agent"
+  const isRemoteDesktop = protocol !== "ssh";
+  // VNC standard auth has no user (password only); SSH and RDP need one.
+  const userOk = isRemoteDesktop && protocol === "vnc" ? true : user.trim().length > 0;
+  const credsOk = isRemoteDesktop
+    ? password.length > 0 || isEditingKept
+    : authMode === "agent"
       || (authMode === "password"
-        ? (password.length > 0 || isEditingKept)
-        : (keyPath.trim().length > 0 || isEditingKept)));
-  const canDirectConnect =
-    host.trim() &&
-    user.trim() &&
-    Number.isFinite(p) &&
-    p > 0 &&
-    (authMode === "agent"
-      || (authMode === "password"
-        ? (password.length > 0 || isEditingKept)
-        : (keyPath.trim().length > 0 || isEditingKept)));
-  const canSaveAndConnect = canSave && canDirectConnect;
+        ? password.length > 0 || isEditingKept
+        : keyPath.trim().length > 0 || isEditingKept);
+  const portOk = Number.isFinite(p) && p > 0;
+  const canSave = Boolean(host.trim() && userOk && portOk && credsOk);
+  // Remote-desktop connect requires a saved entry (the panel resolves the
+  // password from the keyring), so its "Connect" path is Save & Connect.
+  const canDirectConnect = !isRemoteDesktop && canSave;
+  const canSaveAndConnect = canSave;
 
-  const connectionName = name.trim() || `${user.trim()}@${host.trim()}`;
+  const connectionName = name.trim() || `${user.trim() || host.trim()}`;
+
+  const DEFAULT_PORTS = { ssh: 22, rdp: 3389, vnc: 5900 } as const;
+  function selectProtocol(next: "ssh" | "rdp" | "vnc") {
+    setProtocol(next);
+    if (next !== "ssh") setAuthMode("password");
+    // Bump the port to the new protocol's default when the field still holds
+    // one of the known defaults (i.e. the user hasn't customised it).
+    const cur = Number.parseInt(port, 10);
+    if (
+      !Number.isFinite(cur) ||
+      cur === DEFAULT_PORTS.ssh ||
+      cur === DEFAULT_PORTS.rdp ||
+      cur === DEFAULT_PORTS.vnc
+    ) {
+      setPort(String(DEFAULT_PORTS[next]));
+    }
+  }
 
   async function persistConnection() {
     const trimmedGroup = group.trim();
@@ -233,6 +256,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       envTag: trimmedEnvTag ? trimmedEnvTag : null,
       egressId: trimmedEgressId ? trimmedEgressId : "",
       autoElevate,
+      protocol,
+      domain: protocol === "rdp" ? domain.trim() : "",
     };
 
     if (isEditing && typeof initialDraft.index === "number") {
@@ -325,10 +350,25 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
     };
     try {
       await persistConnection();
-      // When editing an existing connection, use the saved-index path so the
-      // backend resolves the password from the keychain (avoids sending empty
-      // string when the user didn't retype).
-      if (isEditing && typeof initialDraft.index === "number" && onConnectSaved) {
+      if (isRemoteDesktop) {
+        // The store refreshed after save; find the freshly-saved entry (or
+        // the edited one) and open it as a remote-desktop tab.
+        const idx =
+          typeof initialDraft.index === "number"
+            ? initialDraft.index
+            : useConnectionStore
+                .getState()
+                .connections.find(
+                  (c) =>
+                    c.host === host.trim() &&
+                    c.user === user.trim() &&
+                    c.protocol === protocol,
+                )?.index;
+        if (idx !== undefined) onConnectRemoteDesktop?.(idx);
+      } else if (isEditing && typeof initialDraft.index === "number" && onConnectSaved) {
+        // When editing an existing connection, use the saved-index path so the
+        // backend resolves the password from the keychain (avoids sending empty
+        // string when the user didn't retype).
         onConnectSaved(initialDraft.index);
       } else {
         onConnect(params);
@@ -407,8 +447,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
       >
         <div className="dlg-head" {...handleProps}>
           <span className="dlg-title">
-            <Server size={13} />
-            {t(isEditing ? "Edit SSH connection" : "New SSH connection")}
+            {isRemoteDesktop ? <Monitor size={13} /> : <Server size={13} />}
+            {t(isEditing ? "Edit connection" : "New connection")}
           </span>
           <div style={{ flex: 1 }} />
           <IconButton variant="mini" onClick={onClose} title={t("Close")}>
@@ -421,6 +461,38 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Name")}</label>
               <input className="dlg-input" onChange={(e) => setName(e.currentTarget.value)} placeholder={t("prod-api / staging")} value={name} />
+            </div>
+            <div className="dlg-row">
+              <label className="dlg-row-label">{t("Protocol")}</label>
+              <div className="dlg-opts" role="radiogroup" aria-label={t("Protocol")}>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={protocol === "ssh"}
+                  className={"dlg-opt" + (protocol === "ssh" ? " active" : "")}
+                  onClick={() => selectProtocol("ssh")}
+                >
+                  {t("SSH terminal")}
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={protocol === "rdp"}
+                  className={"dlg-opt" + (protocol === "rdp" ? " active" : "")}
+                  onClick={() => selectProtocol("rdp")}
+                >
+                  RDP
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={protocol === "vnc"}
+                  className={"dlg-opt" + (protocol === "vnc" ? " active" : "")}
+                  onClick={() => selectProtocol("vnc")}
+                >
+                  VNC
+                </button>
+              </div>
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Group")}</label>
@@ -442,6 +514,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
                 suggestions={["prod", "staging", "dev", "local"]}
               />
             </div>
+            {protocol === "ssh" && (
+            <>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Egress")}</label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "var(--sp-2)" }}>
@@ -510,6 +584,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
               }
               return null;
             })()}
+            </>
+            )}
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Host")}</label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 88px", gap: "var(--sp-2)" }}>
@@ -521,6 +597,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
               <label className="dlg-row-label">{t("User")}</label>
               <input className="dlg-input" onChange={(e) => setUser(e.currentTarget.value)} placeholder={t("root")} value={user} />
             </div>
+            {protocol === "ssh" && (
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Authentication")}</label>
               <div className="dlg-opts" role="radiogroup" aria-label={t("Authentication")}>
@@ -553,10 +630,17 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
                 </button>
               </div>
             </div>
+            )}
             {authMode === "password" && (
               <div className="dlg-row">
                 <label className="dlg-row-label">{t("Password")}</label>
                 <input className="dlg-input" type="password" onChange={(e) => setPassword(e.currentTarget.value)} placeholder={isEditing ? t("Leave blank to keep current password") : ""} value={password} />
+              </div>
+            )}
+            {protocol === "rdp" && (
+              <div className="dlg-row">
+                <label className="dlg-row-label">{t("Domain")}</label>
+                <input className="dlg-input" onChange={(e) => setDomain(e.currentTarget.value)} placeholder={t("Optional — Windows domain")} value={domain} />
               </div>
             )}
             {authMode === "key" && (
@@ -582,6 +666,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
             {authMode === "agent" && (
               <div className="dlg-note">{t("Agent auth uses the system SSH agent.")}</div>
             )}
+            {protocol === "ssh" && (
+            <>
             <div className="dlg-row">
               <label
                 className="dlg-row-label"
@@ -661,6 +747,8 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
                 </span>
               </div>
             ) : null}
+            </>
+            )}
             {error && <div className="status-note status-note--error">{error}</div>}
           </div>
           {egressPaneOpen && (

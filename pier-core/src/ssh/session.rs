@@ -1586,6 +1586,85 @@ impl SshSession {
         Ok((exit_code, String::from_utf8_lossy(&full).into_owned()))
     }
 
+    /// Streaming counterpart to [`Self::exec_command_with_stdin`]: run
+    /// `command`, write `stdin` then EOF before reading, and stream every
+    /// complete output line through `on_line`. Same `(exit_code, merged
+    /// output)` contract and cancellation semantics as
+    /// [`Self::exec_command_streaming`].
+    ///
+    /// Used by the package modules to drive `sudo -S` installs/service
+    /// actions: the elevation password rides on stdin instead of being
+    /// baked into the command string, where `/proc/<pid>/cmdline` would
+    /// expose it to other users on the remote host.
+    pub async fn exec_command_streaming_with_stdin<F>(
+        &self,
+        command: &str,
+        stdin: &str,
+        mut on_line: F,
+        cancel: Option<CancellationToken>,
+    ) -> Result<(i32, String)>
+    where
+        F: FnMut(&str),
+    {
+        let mut channel = self.handle.channel_open_session().await?;
+        channel.exec(true, command).await?;
+
+        if !stdin.is_empty() {
+            channel.data(stdin.as_bytes()).await?;
+        }
+        // Always EOF so `sudo -S` (and the inner command) stop waiting for
+        // more input the moment the password line is consumed.
+        channel.eof().await?;
+
+        let mut full = Vec::new();
+        let mut line_buf: Vec<u8> = Vec::new();
+        let mut exit_code: i32 = -1;
+        let mut cancelled = false;
+        loop {
+            let next = match &cancel {
+                Some(tok) => {
+                    tokio::select! {
+                        biased;
+                        _ = tok.cancelled() => {
+                            cancelled = true;
+                            None
+                        }
+                        msg = channel.wait() => msg,
+                    }
+                }
+                None => channel.wait().await,
+            };
+            if cancelled {
+                break;
+            }
+            let Some(msg) = next else {
+                break;
+            };
+            match msg {
+                russh::ChannelMsg::Data { data } => {
+                    Self::drain_chunk(&data, &mut full, &mut line_buf, &mut on_line);
+                }
+                russh::ChannelMsg::ExtendedData { data, ext: _ } => {
+                    Self::drain_chunk(&data, &mut full, &mut line_buf, &mut on_line);
+                }
+                russh::ChannelMsg::ExitStatus { exit_status } => {
+                    exit_code = exit_status as i32;
+                }
+                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {}
+                _ => {}
+            }
+        }
+        if cancelled {
+            let _ = channel.close().await;
+            exit_code = CANCELLED_EXIT_CODE;
+        }
+        if !line_buf.is_empty() {
+            let trimmed = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
+            on_line(&String::from_utf8_lossy(trimmed));
+        }
+        Ok((exit_code, String::from_utf8_lossy(&full).into_owned()))
+    }
+
     /// Sync convenience for [`Self::exec_command_streaming`].
     pub fn exec_command_streaming_blocking<F>(
         &self,

@@ -42,6 +42,7 @@ pub(crate) enum RdInput {
     PointerScroll { x: u16, y: u16, dx: i16, dy: i16 },
     Key { keysym: u32, scancode: u16, extended: bool, pressed: bool },
     KeyUnicode { codepoint: u32, pressed: bool },
+    SetClipboard { text: String },
 }
 
 impl RdInput {
@@ -71,6 +72,7 @@ impl RdInput {
                     pressed,
                 }
             }
+            RdInput::SetClipboard { text } => InputEvent::SetClipboard(text),
         })
     }
 }

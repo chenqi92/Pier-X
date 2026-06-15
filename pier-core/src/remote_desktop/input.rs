@@ -71,4 +71,9 @@ pub enum InputEvent {
         /// `true` = press, `false` = release.
         pressed: bool,
     },
+    /// Push the viewer's local clipboard text to the remote (so a
+    /// subsequent paste on the remote sees it). VNC sends it as
+    /// `ClientCutText`; RDP clipboard (CLIPRDR) is a follow-up and ignores
+    /// this for now.
+    SetClipboard(String),
 }

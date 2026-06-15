@@ -18,12 +18,15 @@ import {
   type RdPacket,
   type RemoteInput,
 } from "../lib/remoteDesktop";
+import { readClipboardText, writeClipboardText } from "../lib/clipboard";
 import "../styles/remote-desktop.css";
 
 type Props = {
   tab: TabState;
   isActive: boolean;
 };
+
+type RemoteKeyInput = Extract<RemoteInput, { kind: "key" }>;
 
 type Status = "connecting" | "connected" | "error" | "disconnected";
 
@@ -35,6 +38,14 @@ function RemoteDesktopPanel({ tab, isActive }: Props) {
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const remoteSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+  const isActiveRef = useRef(isActive);
+  // Last clipboard text synced in either direction — dedupes so we don't
+  // echo a value we just received back to the side it came from.
+  const lastClipboardRef = useRef<string>("");
+  // Currently-held keys (by physical `code`), so we can release them if the
+  // surface loses focus mid-keypress — otherwise a modifier can stick down
+  // on the remote after the user tabs away.
+  const pressedKeysRef = useRef<Map<string, RemoteKeyInput>>(new Map());
 
   const [status, setStatus] = useState<Status>("connecting");
   const [errorMsg, setErrorMsg] = useState<string>("");
@@ -115,7 +126,12 @@ function RemoteDesktopPanel({ tab, isActive }: Props) {
           // advertise the VNC cursor pseudo-encoding), so nothing to do.
           break;
         case "clipboard":
-          // Remote clipboard mirroring is a follow-up.
+          // Mirror the remote clipboard into the local one, but only for the
+          // tab the user is actually looking at (every session streams).
+          if (isActiveRef.current && packet.text) {
+            lastClipboardRef.current = packet.text;
+            void writeClipboardText(packet.text);
+          }
           break;
         case "disconnected": {
           sessionIdRef.current = null;
@@ -199,21 +215,33 @@ function RemoteDesktopPanel({ tab, isActive }: Props) {
     return () => ro.disconnect();
   }, [fitCanvas]);
 
-  // Focus the surface when this tab becomes active so keys flow immediately.
+  // Keep a ref of the active flag for callbacks captured at connect time.
   useEffect(() => {
-    if (!isActive) return;
-    const id = window.requestAnimationFrame(() => {
-      containerRef.current?.focus();
-      fitCanvas();
-    });
-    return () => window.cancelAnimationFrame(id);
-  }, [isActive, fitCanvas]);
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   // ── Input forwarding ──
   const send = useCallback((event: RemoteInput) => {
     const id = sessionIdRef.current;
     if (id) void remoteDesktopInput(id, event).catch(() => {});
   }, []);
+
+  // Focus the surface when this tab becomes active so keys flow immediately,
+  // and push the local clipboard to the remote so a paste there sees it.
+  useEffect(() => {
+    if (!isActive) return;
+    const id = window.requestAnimationFrame(() => {
+      containerRef.current?.focus();
+      fitCanvas();
+    });
+    void readClipboardText().then((text) => {
+      if (text && text !== lastClipboardRef.current) {
+        lastClipboardRef.current = text;
+        send({ kind: "setClipboard", text });
+      }
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [isActive, fitCanvas, send]);
 
   const toRemote = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
@@ -274,12 +302,25 @@ function RemoteDesktopPanel({ tab, isActive }: Props) {
   const onKey = useCallback(
     (e: React.KeyboardEvent, pressed: boolean) => {
       const input = keyToInput(e.nativeEvent, pressed);
-      if (!input) return;
+      if (!input || input.kind !== "key") return;
       e.preventDefault();
+      if (pressed) pressedKeysRef.current.set(e.code, input);
+      else pressedKeysRef.current.delete(e.code);
       send(input);
     },
     [send],
   );
+
+  // Release every held key — on blur, or when the tab goes inactive.
+  const releaseAllKeys = useCallback(() => {
+    const held = pressedKeysRef.current;
+    for (const input of held.values()) send({ ...input, pressed: false });
+    held.clear();
+  }, [send]);
+
+  useEffect(() => {
+    if (!isActive) releaseAllKeys();
+  }, [isActive, releaseAllKeys]);
 
   const reconnect = useCallback(() => setConnectAttempt((n) => n + 1), []);
 
@@ -291,6 +332,7 @@ function RemoteDesktopPanel({ tab, isActive }: Props) {
       tabIndex={0}
       onKeyDown={(e) => onKey(e, true)}
       onKeyUp={(e) => onKey(e, false)}
+      onBlur={releaseAllKeys}
     >
       <div className="rd-panel__header">
         <div className="rd-panel__title">

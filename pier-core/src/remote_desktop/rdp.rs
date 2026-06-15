@@ -240,6 +240,9 @@ fn to_operations(ev: &InputEvent) -> Vec<Operation> {
                 Operation::UnicodeKeyReleased(*ch)
             }]
         }
+        // RDP clipboard runs over the CLIPRDR virtual channel, not the input
+        // PDU stream — a follow-up. Ignore for now.
+        InputEvent::SetClipboard(_) => Vec::new(),
     }
 }
 

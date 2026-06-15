@@ -59,7 +59,8 @@ export type RemoteInput =
   | { kind: "pointerButton"; x: number; y: number; button: number; pressed: boolean }
   | { kind: "pointerScroll"; x: number; y: number; dx: number; dy: number }
   | { kind: "key"; keysym: number; scancode: number; extended: boolean; pressed: boolean }
-  | { kind: "keyUnicode"; codepoint: number; pressed: boolean };
+  | { kind: "keyUnicode"; codepoint: number; pressed: boolean }
+  | { kind: "setClipboard"; text: string };
 
 const td = new TextDecoder();
 

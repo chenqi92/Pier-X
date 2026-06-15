@@ -475,7 +475,29 @@ async fn write_input<W: AsyncWrite + Unpin>(
         InputEvent::KeyUnicode { ch, pressed } => {
             send_key(wr, unicode_to_keysym(*ch), *pressed).await?;
         }
+        InputEvent::SetClipboard(text) => {
+            send_client_cut_text(wr, text).await?;
+        }
     }
+    Ok(())
+}
+
+/// Send `ClientCutText` (msg type 6): the RFB cut-text protocol is Latin-1
+/// only, so non-Latin-1 characters are replaced with `?`.
+async fn send_client_cut_text<W: AsyncWrite + Unpin>(wr: &mut W, text: &str) -> Result<()> {
+    let latin1: Vec<u8> = text
+        .chars()
+        .map(|c| {
+            let cp = c as u32;
+            if cp < 0x100 { cp as u8 } else { b'?' }
+        })
+        .collect();
+    let mut msg = Vec::with_capacity(8 + latin1.len());
+    msg.push(6); // ClientCutText
+    msg.extend_from_slice(&[0, 0, 0]); // padding
+    msg.extend_from_slice(&(latin1.len() as u32).to_be_bytes());
+    msg.extend_from_slice(&latin1);
+    wr.write_all(&msg).await?;
     Ok(())
 }
 

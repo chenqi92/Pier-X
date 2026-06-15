@@ -6,7 +6,9 @@
 //!   * install a [`FrameSink`] that packs each [`FrameEvent`] into a compact
 //!     binary packet and ships it over a Tauri [`Channel`] as raw bytes
 //!     (delivered to JS as an `ArrayBuffer`, never base64),
-//!   * forward input / resize / close commands to the live session.
+//!   * forward input / resize / close commands to the live session,
+//!   * expose a loopback WebSocket-to-TCP proxy so the WebView can run
+//!     noVNC directly against ordinary VNC servers.
 //!
 //! Wire format of one frame packet (all integers little-endian):
 //! ```text
@@ -20,10 +22,17 @@
 //! kind=8 Clipboard   : [text UTF-8 bytes]
 //! ```
 
+use std::error::Error;
 use std::sync::atomic::Ordering;
 
-use serde::Deserialize;
+use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, Response};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_util::sync::CancellationToken;
 
 use pier_core::remote_desktop::{
     CopyRect, FrameEvent, FrameSink, FrameTile, InputEvent, MouseButton, RemoteDesktopConfig,
@@ -32,24 +41,73 @@ use pier_core::remote_desktop::{
 
 use crate::AppState;
 
+/// A local proxy process for one noVNC viewer. Dropping it cancels the accept
+/// loop and aborts any pending listener task.
+pub(crate) struct VncWebSocketProxy {
+    stop: CancellationToken,
+    task: tauri::async_runtime::JoinHandle<()>,
+}
+
+impl Drop for VncWebSocketProxy {
+    fn drop(&mut self) {
+        self.stop.cancel();
+        self.task.abort();
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VncProxyInfo {
+    id: String,
+    url: String,
+}
+
 /// One input action from the viewer canvas. Tagged union matching the
 /// frontend's `RemoteInput` type.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub(crate) enum RdInput {
-    PointerMove { x: u16, y: u16 },
-    PointerButton { x: u16, y: u16, button: u8, pressed: bool },
-    PointerScroll { x: u16, y: u16, dx: i16, dy: i16 },
-    Key { keysym: u32, scancode: u16, extended: bool, pressed: bool },
-    KeyUnicode { codepoint: u32, pressed: bool },
-    SetClipboard { text: String },
+    PointerMove {
+        x: u16,
+        y: u16,
+    },
+    PointerButton {
+        x: u16,
+        y: u16,
+        button: u8,
+        pressed: bool,
+    },
+    PointerScroll {
+        x: u16,
+        y: u16,
+        dx: i16,
+        dy: i16,
+    },
+    Key {
+        keysym: u32,
+        scancode: u16,
+        extended: bool,
+        pressed: bool,
+    },
+    KeyUnicode {
+        codepoint: u32,
+        pressed: bool,
+    },
+    SetClipboard {
+        text: String,
+    },
 }
 
 impl RdInput {
     fn into_event(self) -> Option<InputEvent> {
         Some(match self {
             RdInput::PointerMove { x, y } => InputEvent::PointerMove { x, y },
-            RdInput::PointerButton { x, y, button, pressed } => InputEvent::PointerButton {
+            RdInput::PointerButton {
+                x,
+                y,
+                button,
+                pressed,
+            } => InputEvent::PointerButton {
                 x,
                 y,
                 button: match button {
@@ -60,18 +118,21 @@ impl RdInput {
                 pressed,
             },
             RdInput::PointerScroll { x, y, dx, dy } => InputEvent::PointerScroll { x, y, dx, dy },
-            RdInput::Key { keysym, scancode, extended, pressed } => InputEvent::Key {
+            RdInput::Key {
+                keysym,
+                scancode,
+                extended,
+                pressed,
+            } => InputEvent::Key {
                 keysym,
                 scancode,
                 extended,
                 pressed,
             },
-            RdInput::KeyUnicode { codepoint, pressed } => {
-                InputEvent::KeyUnicode {
-                    ch: char::from_u32(codepoint)?,
-                    pressed,
-                }
-            }
+            RdInput::KeyUnicode { codepoint, pressed } => InputEvent::KeyUnicode {
+                ch: char::from_u32(codepoint)?,
+                pressed,
+            },
             RdInput::SetClipboard { text } => InputEvent::SetClipboard(text),
         })
     }
@@ -110,7 +171,10 @@ pub fn remote_desktop_connect(
         domain: domain.filter(|d| !d.is_empty()),
         width: width.max(640),
         height: height.max(480),
-        jpeg_threshold_px: RemoteDesktopConfig::DEFAULT_JPEG_THRESHOLD_PX,
+        jpeg_threshold_px: match protocol {
+            RemoteProtocol::Rdp => RemoteDesktopConfig::DEFAULT_RDP_JPEG_THRESHOLD_PX,
+            RemoteProtocol::Vnc => RemoteDesktopConfig::DEFAULT_VNC_JPEG_THRESHOLD_PX,
+        },
     };
 
     // Pack every frame event into the binary wire format and push it down
@@ -123,7 +187,10 @@ pub fn remote_desktop_connect(
 
     let session = RemoteDesktopSession::connect(config, sink).map_err(|e| e.to_string())?;
 
-    let id = format!("rd-{}", state.next_remote_desktop_id.fetch_add(1, Ordering::SeqCst));
+    let id = format!(
+        "rd-{}",
+        state.next_remote_desktop_id.fetch_add(1, Ordering::SeqCst)
+    );
     state
         .remote_desktops
         .lock()
@@ -185,6 +252,124 @@ pub fn remote_desktop_close(
     Ok(())
 }
 
+/// Start a loopback WebSocket proxy for noVNC. noVNC speaks RFB over
+/// WebSocket; most VNC servers still expose plain TCP, so the desktop shell
+/// provides the narrow bridge locally.
+#[tauri::command]
+pub async fn remote_desktop_vnc_proxy_start(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+) -> Result<VncProxyInfo, String> {
+    let target_port = if port == 0 { 5900 } else { port };
+    let target = format!("{host}:{target_port}");
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .map_err(|e| format!("bind local VNC proxy: {e}"))?;
+    let local_addr = listener
+        .local_addr()
+        .map_err(|e| format!("read local VNC proxy address: {e}"))?;
+    let id = format!(
+        "vnc-proxy-{}",
+        state
+            .next_remote_desktop_proxy_id
+            .fetch_add(1, Ordering::SeqCst)
+    );
+    let stop = CancellationToken::new();
+    let task_stop = stop.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        run_vnc_websocket_proxy(listener, target, task_stop).await;
+    });
+
+    state
+        .remote_desktop_proxies
+        .lock()
+        .map_err(|_| "remote desktop proxy registry poisoned".to_string())?
+        .insert(id.clone(), VncWebSocketProxy { stop, task });
+
+    Ok(VncProxyInfo {
+        id,
+        url: format!("ws://{local_addr}"),
+    })
+}
+
+/// Stop a noVNC loopback proxy.
+#[tauri::command]
+pub fn remote_desktop_vnc_proxy_stop(
+    state: tauri::State<'_, AppState>,
+    proxy_id: String,
+) -> Result<(), String> {
+    state
+        .remote_desktop_proxies
+        .lock()
+        .map_err(|_| "remote desktop proxy registry poisoned".to_string())?
+        .remove(&proxy_id);
+    Ok(())
+}
+
+async fn run_vnc_websocket_proxy(listener: TcpListener, target: String, stop: CancellationToken) {
+    loop {
+        tokio::select! {
+            _ = stop.cancelled() => break,
+            accepted = listener.accept() => {
+                let Ok((stream, _peer)) = accepted else {
+                    break;
+                };
+                let target = target.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = bridge_vnc_websocket(stream, target).await;
+                });
+            }
+        }
+    }
+}
+
+async fn bridge_vnc_websocket(
+    stream: TcpStream,
+    target: String,
+) -> std::result::Result<(), Box<dyn Error + Send + Sync>> {
+    stream.set_nodelay(true).ok();
+    let websocket = accept_async(stream).await?;
+    let remote = TcpStream::connect(target).await?;
+    remote.set_nodelay(true).ok();
+
+    let (mut ws_tx, mut ws_rx) = websocket.split();
+    let (mut remote_rx, mut remote_tx) = remote.into_split();
+
+    let websocket_to_remote = async {
+        while let Some(message) = ws_rx.next().await {
+            match message? {
+                Message::Binary(data) => remote_tx.write_all(data.as_ref()).await?,
+                Message::Text(text) => remote_tx.write_all(text.as_bytes()).await?,
+                Message::Close(_) => break,
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+            }
+        }
+        let _ = remote_tx.shutdown().await;
+        Ok::<(), Box<dyn Error + Send + Sync>>(())
+    };
+
+    let remote_to_websocket = async {
+        let mut buf = vec![0u8; 32 * 1024];
+        loop {
+            let n = remote_rx.read(&mut buf).await?;
+            if n == 0 {
+                let _ = ws_tx.send(Message::Close(None)).await;
+                break;
+            }
+            ws_tx
+                .send(Message::Binary(buf[..n].to_vec().into()))
+                .await?;
+        }
+        Ok::<(), Box<dyn Error + Send + Sync>>(())
+    };
+
+    tokio::select! {
+        result = websocket_to_remote => result,
+        result = remote_to_websocket => result,
+    }
+}
+
 // ── Binary packing ───────────────────────────────────────────────────────
 
 fn put_u16(buf: &mut Vec<u8>, v: u16) {
@@ -204,7 +389,14 @@ fn encode_packet(event: &FrameEvent) -> Vec<u8> {
             put_u16(&mut buf, *width);
             put_u16(&mut buf, *height);
         }
-        FrameEvent::Tile(FrameTile { x, y, width, height, encoding, data }) => {
+        FrameEvent::Tile(FrameTile {
+            x,
+            y,
+            width,
+            height,
+            encoding,
+            data,
+        }) => {
             buf.push(match encoding {
                 TileEncoding::Rgba => 3,
                 TileEncoding::Jpeg => 4,
@@ -215,7 +407,14 @@ fn encode_packet(event: &FrameEvent) -> Vec<u8> {
             put_u16(&mut buf, *height);
             buf.extend_from_slice(data);
         }
-        FrameEvent::Copy(CopyRect { src_x, src_y, dst_x, dst_y, width, height }) => {
+        FrameEvent::Copy(CopyRect {
+            src_x,
+            src_y,
+            dst_x,
+            dst_y,
+            width,
+            height,
+        }) => {
             buf.push(5);
             put_u16(&mut buf, *src_x);
             put_u16(&mut buf, *src_y);
@@ -224,7 +423,13 @@ fn encode_packet(event: &FrameEvent) -> Vec<u8> {
             put_u16(&mut buf, *width);
             put_u16(&mut buf, *height);
         }
-        FrameEvent::Cursor { width, height, hot_x, hot_y, data } => {
+        FrameEvent::Cursor {
+            width,
+            height,
+            hot_x,
+            hot_y,
+            data,
+        } => {
             buf.push(6);
             put_u16(&mut buf, *width);
             put_u16(&mut buf, *height);

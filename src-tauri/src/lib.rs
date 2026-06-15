@@ -57,6 +57,7 @@ use git_panel::*;
 mod remote_desktop;
 use remote_desktop::{
     remote_desktop_close, remote_desktop_connect, remote_desktop_input, remote_desktop_resize,
+    remote_desktop_vnc_proxy_start, remote_desktop_vnc_proxy_stop,
 };
 
 mod ssh_mux;
@@ -209,11 +210,16 @@ struct AppState {
     pierfs_grants: Mutex<HashMap<String, PierfsGrant>>,
     /// Monotonic id source for remote-desktop session keys (`rd-<n>`).
     next_remote_desktop_id: AtomicU64,
+    /// Monotonic id source for local noVNC proxy keys (`vnc-proxy-<n>`).
+    next_remote_desktop_proxy_id: AtomicU64,
     /// Live remote-desktop (RDP / VNC) sessions, keyed by the `rd-<n>` id
     /// handed back to the frontend. Each value owns the protocol task; the
     /// frontend frees one via `remote_desktop_close` (which drops the
     /// session, closing the connection). In-memory only.
     remote_desktops: Mutex<HashMap<String, pier_core::remote_desktop::RemoteDesktopSession>>,
+    /// Loopback WebSocket-to-TCP proxies used by noVNC. Each one binds
+    /// 127.0.0.1:<ephemeral> and forwards to one configured VNC target.
+    remote_desktop_proxies: Mutex<HashMap<String, remote_desktop::VncWebSocketProxy>>,
 }
 
 /// Bookkeeping for one in-flight "edit remote file with the OS
@@ -252,7 +258,9 @@ impl Default for AppState {
             host_effective_user: Mutex::new(HashMap::new()),
             pierfs_grants: Mutex::new(HashMap::new()),
             next_remote_desktop_id: AtomicU64::new(1),
+            next_remote_desktop_proxy_id: AtomicU64::new(1),
             remote_desktops: Mutex::new(HashMap::new()),
+            remote_desktop_proxies: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -19411,6 +19419,8 @@ pub fn run() {
             remote_desktop_input,
             remote_desktop_resize,
             remote_desktop_close,
+            remote_desktop_vnc_proxy_start,
+            remote_desktop_vnc_proxy_stop,
             git_overview,
             git_panel_state,
             git_init_repo,

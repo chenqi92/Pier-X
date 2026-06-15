@@ -20,6 +20,11 @@ export type RemoteDesktopConnectParams = {
   height: number;
 };
 
+export type VncProxyInfo = {
+  id: string;
+  url: string;
+};
+
 /** A parsed frame packet pushed from the backend. */
 export type RdPacket =
   | { kind: "connected"; width: number; height: number }
@@ -168,6 +173,12 @@ export const remoteDesktopResize = (sessionId: string, width: number, height: nu
 
 export const remoteDesktopClose = (sessionId: string) =>
   invoke<void>("remote_desktop_close", { sessionId });
+
+export const remoteDesktopVncProxyStart = (params: { host: string; port: number }) =>
+  invoke<VncProxyInfo>("remote_desktop_vnc_proxy_start", params);
+
+export const remoteDesktopVncProxyStop = (proxyId: string) =>
+  invoke<void>("remote_desktop_vnc_proxy_stop", { proxyId });
 
 /** Build a key input from a DOM `KeyboardEvent`, or `null` if unmappable. */
 export function keyToInput(e: KeyboardEvent, pressed: boolean): RemoteInput | null {

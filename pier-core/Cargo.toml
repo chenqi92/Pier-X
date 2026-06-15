@@ -201,7 +201,7 @@ image = { version = "0.25", default-features = false, features = ["tiff", "png",
 #   * `num-bigint` + `md-5` + `aes` — Apple ARD (type 30): Diffie-Hellman
 #                 key agreement → MD5(shared secret) → AES-128-ECB of the
 #                 128-byte username/password block.
-# `flate2` decodes the zlib-wrapped Tight/ZRLE tiles VNC servers send.
+# `flate2` decodes the zlib framebuffer rectangles VNC servers send.
 des = "0.8"
 md-5 = "0.10"
 aes = "0.8"

@@ -2938,4 +2938,12 @@ export const zhExtra: Record<string, string> = {
   "Word": "Word 文档",
   "Video": "视频",
   "Text": "文本",
+
+  // Remote desktop
+  "VNC performance": "VNC 性能",
+  "Low latency mode": "低延迟模式",
+  "Quality mode": "清晰模式",
+  "Resize remote desktop to viewer": "远端桌面匹配窗口尺寸",
+  "Show VNC stats": "显示 VNC 统计",
+  "Hide VNC stats": "隐藏 VNC 统计",
 };

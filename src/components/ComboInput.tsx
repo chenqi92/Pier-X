@@ -181,6 +181,8 @@ export default function ComboInput({
         title={title}
         autoFocus={autoFocus}
         autoComplete="off"
+        autoCapitalize="none"
+        autoCorrect="off"
         spellCheck={false}
         onChange={(e) => {
           onChange(e.currentTarget.value);

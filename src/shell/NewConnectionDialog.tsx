@@ -22,6 +22,12 @@ import EgressProfileForm, {
 
 const EgressProfilesDialog = lazy(() => import("./EgressProfilesDialog"));
 
+const MACHINE_INPUT_PROPS = {
+  autoCapitalize: "none",
+  autoCorrect: "off",
+  spellCheck: false,
+} as const;
+
 type ConnectionDraft = {
   index?: number;
   name: string;
@@ -465,7 +471,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
           <div className="dlg-form">
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Name")}</label>
-              <input className="dlg-input" onChange={(e) => setName(e.currentTarget.value)} placeholder={t("prod-api / staging")} value={name} />
+              <input className="dlg-input" {...MACHINE_INPUT_PROPS} onChange={(e) => setName(e.currentTarget.value)} placeholder={t("prod-api / staging")} value={name} />
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Protocol")}</label>
@@ -594,13 +600,13 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Host")}</label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 88px", gap: "var(--sp-2)" }}>
-                <input className="dlg-input" onChange={(e) => setHost(e.currentTarget.value)} placeholder={t("server.example.com")} value={host} />
-                <input className="dlg-input" onChange={(e) => setPort(e.currentTarget.value)} value={port} placeholder={t("Port")} />
+                <input className="dlg-input" {...MACHINE_INPUT_PROPS} onChange={(e) => setHost(e.currentTarget.value)} placeholder={t("server.example.com")} value={host} />
+                <input className="dlg-input" {...MACHINE_INPUT_PROPS} onChange={(e) => setPort(e.currentTarget.value)} value={port} placeholder={t("Port")} />
               </div>
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">{t("User")}</label>
-              <input className="dlg-input" onChange={(e) => setUser(e.currentTarget.value)} placeholder={t("root")} value={user} />
+              <input className="dlg-input" {...MACHINE_INPUT_PROPS} onChange={(e) => setUser(e.currentTarget.value)} placeholder={t("root")} value={user} />
             </div>
             {protocol === "ssh" && (
             <div className="dlg-row">
@@ -648,20 +654,20 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
             {authMode === "password" && (
               <div className="dlg-row">
                 <label className="dlg-row-label">{t("Password")}</label>
-                <input className="dlg-input" type="password" onChange={(e) => setPassword(e.currentTarget.value)} placeholder={isEditing ? t("Leave blank to keep current password") : ""} value={password} />
+                <input className="dlg-input" {...MACHINE_INPUT_PROPS} type="password" onChange={(e) => setPassword(e.currentTarget.value)} placeholder={isEditing ? t("Leave blank to keep current password") : ""} value={password} />
               </div>
             )}
             {protocol === "rdp" && (
               <div className="dlg-row">
                 <label className="dlg-row-label">{t("Domain")}</label>
-                <input className="dlg-input" onChange={(e) => setDomain(e.currentTarget.value)} placeholder={t("Optional — Windows domain")} value={domain} />
+                <input className="dlg-input" {...MACHINE_INPUT_PROPS} onChange={(e) => setDomain(e.currentTarget.value)} placeholder={t("Optional — Windows domain")} value={domain} />
               </div>
             )}
             {authMode === "key" && (
               <>
                 <div className="dlg-row">
                   <label className="dlg-row-label">{t("Private key")}</label>
-                  <input className="dlg-input mono" onChange={(e) => setKeyPath(e.currentTarget.value)} placeholder={t("~/.ssh/id_ed25519")} value={keyPath} />
+                  <input className="dlg-input mono" {...MACHINE_INPUT_PROPS} onChange={(e) => setKeyPath(e.currentTarget.value)} placeholder={t("~/.ssh/id_ed25519")} value={keyPath} />
                 </div>
                 <div className="dlg-note">
                   <Key size={11} />
@@ -699,6 +705,7 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
               </label>
               <input
                 className="dlg-input"
+                {...MACHINE_INPUT_PROPS}
                 type="password"
                 onChange={(e) => setSudoPasswordInput(e.currentTarget.value)}
                 placeholder={
@@ -708,7 +715,6 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
                 }
                 value={sudoPassword}
                 autoComplete="off"
-                spellCheck={false}
               />
             </div>
             <div className="dlg-note">

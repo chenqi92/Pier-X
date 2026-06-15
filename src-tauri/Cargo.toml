@@ -36,6 +36,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+futures-util = "0.3"
 # CancellationToken for the in-flight install / update / uninstall
 # registry — see `software_install_cancel` and pier-core's
 # `package_manager`. Default features only (we just need the `sync`
@@ -46,6 +47,6 @@ tokio-util = { version = "0.7", default-features = false }
 # `ssh_host_key_decide` command into the verifier callback,
 # with a timeout fallback so a forgotten dialog can't pin SSH
 # worker threads forever.
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync", "time", "net", "io-util"] }
+tokio-tungstenite = "0.29"
 pier-core = { path = "../pier-core" }
-

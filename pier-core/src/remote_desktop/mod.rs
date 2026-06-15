@@ -15,9 +15,9 @@
 mod error;
 mod frame;
 mod input;
-pub mod vnc;
 #[cfg(feature = "rdp")]
 pub mod rdp;
+pub mod vnc;
 
 pub use error::{RemoteDesktopError, Result};
 pub use frame::{CopyRect, FrameEvent, FrameSink, FrameTile, TileEncoding};
@@ -59,14 +59,20 @@ pub struct RemoteDesktopConfig {
     pub width: u16,
     /// Initial desktop height to request (RDP).
     pub height: u16,
-    /// Tiles whose area (w*h) is ≥ this are JPEG-compressed before they hit
+    /// Tiles whose area (w*h) is >= this are JPEG-compressed before they hit
     /// the IPC channel; smaller rects ship raw RGBA. `0` = always raw.
     pub jpeg_threshold_px: u32,
 }
 
 impl RemoteDesktopConfig {
-    /// Default JPEG threshold: tiles ≥ 64×64 px (4096 px) are compressed.
-    pub const DEFAULT_JPEG_THRESHOLD_PX: u32 = 64 * 64;
+    /// RDP dirty regions tend to arrive as larger screen areas, so a lower
+    /// threshold keeps the WebView IPC stream bounded.
+    pub const DEFAULT_RDP_JPEG_THRESHOLD_PX: u32 = 64 * 64;
+    /// VNC zlib/raw rectangles are often small and frequent. Keeping those
+    /// raw avoids a costly inflate -> JPEG encode -> WebView JPEG decode loop.
+    pub const DEFAULT_VNC_JPEG_THRESHOLD_PX: u32 = 256 * 256;
+    /// Legacy default for callers that do not distinguish protocols.
+    pub const DEFAULT_JPEG_THRESHOLD_PX: u32 = Self::DEFAULT_RDP_JPEG_THRESHOLD_PX;
 }
 
 /// Control messages the host sends to a live session.

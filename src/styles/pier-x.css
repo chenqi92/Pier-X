@@ -1027,6 +1027,35 @@ body.is-panel-animating .rightzone {
   box-shadow: var(--shadow-dialog);
   display: flex; flex-direction: column;
 }
+.dlg.is-dialog-shaking,
+.cmdp.is-dialog-shaking,
+.ws-newdialog.is-dialog-shaking {
+  animation: dialog-shake var(--dur-normal) var(--easing);
+  will-change: translate;
+}
+
+@keyframes dialog-shake {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  20%,
+  60% {
+    translate: calc(var(--sp-1) * -1) 0;
+  }
+  40%,
+  80% {
+    translate: var(--sp-1) 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dlg.is-dialog-shaking,
+  .cmdp.is-dialog-shaking,
+  .ws-newdialog.is-dialog-shaking {
+    animation: none;
+  }
+}
 .dlg.small,
 .dlg--newconn { width: 520px; }
 /* Widened when the inline egress editor pane is open. */

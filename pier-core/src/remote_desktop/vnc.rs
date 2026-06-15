@@ -13,14 +13,16 @@
 
 use std::io::ErrorKind;
 use std::sync::Arc;
+use std::time::Duration;
 
 use flate2::{Decompress, FlushDecompress, Status};
 use num_bigint::BigUint;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedWriteHalf;
+use tokio::net::TcpStream;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{mpsc, Mutex};
-use tokio::sync::mpsc::{UnboundedReceiver};
+use tokio::time::sleep;
 
 use super::error::{RemoteDesktopError, Result};
 use super::frame::{self, CopyRect, FrameEvent, FrameSink};
@@ -34,6 +36,10 @@ const ENC_COPY_RECT: i32 = 1;
 const ENC_ZLIB: i32 = 6;
 const ENC_CURSOR: i32 = -239; // 0xFFFF_FF11 pseudo-encoding
 const ENC_DESKTOP_SIZE: i32 = -223; // 0xFFFF_FF21 pseudo-encoding
+
+// Cap VNC's request/response pump so a fast server cannot flood the UI thread
+// with redundant framebuffer updates faster than the WebView can paint them.
+const VNC_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
 // ── Security types ───────────────────────────────────────────────────────
 const SEC_NONE: u8 = 1;
@@ -62,7 +68,11 @@ pub(crate) async fn run(
         .map_err(|e| RemoteDesktopError::Connect(format!("reading version: {e}")))?;
     let server_minor = parse_minor(&server_ver);
     let use_38 = server_minor >= 7;
-    let client_ver: &[u8] = if use_38 { b"RFB 003.008\n" } else { b"RFB 003.003\n" };
+    let client_ver: &[u8] = if use_38 {
+        b"RFB 003.008\n"
+    } else {
+        b"RFB 003.003\n"
+    };
     wr.write_all(client_ver).await?;
 
     // ── Security negotiation ─────────────────────────────────────────
@@ -129,7 +139,10 @@ pub(crate) async fn run(
     send_set_pixel_format(&mut wr).await?;
     send_set_encodings(&mut wr).await?;
 
-    sink.emit(FrameEvent::Connected { width: fb_w, height: fb_h });
+    sink.emit(FrameEvent::Connected {
+        width: fb_w,
+        height: fb_h,
+    });
 
     // Kick off with one full update; the read loop requests incrementals.
     send_fbur(&mut wr, false, 0, 0, fb_w, fb_h).await?;
@@ -213,7 +226,9 @@ async fn read_loop<R: AsyncRead + Unpin>(
                     let h = rd.read_u16().await?;
                     let encoding = rd.read_i32().await?;
                     match encoding {
-                        ENC_RAW => read_raw_rect(&mut rd, &sink, x, y, w, h, jpeg_threshold).await?,
+                        ENC_RAW => {
+                            read_raw_rect(&mut rd, &sink, x, y, w, h, jpeg_threshold).await?
+                        }
                         ENC_ZLIB => {
                             read_zlib_rect(&mut rd, &mut zlib, &sink, x, y, w, h, jpeg_threshold)
                                 .await?
@@ -234,7 +249,10 @@ async fn read_loop<R: AsyncRead + Unpin>(
                             fb_w = w;
                             fb_h = h;
                             need_full = true;
-                            sink.emit(FrameEvent::Resize { width: w, height: h });
+                            sink.emit(FrameEvent::Resize {
+                                width: w,
+                                height: h,
+                            });
                         }
                         ENC_CURSOR => read_cursor(&mut rd, &sink, x, y, w, h).await?,
                         other => {
@@ -245,7 +263,11 @@ async fn read_loop<R: AsyncRead + Unpin>(
                     }
                 }
                 // Pump the next frame. After a desktop resize we need a full
-                // (non-incremental) refresh of the new geometry.
+                // (non-incremental) refresh of the new geometry. Otherwise,
+                // pace incremental requests to keep the renderer responsive.
+                if !need_full {
+                    sleep(VNC_FRAME_INTERVAL).await;
+                }
                 let mut guard = wr.lock().await;
                 send_fbur(&mut *guard, !need_full, 0, 0, fb_w, fb_h).await?;
             }
@@ -292,7 +314,14 @@ async fn read_raw_rect<R: AsyncRead + Unpin>(
     let mut buf = vec![0u8; (w as usize) * (h as usize) * 4];
     rd.read_exact(&mut buf).await?;
     force_opaque(&mut buf);
-    sink.emit(FrameEvent::Tile(frame::encode_tile(x, y, w, h, buf, jpeg_threshold)));
+    sink.emit(FrameEvent::Tile(frame::encode_tile(
+        x,
+        y,
+        w,
+        h,
+        buf,
+        jpeg_threshold,
+    )));
     Ok(())
 }
 
@@ -324,12 +353,21 @@ async fn read_zlib_rect<R: AsyncRead + Unpin>(
             .map_err(|e| RemoteDesktopError::Protocol(format!("zlib inflate: {e}")))?;
         consumed += (zlib.total_in() - before_in) as usize;
         filled += (zlib.total_out() - before_out) as usize;
-        if matches!(status, Status::BufError) || (zlib.total_in() == before_in && zlib.total_out() == before_out) {
+        if matches!(status, Status::BufError)
+            || (zlib.total_in() == before_in && zlib.total_out() == before_out)
+        {
             break;
         }
     }
     force_opaque(&mut out);
-    sink.emit(FrameEvent::Tile(frame::encode_tile(x, y, w, h, out, jpeg_threshold)));
+    sink.emit(FrameEvent::Tile(frame::encode_tile(
+        x,
+        y,
+        w,
+        h,
+        out,
+        jpeg_threshold,
+    )));
     Ok(())
 }
 
@@ -380,8 +418,8 @@ async fn send_set_pixel_format<W: AsyncWrite + Unpin>(wr: &mut W) -> Result<()> 
     // 32 bpp, depth 24, little-endian, true-colour, RGBA byte order
     // (red-shift 0, green 8, blue 16) so framebuffer bytes are [R,G,B,X].
     let mut msg = [0u8; 20];
-    msg[0] = 0; // SetPixelFormat
-    // msg[1..4] padding
+    // SetPixelFormat; msg[1..4] is padding.
+    msg[0] = 0;
     let pf = [
         32u8, 24, 0, 1, // bpp, depth, big-endian-flag, true-colour-flag
         0, 255, 0, 255, 0, 255, // red-max, green-max, blue-max (u16 BE)
@@ -394,7 +432,13 @@ async fn send_set_pixel_format<W: AsyncWrite + Unpin>(wr: &mut W) -> Result<()> 
 }
 
 async fn send_set_encodings<W: AsyncWrite + Unpin>(wr: &mut W) -> Result<()> {
-    let encodings: [i32; 5] = [ENC_ZLIB, ENC_COPY_RECT, ENC_RAW, ENC_CURSOR, ENC_DESKTOP_SIZE];
+    let encodings: [i32; 5] = [
+        ENC_COPY_RECT,
+        ENC_ZLIB,
+        ENC_RAW,
+        ENC_CURSOR,
+        ENC_DESKTOP_SIZE,
+    ];
     let mut msg = Vec::with_capacity(4 + encodings.len() * 4);
     msg.push(2u8); // SetEncodings
     msg.push(0u8); // padding
@@ -445,7 +489,12 @@ async fn write_input<W: AsyncWrite + Unpin>(
             st.y = *y;
             send_pointer(wr, st.mask, *x, *y).await?;
         }
-        InputEvent::PointerButton { x, y, button, pressed } => {
+        InputEvent::PointerButton {
+            x,
+            y,
+            button,
+            pressed,
+        } => {
             let bit = match button {
                 MouseButton::Left => 0x01,
                 MouseButton::Middle => 0x02,
@@ -469,7 +518,9 @@ async fn write_input<W: AsyncWrite + Unpin>(
             send_pointer(wr, st.mask | wheel, *x, *y).await?;
             send_pointer(wr, st.mask, *x, *y).await?;
         }
-        InputEvent::Key { keysym, pressed, .. } => {
+        InputEvent::Key {
+            keysym, pressed, ..
+        } => {
             send_key(wr, *keysym, *pressed).await?;
         }
         InputEvent::KeyUnicode { ch, pressed } => {
@@ -489,7 +540,11 @@ async fn send_client_cut_text<W: AsyncWrite + Unpin>(wr: &mut W, text: &str) -> 
         .chars()
         .map(|c| {
             let cp = c as u32;
-            if cp < 0x100 { cp as u8 } else { b'?' }
+            if cp < 0x100 {
+                cp as u8
+            } else {
+                b'?'
+            }
         })
         .collect();
     let mut msg = Vec::with_capacity(8 + latin1.len());
@@ -554,8 +609,8 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    use des::cipher::{BlockEncrypt, KeyInit};
     use des::cipher::generic_array::GenericArray;
+    use des::cipher::{BlockEncrypt, KeyInit};
     use des::Des;
 
     let mut challenge = [0u8; 16];
@@ -583,8 +638,8 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    use aes::cipher::{BlockEncrypt, KeyInit};
     use aes::cipher::generic_array::GenericArray;
+    use aes::cipher::{BlockEncrypt, KeyInit};
     use aes::Aes128;
     use md5::{Digest, Md5};
 

@@ -4,11 +4,12 @@
 //! on the remote host **without** downloading a local copy.
 //!
 //! We achieve this by running the remote host's own `sqlite3`
-//! CLI through [`crate::ssh::SshSession::exec_command`] and
-//! asking it to emit JSON (`-json` mode, introduced in SQLite
-//! 3.33). Each call opens a fresh ad-hoc channel, runs one SQL
-//! statement, and closes — stateless by design, aligning with
-//! the rest of pier-core's remote-service modules.
+//! CLI through [`crate::ssh::SshSession::exec_command`]. On
+//! SQLite ≥ 3.33 we ask it to emit JSON (`-json` mode); on older
+//! binaries we fall back to `-csv -header` (see "Version
+//! fallback"). Each call opens a fresh ad-hoc channel, runs one
+//! SQL statement, and closes — stateless by design, aligning
+//! with the rest of pier-core's remote-service modules.
 //!
 //! ## Shell safety
 //!
@@ -16,8 +17,11 @@
 //! metacharacters. Both the path and the SQL fragment are
 //! passed through single-quote-escape before being interpolated
 //! into the command string, which is the POSIX-portable way to
-//! pass arbitrary strings to `/bin/sh -c`. `sqlite3 --` is
-//! used to separate positional args from the SQL literal.
+//! pass arbitrary strings to `/bin/sh -c`. We do **not** use the
+//! `sqlite3 --` end-of-options marker — it only exists in sqlite
+//! ≥ 3.34 and older shells reject it as `unknown option: -` — so
+//! we rely on the path (absolute) and SQL (keyword-leading) not
+//! looking like CLI options, matching the local sqlite client.
 //!
 //! ## Result shape
 //!
@@ -28,10 +32,14 @@
 //!
 //! ## Version fallback
 //!
-//! Remote `sqlite3` < 3.33 doesn't support `-json`. Callers
-//! should first check [`remote_sqlite_version`] and flip the
-//! panel into "download copy" mode when the version is too old
-//! or the binary isn't installed at all.
+//! Remote `sqlite3` < 3.33 doesn't support `-json`. Callers pass
+//! the `supports_json` flag (from [`probe`]) into each query fn:
+//! `true` uses `-json`, `false` uses `sqlite3 -csv -header`, whose
+//! header row carries the column order natively. NULL and `''`
+//! both render as an empty field in either mode, matching the
+//! local `\x1f` separator path. Browsing therefore works on any
+//! installed `sqlite3` version; the panel only needs the
+//! install/`probe` flow when the binary is absent entirely.
 
 use std::collections::BTreeMap;
 
@@ -129,11 +137,16 @@ pub async fn probe(session: &SshSession) -> RemoteSqliteCapability {
 
 /// List tables on a remote `.db` file. Equivalent to
 /// `SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`.
-pub async fn list_tables(session: &SshSession, db_path: &str) -> Result<Vec<String>> {
+pub async fn list_tables(
+    session: &SshSession,
+    db_path: &str,
+    supports_json: bool,
+) -> Result<Vec<String>> {
     let rows = run_select_rows(
         session,
         db_path,
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        supports_json,
     )
     .await?;
     Ok(rows
@@ -147,10 +160,11 @@ pub async fn table_columns(
     session: &SshSession,
     db_path: &str,
     table: &str,
+    supports_json: bool,
 ) -> Result<Vec<ColumnInfo>> {
     let quoted = escape_sql_string(table);
     let sql = format!("PRAGMA table_info({quoted})");
-    let rows = run_select_rows(session, db_path, &sql).await?;
+    let rows = run_select_rows(session, db_path, &sql, supports_json).await?;
     Ok(rows
         .into_iter()
         .map(|row| ColumnInfo {
@@ -168,16 +182,22 @@ pub async fn preview_table(
     db_path: &str,
     table: &str,
     limit: usize,
+    supports_json: bool,
 ) -> Result<RemoteQueryResult> {
     let double_quoted = double_quote_ident(table);
     let sql = format!("SELECT * FROM {double_quoted} LIMIT {limit}");
-    run_query(session, db_path, &sql).await
+    run_query(session, db_path, &sql, supports_json).await
 }
 
 /// Execute arbitrary SQL. Writes go straight to the remote
 /// file; reads return rows.
-pub async fn execute(session: &SshSession, db_path: &str, sql: &str) -> Result<RemoteQueryResult> {
-    run_query(session, db_path, sql).await
+pub async fn execute(
+    session: &SshSession,
+    db_path: &str,
+    sql: &str,
+    supports_json: bool,
+) -> Result<RemoteQueryResult> {
+    run_query(session, db_path, sql, supports_json).await
 }
 
 // ─────────────────────────────────────────────────────────
@@ -188,8 +208,17 @@ async fn run_select_rows(
     session: &SshSession,
     db_path: &str,
     sql: &str,
+    supports_json: bool,
 ) -> Result<Vec<BTreeMap<String, String>>> {
-    let cmd = build_sqlite_json_command(db_path, sql);
+    // `-json` needs sqlite ≥ 3.33; on older servers fall back to
+    // `-csv -header`, which is present in every sqlite the user is
+    // likely to have. Both forms expose columns by name so the
+    // schema-introspection callers map fields the same way.
+    let cmd = if supports_json {
+        build_sqlite_json_command(db_path, sql)
+    } else {
+        build_sqlite_csv_command(db_path, sql)
+    };
     // Belt-and-braces: even with `.timeout 5000` baked into the command,
     // a contended writer can still slip past the wait window. Retry
     // exit-5 (`SQLITE_BUSY`) twice with a short backoff before giving
@@ -203,7 +232,12 @@ async fn run_select_rows(
         // root-owned `.db` becomes readable when the terminal is root.
         let (exit, stdout) = session.exec_with_sudo(&cmd).await?;
         if exit == 0 {
-            return parse_json_rows(&stdout).map_err(SshError::InvalidConfig);
+            return if supports_json {
+                parse_json_rows(&stdout).map_err(SshError::InvalidConfig)
+            } else {
+                let (columns, rows) = parse_csv_table(&stdout);
+                Ok(csv_rows_to_maps(&columns, rows))
+            };
         }
         if exit == 5 && attempt < 2 {
             attempt += 1;
@@ -218,19 +252,27 @@ async fn run_select_rows(
     }
 }
 
-async fn run_query(session: &SshSession, db_path: &str, sql: &str) -> Result<RemoteQueryResult> {
+async fn run_query(
+    session: &SshSession,
+    db_path: &str,
+    sql: &str,
+    supports_json: bool,
+) -> Result<RemoteQueryResult> {
     let started = std::time::Instant::now();
     let bounded_sql = bounded_read_sql(sql);
-    let cmd = build_sqlite_json_command(db_path, &bounded_sql);
+    let cmd = if supports_json {
+        build_sqlite_json_command(db_path, &bounded_sql)
+    } else {
+        build_sqlite_csv_command(db_path, &bounded_sql)
+    };
     let (exit, stdout) = session.exec_with_sudo(&cmd).await?;
     let elapsed_ms = started.elapsed().as_millis() as u64;
 
     if exit != 0 {
-        // sqlite3 writes errors to stderr, which our
-        // `exec_command` merges or drops depending on the
-        // server. Return a structured error rather than the
-        // generic SshError — the panel wants to surface this
-        // to the user's query editor as `result.error`.
+        // sqlite3 writes errors to stderr, which `exec_command`
+        // merges into the returned text. Return a structured error
+        // rather than the generic SshError — the panel wants to
+        // surface this to the user's query editor as `result.error`.
         return Ok(RemoteQueryResult {
             columns: Vec::new(),
             rows: Vec::new(),
@@ -242,51 +284,66 @@ async fn run_query(session: &SshSession, db_path: &str, sql: &str) -> Result<Rem
         });
     }
 
-    let rows = match parse_json_rows(&stdout) {
-        Ok(r) => r,
-        Err(e) => {
-            return Ok(RemoteQueryResult {
-                columns: Vec::new(),
-                rows: Vec::new(),
-                truncated: false,
-                affected_rows: 0,
-                last_insert_id: None,
-                elapsed_ms,
-                error: Some(e),
-            });
-        }
+    let (columns, grid, truncated) = if supports_json {
+        let rows = match parse_json_rows(&stdout) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(RemoteQueryResult {
+                    columns: Vec::new(),
+                    rows: Vec::new(),
+                    truncated: false,
+                    affected_rows: 0,
+                    last_insert_id: None,
+                    elapsed_ms,
+                    error: Some(e),
+                });
+            }
+        };
+        // Derive column order: use the first row's insertion order.
+        // BTreeMap alphabetises so we lose insertion order — but
+        // sqlite3 -json emits one JSON object per row with keys in
+        // column order, so we re-scan the raw text for the order.
+        let columns = extract_column_order(&stdout).unwrap_or_default();
+        let truncated = rows.len() > MAX_ROWS;
+        let grid: Vec<Vec<String>> = rows
+            .into_iter()
+            .take(MAX_ROWS)
+            .map(|row| {
+                columns
+                    .iter()
+                    .map(|col| row.get(col).cloned().unwrap_or_default())
+                    .map(cap_cell)
+                    .collect()
+            })
+            .collect();
+        (columns, grid, truncated)
+    } else {
+        // CSV path: the `-header` row carries the column order
+        // natively, so no JSON-key re-scan is needed. Rows are
+        // positional — pad short rows to the header width.
+        let (columns, rows) = parse_csv_table(&stdout);
+        let ncols = columns.len();
+        let truncated = rows.len() > MAX_ROWS;
+        let grid: Vec<Vec<String>> = rows
+            .into_iter()
+            .take(MAX_ROWS)
+            .map(|row| {
+                (0..ncols)
+                    .map(|i| row.get(i).cloned().unwrap_or_default())
+                    .map(cap_cell)
+                    .collect()
+            })
+            .collect();
+        (columns, grid, truncated)
     };
-
-    // Derive column order: use the first row's insertion order.
-    // BTreeMap alphabetises so we lose insertion order — but
-    // sqlite3 -json emits one JSON object per row with keys in
-    // column order, and we parse via `serde_json::Value` which
-    // preserves it when built through `Map<String, Value>`.
-    // We therefore re-parse to grab the ordered column list.
-    let columns = extract_column_order(&stdout).unwrap_or_default();
-
-    let truncated = rows.len() > MAX_ROWS;
-    let capped_rows = rows.into_iter().take(MAX_ROWS).collect::<Vec<_>>();
-    let grid: Vec<Vec<String>> = capped_rows
-        .iter()
-        .map(|row| {
-            columns
-                .iter()
-                .map(|col| row.get(col).cloned().unwrap_or_default())
-                .map(cap_cell)
-                .collect()
-        })
-        .collect();
 
     Ok(RemoteQueryResult {
         columns,
         rows: grid,
         truncated,
-        // sqlite3 -json doesn't surface `changes()` for
-        // DML — a follow-up query would (`SELECT changes()`)
-        // but that doubles round-trips; leave 0 for now and
-        // let write-path callers run it themselves if they
-        // care.
+        // sqlite3 doesn't surface `changes()` for DML through either
+        // output mode — a follow-up `SELECT changes()` would, but that
+        // doubles round-trips; leave 0 (matches the local sqlite path).
         affected_rows: 0,
         last_insert_id: None,
         elapsed_ms,
@@ -295,7 +352,7 @@ async fn run_query(session: &SshSession, db_path: &str, sql: &str) -> Result<Rem
 }
 
 /// Build the remote shell command:
-/// `sqlite3 -json -bail -cmd '.timeout 5000' -- <path> "<sql>"`.
+/// `sqlite3 -json -bail -cmd '.timeout 5000' <path> "<sql>"`.
 ///
 /// `-cmd '.timeout 5000'` runs `PRAGMA busy_timeout = 5000` before the
 /// user SQL, so the CLI waits up to five seconds for a competing writer
@@ -305,11 +362,33 @@ async fn run_query(session: &SshSession, db_path: &str, sql: &str) -> Result<Rem
 /// races our own previous query and surfaces a confusing error.
 ///
 /// Both the path and the SQL are single-quote-escaped, so any input is
-/// safe to interpolate into `/bin/sh -c`.
+/// safe to interpolate into `/bin/sh -c`. We deliberately do **not**
+/// use the `--` end-of-options marker: sqlite's CLI only learned it in
+/// 3.34, and older shells normalize `--` → `-` and reject it as
+/// `unknown option: -`. Instead we rely on the path (always absolute,
+/// `/…`) and the SQL (always starting with a keyword) not looking like
+/// options — the same approach the local [`crate::services::sqlite`]
+/// client uses.
 fn build_sqlite_json_command(db_path: &str, sql: &str) -> String {
     let path_q = shell_single_quote(db_path);
     let sql_q = shell_single_quote(sql);
-    format!("sqlite3 -json -bail -cmd '.timeout 5000' -- {path_q} {sql_q}")
+    format!("sqlite3 -json -bail -cmd '.timeout 5000' {path_q} {sql_q}")
+}
+
+/// Build the CSV fallback command for sqlite < 3.33 (no `-json`):
+/// `sqlite3 -csv -header -bail -cmd '.timeout 5000' <path> "<sql>"`.
+///
+/// `-csv`, `-header`, `-bail`, and `-cmd '.timeout N'` all predate
+/// 3.33, so this works on the old binaries that lack `-json`. The
+/// `-header` row gives the column order directly. NULL and `''` both
+/// render as an empty field — the same fidelity as the `-json` path
+/// (which maps JSON null → "") and the local `\x1f` separator path.
+/// See [`build_sqlite_json_command`] for why no `--` separator is
+/// used (it breaks on sqlite < 3.34).
+fn build_sqlite_csv_command(db_path: &str, sql: &str) -> String {
+    let path_q = shell_single_quote(db_path);
+    let sql_q = shell_single_quote(sql);
+    format!("sqlite3 -csv -header -bail -cmd '.timeout 5000' {path_q} {sql_q}")
 }
 
 fn bounded_read_sql(sql: &str) -> String {
@@ -493,6 +572,103 @@ fn cap_cell(mut s: String) -> String {
         s.push('…');
     }
     s
+}
+
+/// Parse `sqlite3 -csv -header` output into `(columns, rows)`. The
+/// first record is the header (column order); every subsequent record
+/// is a data row. NULL and `''` both arrive as empty fields, matching
+/// the `-json` path (json null → "") and the local `\x1f` path.
+///
+/// Empty stdout → `(vec![], vec![])`. A header with no following rows
+/// → columns set, rows empty.
+fn parse_csv_table(stdout: &str) -> (Vec<String>, Vec<Vec<String>>) {
+    let mut records = parse_csv_records(stdout).into_iter();
+    let columns = records.next().unwrap_or_default();
+    let rows = records.collect();
+    (columns, rows)
+}
+
+/// Map positional CSV rows onto column-name keys for the
+/// schema-introspection callers (`list_tables`, `table_columns`).
+fn csv_rows_to_maps(
+    columns: &[String],
+    rows: Vec<Vec<String>>,
+) -> Vec<BTreeMap<String, String>> {
+    rows.into_iter()
+        .map(|row| {
+            columns
+                .iter()
+                .cloned()
+                .zip(row.into_iter())
+                .collect::<BTreeMap<String, String>>()
+        })
+        .collect()
+}
+
+/// Minimal RFC-4180 reader for sqlite's `-csv` output: `"`-quoted
+/// fields with doubled inner quotes (`""` → `"`), and embedded
+/// commas / newlines preserved inside quotes. Every unquoted `\n`
+/// terminates a record.
+///
+/// Unlike [`crate::services::remote_db_cli`]'s CSV parser (built for
+/// Oracle/Dameng SQL*Plus, which pads blank separator lines), this
+/// keeps **all** records — including all-empty ones — so a SQLite
+/// row that is a single NULL/`''` column is never silently dropped.
+fn parse_csv_records(text: &str) -> Vec<Vec<String>> {
+    let mut records: Vec<Vec<String>> = Vec::new();
+    let mut field = String::new();
+    let mut record: Vec<String> = Vec::new();
+    let mut in_quotes = false;
+    // True once any byte of the current (not-yet-terminated) record has
+    // been seen — distinguishes a real trailing record from the empty
+    // tail after a final `\n`.
+    let mut pending = false;
+    let mut chars = text.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    field.push('"');
+                    chars.next();
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(c);
+            }
+            pending = true;
+            continue;
+        }
+        match c {
+            '"' => {
+                in_quotes = true;
+                pending = true;
+            }
+            ',' => {
+                record.push(std::mem::take(&mut field));
+                pending = true;
+            }
+            '\r' => {}
+            '\n' => {
+                record.push(std::mem::take(&mut field));
+                records.push(std::mem::take(&mut record));
+                pending = false;
+            }
+            _ => {
+                field.push(c);
+                pending = true;
+            }
+        }
+    }
+    // Flush a final record that wasn't newline-terminated. sqlite3
+    // normally terminates every row with `\n`, so this only fires on
+    // a truncated tail.
+    if pending || !field.is_empty() || !record.is_empty() {
+        record.push(field);
+        records.push(record);
+    }
+    records
 }
 
 /// Extract keys in the order they appear in the first object
@@ -686,16 +862,21 @@ pub fn stat_size_blocking(session: &SshSession, db_path: &str) -> Result<u64> {
     crate::ssh::runtime::shared().block_on(stat_size(session, db_path))
 }
 /// Blocking wrapper for [`list_tables`].
-pub fn list_tables_blocking(session: &SshSession, db_path: &str) -> Result<Vec<String>> {
-    crate::ssh::runtime::shared().block_on(list_tables(session, db_path))
+pub fn list_tables_blocking(
+    session: &SshSession,
+    db_path: &str,
+    supports_json: bool,
+) -> Result<Vec<String>> {
+    crate::ssh::runtime::shared().block_on(list_tables(session, db_path, supports_json))
 }
 /// Blocking wrapper for [`table_columns`].
 pub fn table_columns_blocking(
     session: &SshSession,
     db_path: &str,
     table: &str,
+    supports_json: bool,
 ) -> Result<Vec<ColumnInfo>> {
-    crate::ssh::runtime::shared().block_on(table_columns(session, db_path, table))
+    crate::ssh::runtime::shared().block_on(table_columns(session, db_path, table, supports_json))
 }
 /// Blocking wrapper for [`preview_table`].
 pub fn preview_table_blocking(
@@ -703,16 +884,18 @@ pub fn preview_table_blocking(
     db_path: &str,
     table: &str,
     limit: usize,
+    supports_json: bool,
 ) -> Result<RemoteQueryResult> {
-    crate::ssh::runtime::shared().block_on(preview_table(session, db_path, table, limit))
+    crate::ssh::runtime::shared().block_on(preview_table(session, db_path, table, limit, supports_json))
 }
 /// Blocking wrapper for [`execute`].
 pub fn execute_blocking(
     session: &SshSession,
     db_path: &str,
     sql: &str,
+    supports_json: bool,
 ) -> Result<RemoteQueryResult> {
-    crate::ssh::runtime::shared().block_on(execute(session, db_path, sql))
+    crate::ssh::runtime::shared().block_on(execute(session, db_path, sql, supports_json))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -763,11 +946,100 @@ mod tests {
 
     #[test]
     fn build_sqlite_json_command_composes_parts() {
+        // No `--` separator: it breaks on sqlite < 3.34 (normalized to
+        // `-` → "unknown option: -").
         let cmd = build_sqlite_json_command("/srv/app.db", "SELECT 1");
         assert_eq!(
             cmd,
-            "sqlite3 -json -bail -cmd '.timeout 5000' -- '/srv/app.db' 'SELECT 1'",
+            "sqlite3 -json -bail -cmd '.timeout 5000' '/srv/app.db' 'SELECT 1'",
         );
+        assert!(!cmd.contains(" -- "));
+    }
+
+    #[test]
+    fn build_sqlite_csv_command_composes_parts() {
+        let cmd = build_sqlite_csv_command("/srv/app.db", "SELECT 1");
+        assert_eq!(
+            cmd,
+            "sqlite3 -csv -header -bail -cmd '.timeout 5000' '/srv/app.db' 'SELECT 1'",
+        );
+        assert!(!cmd.contains(" -- "));
+    }
+
+    #[test]
+    fn parse_csv_table_header_and_rows() {
+        let (cols, rows) = parse_csv_table("id,name\n1,Ann\n2,Bo\n");
+        assert_eq!(cols, vec!["id", "name"]);
+        assert_eq!(rows, vec![vec!["1", "Ann"], vec!["2", "Bo"]]);
+    }
+
+    #[test]
+    fn parse_csv_table_header_only_yields_zero_rows() {
+        // A SELECT returning no rows emits just the `-header` line.
+        let (cols, rows) = parse_csv_table("name\n");
+        assert_eq!(cols, vec!["name"]);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn parse_csv_table_empty_stdout() {
+        // A statement returning no result set (DDL/DML) emits nothing.
+        let (cols, rows) = parse_csv_table("");
+        assert!(cols.is_empty());
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn parse_csv_table_preserves_column_order() {
+        let (cols, _) = parse_csv_table("id,name,age\n1,Ann,20\n");
+        assert_eq!(cols, vec!["id", "name", "age"]);
+    }
+
+    #[test]
+    fn parse_csv_table_keeps_all_empty_row() {
+        // Regression guard: a single-column NULL/'' row renders as an
+        // all-empty CSV record and must NOT be dropped (unlike the
+        // Oracle/Dameng parser's push_record).
+        let (cols, rows) = parse_csv_table("c\n\n");
+        assert_eq!(cols, vec!["c"]);
+        assert_eq!(rows, vec![vec![""]]);
+    }
+
+    #[test]
+    fn parse_csv_table_keeps_multi_column_all_empty_row() {
+        let (cols, rows) = parse_csv_table("a,b\n,\n");
+        assert_eq!(cols, vec!["a", "b"]);
+        assert_eq!(rows, vec![vec!["", ""]]);
+    }
+
+    #[test]
+    fn parse_csv_table_handles_quoting() {
+        // Embedded comma, doubled inner quote, and embedded newline.
+        let (cols, rows) =
+            parse_csv_table("a,b,c\n\"x,y\",\"he said \"\"hi\"\"\",\"line1\nline2\"\n");
+        assert_eq!(cols, vec!["a", "b", "c"]);
+        assert_eq!(
+            rows,
+            vec![vec!["x,y", "he said \"hi\"", "line1\nline2"]]
+        );
+    }
+
+    #[test]
+    fn parse_csv_table_null_renders_as_empty() {
+        // sqlite emits NULL as a bare empty field, indistinguishable
+        // from '' — matching json_value_to_cell(Null) -> "".
+        let (_, rows) = parse_csv_table("a,b\n1,\n");
+        assert_eq!(rows, vec![vec!["1", ""]]);
+    }
+
+    #[test]
+    fn csv_rows_to_maps_keys_by_header() {
+        let cols = vec!["name".to_string(), "type".to_string()];
+        let rows = vec![vec!["id".to_string(), "INTEGER".to_string()]];
+        let maps = csv_rows_to_maps(&cols, rows);
+        assert_eq!(maps.len(), 1);
+        assert_eq!(maps[0].get("name").map(String::as_str), Some("id"));
+        assert_eq!(maps[0].get("type").map(String::as_str), Some("INTEGER"));
     }
 
     #[test]

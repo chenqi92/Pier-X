@@ -1812,6 +1812,676 @@ const REGISTRY: &[PackageDescriptor] = &[
         version_variants: &[],
         category: "system",
     },
+    // ── Catalog expansion (v2.x) ───────────────────────────────────
+    //
+    // Further stateless tools that ship straight from the distro
+    // default repos (no upstream source, no credentials). The panel
+    // regroups everything by `category` at render time, so the
+    // physical order here only sets within-section ordering.
+
+    // -- Diagnostics / monitoring -----------------------------------
+    PackageDescriptor {
+        id: "btop",
+        display_name: "btop",
+        probe_command: "command -v btop >/dev/null 2>&1 && btop --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["btop"]),
+            (PackageManager::Dnf, &["btop"]),
+            (PackageManager::Yum, &["btop"]),
+            (PackageManager::Apk, &["btop"]),
+            (PackageManager::Pacman, &["btop"]),
+            (PackageManager::Zypper, &["btop"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("现代化资源监控 TUI，htop 的进阶替代品。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "btop",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "ncdu",
+        display_name: "ncdu",
+        probe_command: "command -v ncdu >/dev/null 2>&1 && ncdu -v 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["ncdu"]),
+            (PackageManager::Dnf, &["ncdu"]),
+            (PackageManager::Yum, &["ncdu"]),
+            (PackageManager::Apk, &["ncdu"]),
+            (PackageManager::Pacman, &["ncdu"]),
+            (PackageManager::Zypper, &["ncdu"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("交互式磁盘占用分析（du 的 TUI 版）。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "ncdu",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "iotop",
+        display_name: "iotop",
+        probe_command: "command -v iotop >/dev/null 2>&1 && iotop --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["iotop"]),
+            (PackageManager::Dnf, &["iotop"]),
+            (PackageManager::Yum, &["iotop"]),
+            (PackageManager::Apk, &["iotop"]),
+            (PackageManager::Pacman, &["iotop"]),
+            (PackageManager::Zypper, &["iotop"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("按进程查看磁盘 I/O（需 root 运行）。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "iotop",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "sysstat",
+        display_name: "sysstat (sar/iostat)",
+        probe_command: "command -v sar >/dev/null 2>&1 && sar -V 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["sysstat"]),
+            (PackageManager::Dnf, &["sysstat"]),
+            (PackageManager::Yum, &["sysstat"]),
+            (PackageManager::Apk, &["sysstat"]),
+            (PackageManager::Pacman, &["sysstat"]),
+            (PackageManager::Zypper, &["sysstat"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("sar / iostat / mpstat 历史性能采样工具集。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "sar",
+        config_paths: &["/etc/sysstat/sysstat", "/etc/sysconfig/sysstat"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "tree",
+        display_name: "tree",
+        probe_command: "command -v tree >/dev/null 2>&1 && tree --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["tree"]),
+            (PackageManager::Dnf, &["tree"]),
+            (PackageManager::Yum, &["tree"]),
+            (PackageManager::Apk, &["tree"]),
+            (PackageManager::Pacman, &["tree"]),
+            (PackageManager::Zypper, &["tree"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "tree",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "pv",
+        display_name: "pv (pipe viewer)",
+        probe_command: "command -v pv >/dev/null 2>&1 && pv --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["pv"]),
+            (PackageManager::Dnf, &["pv"]),
+            (PackageManager::Yum, &["pv"]),
+            (PackageManager::Apk, &["pv"]),
+            (PackageManager::Pacman, &["pv"]),
+            (PackageManager::Zypper, &["pv"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("管道进度条，给 dd / tar / gzip 等加可视化进度。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "pv",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "smartmontools",
+        display_name: "smartmontools (smartctl)",
+        probe_command: "command -v smartctl >/dev/null 2>&1 && smartctl --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["smartmontools"]),
+            (PackageManager::Dnf, &["smartmontools"]),
+            (PackageManager::Yum, &["smartmontools"]),
+            (PackageManager::Apk, &["smartmontools"]),
+            (PackageManager::Pacman, &["smartmontools"]),
+            (PackageManager::Zypper, &["smartmontools"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("查看磁盘 S.M.A.R.T. 健康状态。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "smartctl",
+        config_paths: &["/etc/smartd.conf"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "system",
+    },
+    PackageDescriptor {
+        id: "chrony",
+        display_name: "chrony (时间同步)",
+        probe_command: "command -v chronyc >/dev/null 2>&1 && chronyc --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["chrony"]),
+            (PackageManager::Dnf, &["chrony"]),
+            (PackageManager::Yum, &["chrony"]),
+            (PackageManager::Apk, &["chrony"]),
+            (PackageManager::Pacman, &["chrony"]),
+            (PackageManager::Zypper, &["chrony"]),
+        ],
+        // Debian ships the unit as `chrony`; RHEL/Fedora/Arch/SUSE as
+        // `chronyd`. Alpine uses OpenRC (no systemd) — omitted.
+        service_units: &[
+            (PackageManager::Apt, "chrony"),
+            (PackageManager::Dnf, "chronyd"),
+            (PackageManager::Yum, "chronyd"),
+            (PackageManager::Pacman, "chronyd"),
+            (PackageManager::Zypper, "chronyd"),
+        ],
+        data_dirs: &[],
+        notes: Some("NTP 时间同步守护进程，systemd-timesyncd 的功能更全替代。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "chronyc",
+        config_paths: &["/etc/chrony/chrony.conf", "/etc/chrony.conf"],
+        default_ports: &[123],
+        version_variants: &[],
+        category: "system",
+    },
+
+    // -- Network diagnostics ----------------------------------------
+    PackageDescriptor {
+        id: "tcpdump",
+        display_name: "tcpdump",
+        probe_command: "command -v tcpdump >/dev/null 2>&1 && tcpdump --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["tcpdump"]),
+            (PackageManager::Dnf, &["tcpdump"]),
+            (PackageManager::Yum, &["tcpdump"]),
+            (PackageManager::Apk, &["tcpdump"]),
+            (PackageManager::Pacman, &["tcpdump"]),
+            (PackageManager::Zypper, &["tcpdump"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "tcpdump",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "nmap",
+        display_name: "nmap",
+        probe_command: "command -v nmap >/dev/null 2>&1 && nmap --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["nmap"]),
+            (PackageManager::Dnf, &["nmap"]),
+            (PackageManager::Yum, &["nmap"]),
+            (PackageManager::Apk, &["nmap"]),
+            (PackageManager::Pacman, &["nmap"]),
+            (PackageManager::Zypper, &["nmap"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "nmap",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "mtr",
+        display_name: "mtr",
+        probe_command: "command -v mtr >/dev/null 2>&1 && mtr --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["mtr"]),
+            (PackageManager::Dnf, &["mtr"]),
+            (PackageManager::Yum, &["mtr"]),
+            (PackageManager::Apk, &["mtr"]),
+            (PackageManager::Pacman, &["mtr"]),
+            (PackageManager::Zypper, &["mtr"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("traceroute + ping 合一的实时网络路径诊断。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "mtr",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "traceroute",
+        display_name: "traceroute",
+        probe_command: "command -v traceroute >/dev/null 2>&1 && echo traceroute installed",
+        install_packages: &[
+            (PackageManager::Apt, &["traceroute"]),
+            (PackageManager::Dnf, &["traceroute"]),
+            (PackageManager::Yum, &["traceroute"]),
+            (PackageManager::Apk, &["traceroute"]),
+            (PackageManager::Pacman, &["traceroute"]),
+            (PackageManager::Zypper, &["traceroute"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "traceroute",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "socat",
+        display_name: "socat",
+        probe_command: "command -v socat >/dev/null 2>&1 && socat -V 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["socat"]),
+            (PackageManager::Dnf, &["socat"]),
+            (PackageManager::Yum, &["socat"]),
+            (PackageManager::Apk, &["socat"]),
+            (PackageManager::Pacman, &["socat"]),
+            (PackageManager::Zypper, &["socat"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("多功能双向数据转发（netcat 的超集）。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "socat",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "iperf3",
+        display_name: "iperf3",
+        probe_command: "command -v iperf3 >/dev/null 2>&1 && iperf3 --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["iperf3"]),
+            (PackageManager::Dnf, &["iperf3"]),
+            (PackageManager::Yum, &["iperf3"]),
+            (PackageManager::Apk, &["iperf3"]),
+            (PackageManager::Pacman, &["iperf3"]),
+            (PackageManager::Zypper, &["iperf3"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("带宽吞吐测试（需对端也跑 iperf3 -s）。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "iperf3",
+        config_paths: &[],
+        default_ports: &[5201],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "dnsutils",
+        display_name: "dnsutils (dig/nslookup)",
+        probe_command: "command -v dig >/dev/null 2>&1 && dig -v 2>&1 | head -1",
+        // Package name differs by family: debian dnsutils, rhel/suse
+        // bind-utils, alpine bind-tools, arch folds dig into `bind`.
+        install_packages: &[
+            (PackageManager::Apt, &["dnsutils"]),
+            (PackageManager::Dnf, &["bind-utils"]),
+            (PackageManager::Yum, &["bind-utils"]),
+            (PackageManager::Apk, &["bind-tools"]),
+            (PackageManager::Pacman, &["bind"]),
+            (PackageManager::Zypper, &["bind-utils"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("dig / nslookup / host —— DNS 排查三件套。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "dig",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "nethogs",
+        display_name: "nethogs",
+        probe_command: "command -v nethogs >/dev/null 2>&1 && nethogs -V 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["nethogs"]),
+            (PackageManager::Dnf, &["nethogs"]),
+            (PackageManager::Yum, &["nethogs"]),
+            (PackageManager::Apk, &["nethogs"]),
+            (PackageManager::Pacman, &["nethogs"]),
+            (PackageManager::Zypper, &["nethogs"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("按进程查看网络带宽占用（需 root 运行）。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "nethogs",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "iftop",
+        display_name: "iftop",
+        probe_command: "command -v iftop >/dev/null 2>&1 && iftop -h 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["iftop"]),
+            (PackageManager::Dnf, &["iftop"]),
+            (PackageManager::Yum, &["iftop"]),
+            (PackageManager::Apk, &["iftop"]),
+            (PackageManager::Pacman, &["iftop"]),
+            (PackageManager::Zypper, &["iftop"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("按连接实时查看网络流量（需 root 运行）。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "iftop",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+    PackageDescriptor {
+        id: "ethtool",
+        display_name: "ethtool",
+        probe_command: "command -v ethtool >/dev/null 2>&1 && ethtool --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["ethtool"]),
+            (PackageManager::Dnf, &["ethtool"]),
+            (PackageManager::Yum, &["ethtool"]),
+            (PackageManager::Apk, &["ethtool"]),
+            (PackageManager::Pacman, &["ethtool"]),
+            (PackageManager::Zypper, &["ethtool"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("查看 / 调整网卡硬件参数（速率、双工、offload）。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "ethtool",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "network",
+    },
+
+    // -- Development -------------------------------------------------
+    PackageDescriptor {
+        id: "gdb",
+        display_name: "GDB",
+        probe_command: "command -v gdb >/dev/null 2>&1 && gdb --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["gdb"]),
+            (PackageManager::Dnf, &["gdb"]),
+            (PackageManager::Yum, &["gdb"]),
+            (PackageManager::Apk, &["gdb"]),
+            (PackageManager::Pacman, &["gdb"]),
+            (PackageManager::Zypper, &["gdb"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: None,
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "gdb",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "dev",
+    },
+    PackageDescriptor {
+        id: "valgrind",
+        display_name: "Valgrind",
+        probe_command: "command -v valgrind >/dev/null 2>&1 && valgrind --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["valgrind"]),
+            (PackageManager::Dnf, &["valgrind"]),
+            (PackageManager::Yum, &["valgrind"]),
+            (PackageManager::Apk, &["valgrind"]),
+            (PackageManager::Pacman, &["valgrind"]),
+            (PackageManager::Zypper, &["valgrind"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("内存错误 / 泄漏检测（memcheck 等）。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "valgrind",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "dev",
+    },
+    PackageDescriptor {
+        id: "clang",
+        display_name: "Clang / LLVM",
+        probe_command: "command -v clang >/dev/null 2>&1 && clang --version 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["clang"]),
+            (PackageManager::Dnf, &["clang"]),
+            (PackageManager::Yum, &["clang"]),
+            (PackageManager::Apk, &["clang"]),
+            (PackageManager::Pacman, &["clang"]),
+            (PackageManager::Zypper, &["clang"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("LLVM C/C++ 编译器，GCC 之外的另一条工具链。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "clang",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "dev",
+    },
+    PackageDescriptor {
+        id: "shellcheck",
+        display_name: "ShellCheck",
+        probe_command: "command -v shellcheck >/dev/null 2>&1 && shellcheck --version 2>&1 | head -2 | tail -1",
+        // dnf/zypper capitalise the package as `ShellCheck`.
+        install_packages: &[
+            (PackageManager::Apt, &["shellcheck"]),
+            (PackageManager::Dnf, &["ShellCheck"]),
+            (PackageManager::Yum, &["ShellCheck"]),
+            (PackageManager::Apk, &["shellcheck"]),
+            (PackageManager::Pacman, &["shellcheck"]),
+            (PackageManager::Zypper, &["ShellCheck"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("Shell 脚本静态检查器。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "shellcheck",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "dev",
+    },
+    PackageDescriptor {
+        id: "podman",
+        display_name: "Podman",
+        probe_command: "command -v podman >/dev/null 2>&1 && podman --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["podman"]),
+            (PackageManager::Dnf, &["podman"]),
+            (PackageManager::Yum, &["podman"]),
+            (PackageManager::Apk, &["podman"]),
+            (PackageManager::Pacman, &["podman"]),
+            (PackageManager::Zypper, &["podman"]),
+        ],
+        service_units: &[],
+        data_dirs: &["/var/lib/containers"],
+        notes: Some("无守护进程的容器引擎，命令与 Docker 基本兼容。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "podman",
+        config_paths: &["/etc/containers"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "container",
+    },
+
+    // -- Runtimes ----------------------------------------------------
+    PackageDescriptor {
+        id: "ruby",
+        display_name: "Ruby",
+        probe_command: "command -v ruby >/dev/null 2>&1 && ruby --version 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["ruby"]),
+            (PackageManager::Dnf, &["ruby"]),
+            (PackageManager::Yum, &["ruby"]),
+            (PackageManager::Apk, &["ruby"]),
+            (PackageManager::Pacman, &["ruby"]),
+            (PackageManager::Zypper, &["ruby"]),
+        ],
+        service_units: &[],
+        data_dirs: &[],
+        notes: Some("发行版仓库版本可能滞后；需要新版本可用 rbenv / ruby-install。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "ruby",
+        config_paths: &[],
+        default_ports: &[],
+        version_variants: &[],
+        category: "runtime",
+    },
+
+    // -- Web servers / proxies (stateless install; no credentials) --
+    PackageDescriptor {
+        id: "haproxy",
+        display_name: "HAProxy",
+        probe_command: "command -v haproxy >/dev/null 2>&1 && haproxy -v 2>&1 | head -1",
+        install_packages: &[
+            (PackageManager::Apt, &["haproxy"]),
+            (PackageManager::Dnf, &["haproxy"]),
+            (PackageManager::Yum, &["haproxy"]),
+            (PackageManager::Apk, &["haproxy"]),
+            (PackageManager::Pacman, &["haproxy"]),
+            (PackageManager::Zypper, &["haproxy"]),
+        ],
+        service_units: &[
+            (PackageManager::Apt, "haproxy"),
+            (PackageManager::Dnf, "haproxy"),
+            (PackageManager::Yum, "haproxy"),
+            (PackageManager::Pacman, "haproxy"),
+            (PackageManager::Zypper, "haproxy"),
+        ],
+        data_dirs: &[],
+        notes: Some("高性能 TCP/HTTP 负载均衡器。"),
+        supports_reload: true,
+        vendor_script: None,
+        binary_name: "haproxy",
+        config_paths: &["/etc/haproxy/haproxy.cfg"],
+        default_ports: &[],
+        version_variants: &[],
+        category: "web",
+    },
+    PackageDescriptor {
+        id: "apache",
+        display_name: "Apache HTTP Server",
+        // Debian/SUSE: apache2 + apache2ctl; RHEL/Arch: httpd. Probe
+        // either binary; service + package names diverge per family.
+        probe_command: "command -v apache2 >/dev/null 2>&1 && apache2 -v 2>&1 | head -1 || { command -v httpd >/dev/null 2>&1 && httpd -v 2>&1 | head -1; }",
+        install_packages: &[
+            (PackageManager::Apt, &["apache2"]),
+            (PackageManager::Dnf, &["httpd"]),
+            (PackageManager::Yum, &["httpd"]),
+            (PackageManager::Apk, &["apache2"]),
+            (PackageManager::Pacman, &["apache"]),
+            (PackageManager::Zypper, &["apache2"]),
+        ],
+        service_units: &[
+            (PackageManager::Apt, "apache2"),
+            (PackageManager::Dnf, "httpd"),
+            (PackageManager::Yum, "httpd"),
+            (PackageManager::Pacman, "httpd"),
+            (PackageManager::Zypper, "apache2"),
+        ],
+        data_dirs: &[],
+        notes: Some("经典 Apache httpd；如果只需反代/静态站，nginx 通常更轻。"),
+        supports_reload: true,
+        vendor_script: None,
+        binary_name: "",
+        config_paths: &["/etc/apache2", "/etc/httpd"],
+        default_ports: &[80, 443],
+        version_variants: &[],
+        category: "web",
+    },
+
+    // -- Cache / store (stateless install; auth optional) -----------
+    PackageDescriptor {
+        id: "memcached",
+        display_name: "Memcached",
+        probe_command: "command -v memcached >/dev/null 2>&1 && memcached -V 2>&1",
+        install_packages: &[
+            (PackageManager::Apt, &["memcached"]),
+            (PackageManager::Dnf, &["memcached"]),
+            (PackageManager::Yum, &["memcached"]),
+            (PackageManager::Apk, &["memcached"]),
+            (PackageManager::Pacman, &["memcached"]),
+            (PackageManager::Zypper, &["memcached"]),
+        ],
+        service_units: &[
+            (PackageManager::Apt, "memcached"),
+            (PackageManager::Dnf, "memcached"),
+            (PackageManager::Yum, "memcached"),
+            (PackageManager::Pacman, "memcached"),
+            (PackageManager::Zypper, "memcached"),
+        ],
+        data_dirs: &[],
+        notes: Some("纯内存 KV 缓存；默认监听本机，对外暴露前请加防火墙/SASL。"),
+        supports_reload: false,
+        vendor_script: None,
+        binary_name: "memcached",
+        config_paths: &["/etc/memcached.conf", "/etc/sysconfig/memcached"],
+        default_ports: &[11211],
+        version_variants: &[],
+        category: "database",
+    },
 ];
 
 /// Look up a descriptor by id. `None` means "not in registry".
@@ -1901,6 +2571,26 @@ const BUNDLES: &[SoftwareBundle] = &[
         display_name: "运维诊断扩展",
         description: "htop + lsof + strace + net-tools + tcpdump 替代品 less + ripgrep — 完整的 troubleshooting 套件",
         package_ids: &["htop", "lsof", "strace", "net-tools", "less", "ripgrep"],
+    },
+    SoftwareBundle {
+        id: "observability",
+        display_name: "可观测性",
+        description: "btop + sysstat + iotop + nethogs + ncdu — 资源 / IO / 网络 / 磁盘占用一把抓",
+        package_ids: &["btop", "sysstat", "iotop", "nethogs", "ncdu"],
+    },
+    SoftwareBundle {
+        id: "netdiag",
+        display_name: "网络诊断",
+        description: "tcpdump + nmap + mtr + traceroute + dnsutils + socat + iperf3 — 抓包 / 扫描 / 路径 / DNS / 吞吐",
+        package_ids: &[
+            "tcpdump", "nmap", "mtr", "traceroute", "dnsutils", "socat", "iperf3",
+        ],
+    },
+    SoftwareBundle {
+        id: "c-dev",
+        display_name: "C / C++ 开发",
+        description: "gcc + clang + make + cmake + gdb + valgrind + git — 原生编译调试工具链",
+        package_ids: &["gcc", "clang", "make", "cmake", "gdb", "valgrind", "git"],
     },
 ];
 
@@ -2358,6 +3048,75 @@ volumes:
   es-data:
 "#,
         published_ports: &[5601, 9200],
+    },
+    ComposeTemplate {
+        id: "minio",
+        display_name: "MinIO (S3 对象存储)",
+        description:
+            "MinIO 对象存储：S3 API 在 :9000，控制台在 :9001。默认账号 minioadmin/minioadmin —— 务必修改！",
+        yaml: r#"services:
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+volumes:
+  minio-data:
+"#,
+        published_ports: &[9000, 9001],
+    },
+    ComposeTemplate {
+        id: "rustfs",
+        display_name: "RustFS (S3 对象存储)",
+        description:
+            "RustFS：Rust 编写的 S3 兼容对象存储，监听 :9000。默认密钥 rustfsadmin/rustfsadmin —— 务必修改！",
+        yaml: r#"services:
+  rustfs:
+    image: rustfs/rustfs:latest
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "9000:9000"
+    volumes:
+      - rustfs-data:/data
+
+volumes:
+  rustfs-data:
+"#,
+        published_ports: &[9000],
+    },
+    ComposeTemplate {
+        id: "mongodb",
+        display_name: "MongoDB 7",
+        description:
+            "MongoDB 7 单节点，开启 root 鉴权，监听 :27017。默认账号 admin/changeme —— 务必修改！",
+        yaml: r#"services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: changeme
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  mongo-data:
+"#,
+        published_ports: &[27017],
     },
 ];
 
@@ -4044,6 +4803,489 @@ pub fn redis_set_password_blocking(
 /// Blocking wrapper for [`redis_open_remote`].
 pub fn redis_open_remote_blocking(session: &SshSession) -> Result<PostgresActionReport> {
     crate::ssh::runtime::shared().block_on(redis_open_remote(session))
+}
+
+// ── Guided provisioning (v2.x) ─────────────────────────────────────
+//
+// "安装不仅仅是装上" — several services need an admin account / password
+// before they're usable (object storage, fresh DBs). This generalizes
+// the per-DB helpers above into one declarative form + an audited
+// dispatch, and adds a "binary release → systemd service" install
+// channel for software that isn't in any distro repo (MinIO).
+//
+// Security boundary (mirrors `vendor_script`): the *form schema* is
+// open data, but the commands that consume the values are hardcoded
+// Rust keyed by `handler`. Secrets are validated, fed to the remote
+// inside the sudo'd shell, scrubbed from the echoed command and the
+// returned output, and never written to history.
+
+/// Input kind for one provisioning field — drives the widget the
+/// panel renders and its client-side validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProvisionFieldKind {
+    Text,
+    Password,
+    Port,
+    Path,
+    Bool,
+}
+
+/// One field in a software's guided setup form.
+#[derive(Debug, Clone, Copy)]
+pub struct ProvisionField {
+    /// Stable key echoed back in the submitted values map.
+    pub key: &'static str,
+    /// Human label.
+    pub label: &'static str,
+    pub kind: ProvisionFieldKind,
+    /// Prefilled default. NEVER a real secret — password fields leave
+    /// this empty and the UI offers a "generate" button.
+    pub default: &'static str,
+    pub required: bool,
+    /// Mask in the UI; offer a random generator; never logged.
+    pub secret: bool,
+    /// One-line hint under the field.
+    pub help: &'static str,
+}
+
+/// Declarative spec for a software's guided "configure account /
+/// password" step.
+#[derive(Debug, Clone, Copy)]
+pub struct ProvisionSpec {
+    /// Key this configures. For post-install config (redis/postgres/
+    /// mariadb) it matches a `registry()` id so the panel can attach a
+    /// "配置" action to the installed row. For standalone guided
+    /// installers (minio) it's its own id surfaced in a separate card
+    /// section.
+    pub id: &'static str,
+    pub title: &'static str,
+    pub summary: &'static str,
+    pub fields: &'static [ProvisionField],
+    /// Surface the form automatically right after a successful install
+    /// (the "install → configure" flow). `false` for standalone
+    /// installers where the form *is* the install.
+    pub prompt_after_install: bool,
+    /// `true` when this spec installs software itself (binary channel)
+    /// rather than configuring an already-installed package. The panel
+    /// renders these as "安装并配置" cards instead of a row action.
+    pub is_installer: bool,
+    /// Stable handler id dispatched by `provision_apply`.
+    pub handler: &'static str,
+}
+
+const PROVISION_SPECS: &[ProvisionSpec] = &[
+    ProvisionSpec {
+        id: "redis",
+        title: "Redis 访问密码",
+        summary: "为 Redis 设置 requirepass 并重启服务。对外暴露的实例务必设置。",
+        fields: &[ProvisionField {
+            key: "password",
+            label: "密码",
+            kind: ProvisionFieldKind::Password,
+            default: "",
+            required: true,
+            secret: true,
+            help: "写入 redis.conf 的 requirepass。",
+        }],
+        prompt_after_install: true,
+        is_installer: false,
+        handler: "redis-password",
+    },
+    ProvisionSpec {
+        id: "postgres",
+        title: "PostgreSQL 应用账号",
+        summary: "创建一个登录角色和同名数据库（幂等；角色已存在则改密码）。",
+        fields: &[
+            ProvisionField {
+                key: "username",
+                label: "用户名",
+                kind: ProvisionFieldKind::Text,
+                default: "app",
+                required: true,
+                secret: false,
+                help: "",
+            },
+            ProvisionField {
+                key: "password",
+                label: "密码",
+                kind: ProvisionFieldKind::Password,
+                default: "",
+                required: true,
+                secret: true,
+                help: "",
+            },
+            ProvisionField {
+                key: "database",
+                label: "数据库",
+                kind: ProvisionFieldKind::Text,
+                default: "app",
+                required: true,
+                secret: false,
+                help: "归该用户所有。",
+            },
+        ],
+        prompt_after_install: true,
+        is_installer: false,
+        handler: "postgres-appuser",
+    },
+    ProvisionSpec {
+        id: "mariadb",
+        title: "MySQL / MariaDB 应用账号",
+        summary: "创建一个用户和同名数据库并授权（幂等）。",
+        fields: &[
+            ProvisionField {
+                key: "username",
+                label: "用户名",
+                kind: ProvisionFieldKind::Text,
+                default: "app",
+                required: true,
+                secret: false,
+                help: "",
+            },
+            ProvisionField {
+                key: "password",
+                label: "密码",
+                kind: ProvisionFieldKind::Password,
+                default: "",
+                required: true,
+                secret: true,
+                help: "",
+            },
+            ProvisionField {
+                key: "database",
+                label: "数据库",
+                kind: ProvisionFieldKind::Text,
+                default: "app",
+                required: true,
+                secret: false,
+                help: "授予该用户全部权限。",
+            },
+        ],
+        prompt_after_install: true,
+        is_installer: false,
+        handler: "mysql-appuser",
+    },
+    ProvisionSpec {
+        id: "minio",
+        title: "MinIO 对象存储（原生安装）",
+        summary: "下载官方二进制，建 systemd 服务并设置 root 账号；安装即配置。需要目标机有 systemd。",
+        fields: &[
+            ProvisionField {
+                key: "root_user",
+                label: "Root 用户",
+                kind: ProvisionFieldKind::Text,
+                default: "minioadmin",
+                required: true,
+                secret: false,
+                help: "MINIO_ROOT_USER；建议改掉默认值。",
+            },
+            ProvisionField {
+                key: "root_password",
+                label: "Root 密码",
+                kind: ProvisionFieldKind::Password,
+                default: "",
+                required: true,
+                secret: true,
+                help: "至少 8 位；MINIO_ROOT_PASSWORD。",
+            },
+            ProvisionField {
+                key: "api_port",
+                label: "API 端口",
+                kind: ProvisionFieldKind::Port,
+                default: "9000",
+                required: false,
+                secret: false,
+                help: "S3 API 监听端口。",
+            },
+            ProvisionField {
+                key: "console_port",
+                label: "控制台端口",
+                kind: ProvisionFieldKind::Port,
+                default: "9001",
+                required: false,
+                secret: false,
+                help: "Web 控制台监听端口。",
+            },
+            ProvisionField {
+                key: "data_dir",
+                label: "数据目录",
+                kind: ProvisionFieldKind::Path,
+                default: "/var/lib/minio",
+                required: false,
+                secret: false,
+                help: "对象数据存放路径（绝对路径）。",
+            },
+        ],
+        prompt_after_install: false,
+        is_installer: true,
+        handler: "minio-native",
+    },
+    // NOTE: rustfs 原生安装（systemd）暂未内置——其 release 资产命名与
+    // 服务端 CLI/环境变量需对照真实发行版确认，避免内置一个跑不通的安装
+    // 脚本误导用户。rustfs 目前走 Compose 模板（见 compose_templates）。
+];
+
+/// Look up a provisioning spec by id. `None` = no guided step.
+pub fn provision_spec(id: &str) -> Option<&'static ProvisionSpec> {
+    PROVISION_SPECS.iter().find(|s| s.id == id)
+}
+
+/// All provisioning specs (post-install config + standalone installers).
+pub fn provision_specs() -> &'static [ProvisionSpec] {
+    PROVISION_SPECS
+}
+
+fn provision_field<'a>(
+    values: &'a std::collections::HashMap<String, String>,
+    key: &str,
+) -> Option<&'a str> {
+    values
+        .get(key)
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+}
+
+fn provision_required<'a>(
+    values: &'a std::collections::HashMap<String, String>,
+    key: &str,
+) -> Result<&'a str> {
+    provision_field(values, key)
+        .ok_or_else(|| SshError::InvalidConfig(format!("缺少必填项: {key}")))
+}
+
+/// Reject anything that isn't a plain `[A-Za-z0-9._-]` token — these
+/// values are inlined into the install shell, so they must not carry
+/// quotes / whitespace / shell metacharacters.
+fn provision_token(s: &str, what: &str) -> Result<()> {
+    let ok = !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.');
+    if ok {
+        Ok(())
+    } else {
+        Err(SshError::InvalidConfig(format!(
+            "{what} 非法（仅允许字母、数字、. _ -）"
+        )))
+    }
+}
+
+fn provision_port(
+    values: &std::collections::HashMap<String, String>,
+    key: &str,
+    default: u16,
+) -> Result<u16> {
+    match provision_field(values, key) {
+        None => Ok(default),
+        Some(v) => v
+            .parse::<u16>()
+            .map_err(|_| SshError::InvalidConfig(format!("端口 {key} 非法"))),
+    }
+}
+
+fn provision_abs_path(s: &str) -> Result<()> {
+    let bad = !s.starts_with('/')
+        || s.contains('\'')
+        || s.contains(';')
+        || s.contains('\n')
+        || s.contains("..");
+    if bad {
+        Err(SshError::InvalidConfig(
+            "数据目录必须是绝对路径且不含 ' ; .. 等字符".into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Build a `PostgresActionReport` from a raw exec result. `command` is
+/// the **redacted** echo (secrets already stripped by the caller).
+fn provision_report(
+    command: String,
+    exit_code: i32,
+    output: String,
+    is_root: bool,
+) -> PostgresActionReport {
+    let output_tail = output
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let status = if exit_code == 0 {
+        "ok"
+    } else if !is_root && looks_like_sudo_password_prompt(&output_tail) {
+        "sudo-requires-password"
+    } else {
+        "failed"
+    };
+    PostgresActionReport {
+        status: status.to_string(),
+        command,
+        exit_code,
+        output_tail,
+    }
+}
+
+/// Apply a guided provisioning step. `values` carries the submitted
+/// field values keyed by [`ProvisionField::key`]. Every branch is
+/// audited Rust — there is no path from user input to an arbitrary
+/// remote command.
+pub async fn provision_apply(
+    session: &SshSession,
+    id: &str,
+    values: &std::collections::HashMap<String, String>,
+) -> Result<PostgresActionReport> {
+    let spec = provision_spec(id)
+        .ok_or_else(|| SshError::InvalidConfig(format!("未知的配置项: {id}")))?;
+    match spec.handler {
+        "redis-password" => {
+            let pw = provision_required(values, "password")?;
+            redis_set_password(session, pw).await
+        }
+        "postgres-appuser" => {
+            let user = provision_required(values, "username")?;
+            let pass = provision_required(values, "password")?;
+            let db = provision_required(values, "database")?;
+            let r = postgres_create_user(session, user, pass, false).await?;
+            if r.status != "ok" {
+                return Ok(r);
+            }
+            postgres_create_db(session, db, user).await
+        }
+        "mysql-appuser" => {
+            let user = provision_required(values, "username")?;
+            let pass = provision_required(values, "password")?;
+            let db = provision_required(values, "database")?;
+            let r = mysql_create_db(session, db, None).await?;
+            if r.status != "ok" {
+                return Ok(r);
+            }
+            mysql_create_user(session, user, pass, db, None).await
+        }
+        "minio-native" => minio_install_native(session, values).await,
+        other => Err(SshError::InvalidConfig(format!("未知 handler: {other}"))),
+    }
+}
+
+/// Blocking wrapper for [`provision_apply`].
+pub fn provision_apply_blocking(
+    session: &SshSession,
+    id: &str,
+    values: &std::collections::HashMap<String, String>,
+) -> Result<PostgresActionReport> {
+    crate::ssh::runtime::shared().block_on(provision_apply(session, id, values))
+}
+
+/// Shell body of the MinIO native installer. Uses only shell/env
+/// variables (no Rust interpolation) so it can live as a static raw
+/// string: ROOT_USER / API_PORT / CONSOLE_PORT / DATA_DIR are set in a
+/// header prepended by the caller, MINIO_ROOT_PASSWORD comes from the
+/// exported (redacted-in-echo) env var.
+const MINIO_INSTALL_BODY: &str = r#"
+set -e
+command -v systemctl >/dev/null 2>&1 || { echo "需要 systemd（未找到 systemctl）" >&2; exit 1; }
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64|amd64) MARCH=amd64 ;;
+  aarch64|arm64) MARCH=arm64 ;;
+  *) echo "不支持的架构: $ARCH" >&2; exit 1 ;;
+esac
+URL="https://dl.min.io/server/minio/release/linux-${MARCH}/minio"
+echo "下载 $URL"
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "$URL" -o /usr/local/bin/minio.new
+else
+  wget -qO /usr/local/bin/minio.new "$URL"
+fi
+chmod +x /usr/local/bin/minio.new
+mv -f /usr/local/bin/minio.new /usr/local/bin/minio
+id minio-user >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin minio-user 2>/dev/null || useradd -r -s /sbin/nologin minio-user 2>/dev/null || true
+mkdir -p "$DATA_DIR"
+chown -R minio-user:minio-user "$DATA_DIR" 2>/dev/null || true
+umask 077
+cat > /etc/default/minio <<EOF
+MINIO_VOLUMES="$DATA_DIR"
+MINIO_OPTS="--address :$API_PORT --console-address :$CONSOLE_PORT"
+MINIO_ROOT_USER=$ROOT_USER
+MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD
+EOF
+chmod 600 /etc/default/minio
+cat > /etc/systemd/system/minio.service <<'UNIT'
+[Unit]
+Description=MinIO Object Storage
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=minio-user
+Group=minio-user
+EnvironmentFile=/etc/default/minio
+ExecStart=/usr/local/bin/minio server $MINIO_OPTS $MINIO_VOLUMES
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable minio >/dev/null 2>&1 || true
+systemctl restart minio
+sleep 1
+if systemctl is-active minio >/dev/null 2>&1; then
+  echo "OK MinIO 已启动，控制台端口 :$CONSOLE_PORT"
+else
+  echo "MinIO 启动失败，请查看: journalctl -u minio -n 50" >&2
+  exit 1
+fi
+"#;
+
+/// Install MinIO as a native systemd service and seed the root
+/// account. Non-secrets are validated and inlined; the root password
+/// is exported into the sudo'd shell, redacted from the echoed command
+/// and scrubbed from the returned output.
+async fn minio_install_native(
+    session: &SshSession,
+    values: &std::collections::HashMap<String, String>,
+) -> Result<PostgresActionReport> {
+    let root_user = provision_required(values, "root_user")?;
+    provision_token(root_user, "Root 用户名")?;
+    let root_password = provision_required(values, "root_password")?;
+    if root_password.len() < 8 {
+        return Err(SshError::InvalidConfig("Root 密码至少 8 位".into()));
+    }
+    let api_port = provision_port(values, "api_port", 9000)?;
+    let console_port = provision_port(values, "console_port", 9001)?;
+    let data_dir = provision_field(values, "data_dir").unwrap_or("/var/lib/minio");
+    provision_abs_path(data_dir)?;
+
+    let env = probe_host_env(session).await;
+    let header = format!(
+        "ROOT_USER={ru}\nAPI_PORT={ap}\nCONSOLE_PORT={cp}\nDATA_DIR={dd}\n",
+        ru = shell_single_quote(root_user),
+        ap = api_port,
+        cp = console_port,
+        dd = shell_single_quote(data_dir),
+    );
+    let script = format!(
+        "export MINIO_ROOT_PASSWORD={pw}\n{header}{body}",
+        pw = shell_single_quote(root_password),
+        header = header,
+        body = MINIO_INSTALL_BODY,
+    );
+    let redacted_script = format!(
+        "export MINIO_ROOT_PASSWORD='***'\n{header}{body}",
+        header = header,
+        body = MINIO_INSTALL_BODY,
+    );
+    let command = format!("sh -c {}", shell_single_quote(&script));
+    let redacted_command = format!("sh -c {}", shell_single_quote(&redacted_script));
+    let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
+    let stdout = sanitize_sudo_output(&stdout, Some(root_password));
+    Ok(provision_report(redacted_command, exit_code, stdout, env.is_root))
 }
 
 /// Quote an SQL identifier (`"..."`) — escaping internal `"`.

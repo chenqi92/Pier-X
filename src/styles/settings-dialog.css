@@ -389,6 +389,56 @@
   font-weight: var(--weight-medium);
   line-height: 1;
 }
+/* Per-row controls: edit / reset buttons (rebindable rows) or a lock
+   indicator (rows owned by the OS, editor, or dev tools). */
+.keymap-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: none;
+  margin-left: var(--sp-1);
+}
+.keymap-lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  color: var(--dim);
+}
+/* Capture cap shown while recording a new chord. */
+.keymap-recorder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  height: 20px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-xs);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  line-height: 1;
+  outline: none;
+  cursor: text;
+  white-space: nowrap;
+}
+.keymap-recorder--error {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 2px var(--warn-dim);
+  color: var(--warn);
+}
+.keymap-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+.keymap-footer .settings__row-desc { flex: 1; margin: 0; }
+.keymap-footer .btn { flex: none; }
 
 /* ── Settings · About pane ──────────────────────────────────── */
 .about-card {

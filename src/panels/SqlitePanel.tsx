@@ -105,7 +105,10 @@ function SqlitePanelBody({ tab }: Props) {
   // by running `sqlite3` via `sudo`/`sudo -u <effective user>` after a
   // permission-denied, following the terminal's `su root` / `sudo -i`.
   const elev = useSudoElevation(tab);
-  /** SSH addressing + elevation args for every remote SQLite call. */
+  /** SSH addressing + elevation args for every remote SQLite call.
+   *  `supportsJson` picks the backend wire format: `-json` on sqlite
+   *  ≥ 3.33, `-csv -header` fallback on older binaries (both work — it
+   *  only optimises the format, never gates access). */
   const remoteBase = () => ({
     host: sshTarget?.host ?? "",
     port: sshTarget?.port ?? 22,
@@ -114,6 +117,8 @@ function SqlitePanelBody({ tab }: Props) {
     password: sshTarget?.password ?? "",
     keyPath: sshTarget?.keyPath ?? "",
     savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
+    supportsJson:
+      remoteStatus.kind === "installed" ? remoteStatus.supportsJson : true,
     ...elev.getElevationArgs(),
   });
 
@@ -155,8 +160,12 @@ function SqlitePanelBody({ tab }: Props) {
   const [scanInputTouched, setScanInputTouched] = useState(false);
   const [manualPath, setManualPath] = useState("");
 
-  const isRemoteMode =
-    sshReady && remoteStatus.kind === "installed" && remoteStatus.supportsJson;
+  // Remote mode whenever sqlite3 is installed on the host — regardless
+  // of version. The wire format (`-json` vs `-csv`) is chosen per-call
+  // from `remoteStatus.supportsJson`; an old sqlite3 (< 3.33) no longer
+  // misroutes the remote path through the LOCAL client, which would
+  // check the path against the desktop FS and report "file not found".
+  const isRemoteMode = sshReady && remoteStatus.kind === "installed";
 
   // Poll for OSC 7 CWD — same cadence + rationale as before.
   useEffect(() => {
@@ -457,7 +466,7 @@ function SqlitePanelBody({ tab }: Props) {
         return t("Remote sqlite3 not found — install `sqlite3` on the server to read remote .db files directly.");
       case "installed":
         if (!remoteStatus.supportsJson) {
-          return t("Remote sqlite3 is too old for -json mode. Version {version}. Need ≥ 3.33.", {
+          return t("Remote SQLite v{version} · CSV mode (sqlite3 < 3.33) · reads & writes apply directly on the server", {
             version: remoteStatus.version ?? "?",
           });
         }
@@ -566,143 +575,19 @@ function SqlitePanelBody({ tab }: Props) {
     </div>
   );
 
-  if (!state) {
-    return (
-      <DbConnectSplash
-        kind="sqlite"
-        probeTarget={probeTarget}
-        probeState={probeState}
-        onReprobe={undefined}
-        detected={detectedRows}
-        saved={[]}
-        onAddManual={() => {
-          /* The manual-path form lives inline in extraBody. */
-        }}
-        hideAddManual
-        description={
-          hasSsh
-            ? t("Open a database by path, or scan a remote directory for .db / .sqlite files.")
-            : t("Open a local SQLite file by path.")
-        }
-        extraBody={extraBody}
-      />
-    );
-  }
-
-  // ── Connected view ─────────────────────────────────────────
-  const currentInstance: DbHeaderInstance = {
-    id: "sqlite",
-    name: path.split(/[/\\]/).pop() || path || t("SQLite"),
-    addr: path,
-    via: hasSsh ? t("remote read") : t("local"),
-    status: state ? "up" : "unknown",
-    sub: <>{path}</>,
-  };
-
-  const databases: DbSchemaDatabase[] = [
-    {
-      name: path.split(/[/\\]/).pop() || t("database"),
-      current: true,
-      tables: state.tables.map((tname) => ({ id: tname, label: tname })),
-    },
-  ];
-
-  const pkColumns = state.columns.filter((c) => c.primaryKey).map((c) => c.name);
-  const numericColumns = state.columns
-    .filter((c) => NUMERIC_TYPE_RE.test(c.colType))
-    .map((c) => c.name);
-  const gridColumns = gridColumnsFromSqlite(state.columns);
-
-  async function commitMutations(mutations: DbMutation[]) {
-    if (!state || mutations.length === 0) return;
-    const tableRef = qualifyTable("sqlite", { table: state.tableName });
-    setCommitting(true);
-    setQueryError("");
-    setNotice("");
-    try {
-      let written = 0;
-      for (const mut of mutations) {
-        const sql = mutationToSql(
-          { dialect: "sqlite", table: tableRef, columns: gridColumns },
-          mut,
-        );
-        if (isRemoteMode && sshTarget) {
-          await cmd.sqliteExecuteRemote({
-            ...remoteBase(),
-            dbPath: path.trim(),
-            sql,
-          });
-        } else {
-          await cmd.sqliteExecute(path.trim(), sql);
-        }
-        written += 1;
-      }
-      setNotice(t("Committed {n} change(s).", { n: written }));
-      void browse(tableName);
-    } catch (e) {
-      setQueryError(formatError(e));
-      throw e;
-    } finally {
-      setCommitting(false);
-    }
-  }
-
-  // Structure-edit commit. SQLite needs ≥3.25 for RENAME COLUMN and
-  // ≥3.35 for DROP COLUMN; older binaries surface their own parse
-  // error verbatim — we don't pre-flight version-check because the
-  // capability probe is cached per-session and may go stale.
-  // (The `committingDdl` state lives at the top of the component so
-  // it is registered on every render, not just when `state !== null`.)
-  async function commitStructure(mutations: DdlMutation[]) {
-    if (!state || mutations.length === 0) return;
-    const tableRef = qualifyTable("sqlite", { table: state.tableName });
-    setCommittingDdl(true);
-    setQueryError("");
-    setNotice("");
-    try {
-      let written = 0;
-      for (const mut of mutations) {
-        const sql = ddlToSql({ dialect: "sqlite", table: tableRef }, mut);
-        if (isRemoteMode && sshTarget) {
-          await cmd.sqliteExecuteRemote({
-            ...remoteBase(),
-            dbPath: path.trim(),
-            sql,
-          });
-        } else {
-          await cmd.sqliteExecute(path.trim(), sql);
-        }
-        written += 1;
-      }
-      setNotice(t("Committed {n} structure change(s).", { n: written }));
-      void browse(tableName);
-    } catch (e) {
-      setQueryError(formatError(e));
-      throw e;
-    } finally {
-      setCommittingDdl(false);
-    }
-  }
-
   // ── Schema-tree right-click actions ──────────────────────────
+  // These two hooks must stay ABOVE the `if (!state) return` splash
+  // gate (same reason as `committingDdl`): a hook declared below the
+  // gate only registers on renders past it, so it trips the Rules of
+  // Hooks the moment a database opens and `state` flips non-null.
+  // `sqliteRunOne` / `browse` are hoisted function declarations, so
+  // referencing them here before their definitions is fine.
   const [confirm, setConfirm] = useState<{
     title: string;
     message: string;
     tone?: "destructive";
     onConfirm: () => void | Promise<void>;
   } | null>(null);
-
-  async function sqliteRunOne(sql: string): Promise<QueryExecutionResult> {
-    const usePath = path.trim();
-    if (isRemoteMode && sshTarget) {
-      return cmd.sqliteExecuteRemote({
-        ...remoteBase(),
-        dbPath: usePath,
-        sql,
-      });
-    }
-    return cmd.sqliteExecute(usePath, sql);
-  }
 
   const sqliteActions = useMemo<DbSchemaActions>(() => ({
     onCopyTableName: (_db, tables) => {
@@ -836,6 +721,136 @@ function SqlitePanelBody({ tab }: Props) {
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [readOnly, state?.tables, tableName, path, isRemoteMode, sshTarget, t]);
+
+  if (!state) {
+    return (
+      <DbConnectSplash
+        kind="sqlite"
+        probeTarget={probeTarget}
+        probeState={probeState}
+        onReprobe={undefined}
+        detected={detectedRows}
+        saved={[]}
+        onAddManual={() => {
+          /* The manual-path form lives inline in extraBody. */
+        }}
+        hideAddManual
+        description={
+          hasSsh
+            ? t("Open a database by path, or scan a remote directory for .db / .sqlite files.")
+            : t("Open a local SQLite file by path.")
+        }
+        extraBody={extraBody}
+      />
+    );
+  }
+
+  // ── Connected view ─────────────────────────────────────────
+  const currentInstance: DbHeaderInstance = {
+    id: "sqlite",
+    name: path.split(/[/\\]/).pop() || path || t("SQLite"),
+    addr: path,
+    via: hasSsh ? t("remote read") : t("local"),
+    status: state ? "up" : "unknown",
+    sub: <>{path}</>,
+  };
+
+  const databases: DbSchemaDatabase[] = [
+    {
+      name: path.split(/[/\\]/).pop() || t("database"),
+      current: true,
+      tables: state.tables.map((tname) => ({ id: tname, label: tname })),
+    },
+  ];
+
+  const pkColumns = state.columns.filter((c) => c.primaryKey).map((c) => c.name);
+  const numericColumns = state.columns
+    .filter((c) => NUMERIC_TYPE_RE.test(c.colType))
+    .map((c) => c.name);
+  const gridColumns = gridColumnsFromSqlite(state.columns);
+
+  async function commitMutations(mutations: DbMutation[]) {
+    if (!state || mutations.length === 0) return;
+    const tableRef = qualifyTable("sqlite", { table: state.tableName });
+    setCommitting(true);
+    setQueryError("");
+    setNotice("");
+    try {
+      let written = 0;
+      for (const mut of mutations) {
+        const sql = mutationToSql(
+          { dialect: "sqlite", table: tableRef, columns: gridColumns },
+          mut,
+        );
+        if (isRemoteMode && sshTarget) {
+          await cmd.sqliteExecuteRemote({
+            ...remoteBase(),
+            dbPath: path.trim(),
+            sql,
+          });
+        } else {
+          await cmd.sqliteExecute(path.trim(), sql);
+        }
+        written += 1;
+      }
+      setNotice(t("Committed {n} change(s).", { n: written }));
+      void browse(tableName);
+    } catch (e) {
+      setQueryError(formatError(e));
+      throw e;
+    } finally {
+      setCommitting(false);
+    }
+  }
+
+  // Structure-edit commit. SQLite needs ≥3.25 for RENAME COLUMN and
+  // ≥3.35 for DROP COLUMN; older binaries surface their own parse
+  // error verbatim — we don't pre-flight version-check because the
+  // capability probe is cached per-session and may go stale.
+  // (The `committingDdl` state lives at the top of the component so
+  // it is registered on every render, not just when `state !== null`.)
+  async function commitStructure(mutations: DdlMutation[]) {
+    if (!state || mutations.length === 0) return;
+    const tableRef = qualifyTable("sqlite", { table: state.tableName });
+    setCommittingDdl(true);
+    setQueryError("");
+    setNotice("");
+    try {
+      let written = 0;
+      for (const mut of mutations) {
+        const sql = ddlToSql({ dialect: "sqlite", table: tableRef }, mut);
+        if (isRemoteMode && sshTarget) {
+          await cmd.sqliteExecuteRemote({
+            ...remoteBase(),
+            dbPath: path.trim(),
+            sql,
+          });
+        } else {
+          await cmd.sqliteExecute(path.trim(), sql);
+        }
+        written += 1;
+      }
+      setNotice(t("Committed {n} structure change(s).", { n: written }));
+      void browse(tableName);
+    } catch (e) {
+      setQueryError(formatError(e));
+      throw e;
+    } finally {
+      setCommittingDdl(false);
+    }
+  }
+
+  async function sqliteRunOne(sql: string): Promise<QueryExecutionResult> {
+    const usePath = path.trim();
+    if (isRemoteMode && sshTarget) {
+      return cmd.sqliteExecuteRemote({
+        ...remoteBase(),
+        dbPath: usePath,
+        sql,
+      });
+    }
+    return cmd.sqliteExecute(usePath, sql);
+  }
 
   const banner = error ? (
     <DismissibleNote variant="status" tone="error" onDismiss={() => setError("")}>

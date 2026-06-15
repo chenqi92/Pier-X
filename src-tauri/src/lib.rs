@@ -9831,6 +9831,11 @@ struct SoftwareDescriptorView {
     /// App-store category (`database` / `web` / `runtime` / …).
     /// Drives the panel's section grouping. Empty = "其它".
     category: String,
+    /// Guided post-install configuration for this row (set DB app
+    /// account, redis password, …). `None` = no guided step. Only
+    /// non-installer specs are attached here; standalone guided
+    /// installers (MinIO) are surfaced via `software_provision_specs`.
+    provision: Option<ProvisionSpecView>,
 }
 
 /// Static view of one [`package_manager::VersionVariant`] entry.
@@ -9854,6 +9859,68 @@ struct VendorScriptDescriptorView {
     /// Drives whether the uninstall dialog renders the "remove
     /// upstream source" checkbox.
     has_cleanup_scripts: bool,
+}
+
+/// One field in a guided provisioning form — see
+/// [`package_manager::ProvisionField`].
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ProvisionFieldView {
+    key: String,
+    label: String,
+    /// `"text" | "password" | "port" | "path" | "bool"`.
+    kind: String,
+    default: String,
+    required: bool,
+    secret: bool,
+    help: String,
+}
+
+/// View of [`package_manager::ProvisionSpec`] — the form schema the
+/// panel renders. The handler id is intentionally not exposed.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ProvisionSpecView {
+    id: String,
+    title: String,
+    summary: String,
+    fields: Vec<ProvisionFieldView>,
+    prompt_after_install: bool,
+    is_installer: bool,
+}
+
+fn provision_kind_str(k: package_manager::ProvisionFieldKind) -> &'static str {
+    use package_manager::ProvisionFieldKind as K;
+    match k {
+        K::Text => "text",
+        K::Password => "password",
+        K::Port => "port",
+        K::Path => "path",
+        K::Bool => "bool",
+    }
+}
+
+fn provision_spec_to_view(s: &package_manager::ProvisionSpec) -> ProvisionSpecView {
+    ProvisionSpecView {
+        id: s.id.to_string(),
+        title: s.title.to_string(),
+        summary: s.summary.to_string(),
+        fields: s
+            .fields
+            .iter()
+            .map(|f| ProvisionFieldView {
+                key: f.key.to_string(),
+                label: f.label.to_string(),
+                kind: provision_kind_str(f.kind).to_string(),
+                default: f.default.to_string(),
+                required: f.required,
+                secret: f.secret,
+                help: f.help.to_string(),
+            })
+            .collect(),
+        prompt_after_install: s.prompt_after_install,
+        is_installer: s.is_installer,
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -10079,8 +10146,60 @@ fn software_registry() -> Vec<SoftwareDescriptorView> {
             config_paths: d.config_paths.iter().map(|s| (*s).to_string()).collect(),
             default_ports: d.default_ports.to_vec(),
             category: d.category.to_string(),
+            provision: package_manager::provision_spec(d.id)
+                .filter(|s| !s.is_installer)
+                .map(provision_spec_to_view),
         })
         .collect()
+}
+
+/// All guided-provisioning specs (post-install config + standalone
+/// installers). The panel filters by `isInstaller` to drive the
+/// "安装并配置" card section vs. the per-row "配置" action.
+#[tauri::command]
+fn software_provision_specs() -> Vec<ProvisionSpecView> {
+    package_manager::provision_specs()
+        .iter()
+        .map(provision_spec_to_view)
+        .collect()
+}
+
+/// Run a guided provisioning step (set DB app account / redis
+/// password / install MinIO natively, …). `values` carries the
+/// submitted form fields keyed by `ProvisionField::key`. Secrets are
+/// validated + scrubbed inside pier-core; the returned report's
+/// `command` is already redacted.
+#[tauri::command]
+async fn software_provision_apply(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    id: String,
+    values: std::collections::HashMap<String, String>,
+) -> Result<PostgresActionReportView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let report = package_manager::provision_apply_blocking(&session, &id, &values)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(pg_report_to_view(report))
+    })
+    .await
+    .map_err(|e| format!("software_provision_apply join: {e}"))?
 }
 
 #[tauri::command]
@@ -13632,6 +13751,7 @@ async fn sqlite_browse_remote(
     saved_connection_index: Option<usize>,
     db_path: String,
     table: Option<String>,
+    supports_json: bool,
     sudo_password: Option<String>,
     effective_user: Option<String>,
 ) -> Result<RemoteSqliteBrowserState, String> {
@@ -13648,6 +13768,7 @@ async fn sqlite_browse_remote(
             saved_connection_index,
             db_path,
             table,
+            supports_json,
             sudo_password,
             effective_user,
         )
@@ -13666,6 +13787,7 @@ fn sqlite_browse_remote_impl(
     saved_connection_index: Option<usize>,
     db_path: String,
     table: Option<String>,
+    supports_json: bool,
     sudo_password: Option<String>,
     effective_user: Option<String>,
 ) -> Result<RemoteSqliteBrowserState, String> {
@@ -13685,13 +13807,13 @@ fn sqlite_browse_remote_impl(
         sudo_password,
         effective_user.as_deref(),
     )?;
-    let tables =
-        sqlite_remote::list_tables_blocking(&session, trimmed).map_err(|e| e.to_string())?;
+    let tables = sqlite_remote::list_tables_blocking(&session, trimmed, supports_json)
+        .map_err(|e| e.to_string())?;
     let table_name = choose_active_item(table, &tables);
     let columns = if table_name.is_empty() {
         Vec::new()
     } else {
-        sqlite_remote::table_columns_blocking(&session, trimmed, &table_name)
+        sqlite_remote::table_columns_blocking(&session, trimmed, &table_name, supports_json)
             .map_err(|e| e.to_string())?
             .into_iter()
             .map(|c| SqliteColumnView {
@@ -13705,8 +13827,9 @@ fn sqlite_browse_remote_impl(
     let preview = if table_name.is_empty() {
         None
     } else {
-        let result = sqlite_remote::preview_table_blocking(&session, trimmed, &table_name, 24)
-            .map_err(|e| e.to_string())?;
+        let result =
+            sqlite_remote::preview_table_blocking(&session, trimmed, &table_name, 24, supports_json)
+                .map_err(|e| e.to_string())?;
         Some(DataPreview {
             columns: result.columns,
             rows: result.rows,
@@ -13743,6 +13866,7 @@ async fn sqlite_execute_remote(
     saved_connection_index: Option<usize>,
     db_path: String,
     sql: String,
+    supports_json: bool,
     sudo_password: Option<String>,
     effective_user: Option<String>,
 ) -> Result<QueryExecutionResult, String> {
@@ -13759,6 +13883,7 @@ async fn sqlite_execute_remote(
             saved_connection_index,
             db_path,
             sql,
+            supports_json,
             sudo_password,
             effective_user,
         )
@@ -13777,6 +13902,7 @@ fn sqlite_execute_remote_impl(
     saved_connection_index: Option<usize>,
     db_path: String,
     sql: String,
+    supports_json: bool,
     sudo_password: Option<String>,
     effective_user: Option<String>,
 ) -> Result<QueryExecutionResult, String> {
@@ -13800,7 +13926,7 @@ fn sqlite_execute_remote_impl(
         sudo_password,
         effective_user.as_deref(),
     )?;
-    let result = sqlite_remote::execute_blocking(&session, trimmed_path, trimmed_sql)
+    let result = sqlite_remote::execute_blocking(&session, trimmed_path, trimmed_sql, supports_json)
         .map_err(|e| e.to_string())?;
     // Mirror the local sqlite_execute shape: a syntax error
     // inside the CLI becomes an Err rather than a result with
@@ -13904,11 +14030,21 @@ done"
         // permission issue; return empty list rather than error.
         return Ok(Vec::new());
     }
+    Ok(parse_sqlite_candidates(&stdout))
+}
+
+/// Parse the `find … | while read` output — one `path\tsize\tmtime`
+/// line per file — into candidates, de-duplicating by path. The
+/// auto-detect scan walks several roots in one `find`, so the same
+/// file can surface twice (e.g. when the shell cwd sits under one of
+/// the curated roots); the first occurrence wins.
+fn parse_sqlite_candidates(stdout: &str) -> Vec<RemoteSqliteCandidate> {
+    let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for line in stdout.lines() {
         let mut parts = line.splitn(3, '\t');
         let Some(path) = parts.next() else { continue };
-        if path.is_empty() {
+        if path.is_empty() || !seen.insert(path.to_string()) {
             continue;
         }
         let size_bytes = parts
@@ -13925,7 +14061,101 @@ done"
             modified,
         });
     }
-    Ok(out)
+    out
+}
+
+#[tauri::command]
+async fn sqlite_autodetect_remote(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    cwd: Option<String>,
+) -> Result<Vec<RemoteSqliteCandidate>, String> {
+    run_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sqlite_autodetect_remote_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            cwd,
+        )
+    })
+    .await
+}
+
+/// Auto-probe the remote host for sqlite DB files in the locations
+/// where application databases usually live, so the user doesn't have
+/// to type a directory. Walks a curated set of roots (plus the shell's
+/// cwd when known) in a single `find`, prunes heavy dirs to stay fast
+/// on large servers, caps the result, and reports size / mtime per
+/// file. Non-existent roots are silently skipped.
+fn sqlite_autodetect_remote_impl(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    cwd: Option<String>,
+) -> Result<Vec<RemoteSqliteCandidate>, String> {
+    let session = get_or_open_ssh_session(
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+    )?;
+    // Probe the shell's cwd first (when it's a real, non-root dir),
+    // then the fixed, metachar-free roots. `"$HOME"` is double-quoted
+    // so the shell expands it; the literal roots are safe unquoted.
+    let mut roots = String::new();
+    if let Some(c) = cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty() && *c != "/")
+    {
+        roots.push_str(&shell_quote_dir(c));
+        roots.push(' ');
+    }
+    roots.push_str("\"$HOME\" /root /home /srv /opt /data /app /www /var/www");
+    // GNU `find -printf` is non-portable, so list paths plainly and
+    // stat each one — same approach as `sqlite_find_in_dir`. Prune
+    // node_modules / .git / caches so the walk doesn't drown in a big
+    // project tree.
+    let cmd = format!(
+        "find {roots} -maxdepth 6 \
+\\( -name node_modules -o -name .git -o -name .cache -o -name vendor -o -name __pycache__ -o -name 'site-packages' -o -name .npm -o -name .cargo -o -name proc -o -name sys \\) -prune -o \
+-type f \\( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \\) -print 2>/dev/null | head -n 80 | while IFS= read -r p; do \
+sz=$(wc -c < \"$p\" 2>/dev/null | tr -d ' '); \
+m=$(stat -c '%Y' \"$p\" 2>/dev/null || stat -f '%m' \"$p\" 2>/dev/null); \
+printf '%s\\t%s\\t%s\\n' \"$p\" \"${{sz:-0}}\" \"${{m:-0}}\"; \
+done"
+    );
+    let rt = pier_core::ssh::runtime::shared();
+    // `exec_with_sudo` so the walk follows the terminal's elevation and
+    // can see root-only dirs — matching `sqlite_find_in_dir`.
+    let (exit, stdout) = rt
+        .block_on(session.exec_with_sudo(&cmd))
+        .map_err(|e| e.to_string())?;
+    if exit != 0 && stdout.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(parse_sqlite_candidates(&stdout))
 }
 
 /// Quote a directory argument for a POSIX shell while preserving
@@ -19162,6 +19392,8 @@ pub fn run() {
             sqlite_browse_remote,
             sqlite_execute_remote,
             software_registry,
+            software_provision_specs,
+            software_provision_apply,
             software_probe_remote,
             ai_chat_send,
             ai_chat_cancel,
@@ -19250,6 +19482,7 @@ pub fn run() {
             apache_parse,
             apache_render,
             sqlite_find_in_dir,
+            sqlite_autodetect_remote,
             docker_inspect,
             docker_remove_image,
             docker_remove_volume,

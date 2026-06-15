@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   Copy,
@@ -11,7 +11,9 @@ import {
   Lock,
   Monitor,
   Moon,
+  Pencil,
   RefreshCw,
+  RotateCcw,
   Search,
   Server,
   Settings as SettingsIcon,
@@ -24,7 +26,19 @@ import {
   X,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { KEYBINDINGS, chordFor, chordTokens, type KeybindingScope } from "../lib/keybindings";
+import {
+  KEYBINDINGS,
+  chordTokens,
+  chordEquals,
+  displayChord,
+  isRebindable,
+  eventToChord,
+  isModifierKey,
+  findChordConflict,
+  setKeybindingRecording,
+  type KeybindingScope,
+} from "../lib/keybindings";
+import { useKeybindingsStore } from "../stores/useKeybindingsStore";
 import type { CoreInfo } from "../lib/types";
 import * as cmd from "../lib/commands";
 import { writeClipboardText } from "../lib/clipboard";
@@ -1830,15 +1844,35 @@ function KeymapPanel() {
   const [query, setQuery] = useState("");
   const isMac = navigator.platform.toLowerCase().includes("mac");
 
+  const overrides = useKeybindingsStore((s) => s.overrides);
+  const setBinding = useKeybindingsStore((s) => s.setBinding);
+  const resetBinding = useKeybindingsStore((s) => s.resetBinding);
+  const resetAll = useKeybindingsStore((s) => s.resetAll);
+
+  // The row currently capturing a chord, plus a transient error
+  // (missing modifier / conflict) shown inline in that row's cap.
+  const [recordingId, setRecordingId] = useState<string | null>(null);
+  const [recordError, setRecordError] = useState<string | null>(null);
+  const recorderRef = useRef<HTMLSpanElement>(null);
+
+  // Focus the capture cap when a recording starts.
+  useEffect(() => {
+    if (recordingId) recorderRef.current?.focus();
+  }, [recordingId]);
+
+  // Always release the global dispatch guard if this panel unmounts
+  // mid-recording (e.g. the dialog closes).
+  useEffect(() => () => setKeybindingRecording(false), []);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return KEYBINDINGS;
     return KEYBINDINGS.filter((b) => {
       const label = t(b.label).toLowerCase();
-      const chord = chordFor(b, isMac).toLowerCase();
+      const chord = displayChord(b, overrides[b.id], isMac).toLowerCase();
       return label.includes(q) || chord.includes(q);
     });
-  }, [query, isMac, t]);
+  }, [query, isMac, t, overrides]);
 
   // Group by scope for the segmented sub-headers — keeps a long
   // shortcut list scannable at a glance.
@@ -1864,6 +1898,49 @@ function KeymapPanel() {
       case "terminal": return t("Terminal");
     }
   };
+
+  const startRecording = (id: string) => {
+    setKeybindingRecording(true);
+    setRecordError(null);
+    setRecordingId(id);
+  };
+  const stopRecording = () => {
+    setKeybindingRecording(false);
+    setRecordingId(null);
+    setRecordError(null);
+  };
+
+  const onRecorderKeyDown = (id: string, e: React.KeyboardEvent) => {
+    // Swallow the event so it never reaches the global window listener
+    // or any document-level Esc handlers while we're capturing.
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      stopRecording();
+      return;
+    }
+    if (isModifierKey(e.key)) return; // wait for a non-modifier key
+    const chord = eventToChord(e.nativeEvent);
+    if (!chord.mod) {
+      setRecordError(t("Shortcut must include ⌘ / Ctrl"));
+      return;
+    }
+    const conflict = findChordConflict(chord, id, overrides);
+    if (conflict) {
+      setRecordError(t("Conflicts with {name}", { name: t(conflict.label) }));
+      return;
+    }
+    // Re-recording the factory chord just clears the override.
+    const binding = KEYBINDINGS.find((b) => b.id === id);
+    if (binding?.defaultChord && chordEquals(binding.defaultChord, chord)) {
+      resetBinding(id);
+    } else {
+      setBinding(id, chord);
+    }
+    stopRecording();
+  };
+
+  const hasOverrides = Object.keys(overrides).length > 0;
 
   return (
     <>
@@ -1897,22 +1974,98 @@ function KeymapPanel() {
         <Fragment key={scope}>
           <div className="keymap-scope-head">{scopeLabel(scope)}</div>
           <div className="keymap-list">
-            {items.map((b) => (
-              <div key={b.id} className="keymap-row">
-                <span className="keymap-label">{t(b.label)}</span>
-                <span className="keymap-chord">
-                  {chordTokens(chordFor(b, isMac)).map((tok, i) => (
-                    <kbd key={i} className="keymap-kbd">{tok}</kbd>
-                  ))}
-                </span>
-              </div>
-            ))}
+            {items.map((b) => {
+              const override = overrides[b.id];
+              const editable = isRebindable(b);
+              const isRec = recordingId === b.id;
+              return (
+                <div key={b.id} className="keymap-row">
+                  <span className="keymap-label">{t(b.label)}</span>
+
+                  {isRec ? (
+                    <span className="keymap-chord">
+                      <span
+                        ref={recorderRef}
+                        className={
+                          "keymap-recorder" +
+                          (recordError ? " keymap-recorder--error" : "")
+                        }
+                        tabIndex={0}
+                        role="textbox"
+                        aria-label={t("Press a shortcut")}
+                        onKeyDown={(e) => onRecorderKeyDown(b.id, e)}
+                        onBlur={stopRecording}
+                      >
+                        {recordError ?? t("Press a key…")}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="keymap-chord">
+                      {chordTokens(displayChord(b, override, isMac)).map((tok, i) => (
+                        <kbd key={i} className="keymap-kbd">{tok}</kbd>
+                      ))}
+                    </span>
+                  )}
+
+                  <span className="keymap-actions">
+                    {editable ? (
+                      <>
+                        {override && !isRec && (
+                          <IconButton
+                            variant="mini"
+                            title={t("Reset to default")}
+                            onClick={() => resetBinding(b.id)}
+                          >
+                            <RotateCcw size={11} />
+                          </IconButton>
+                        )}
+                        {isRec ? (
+                          <IconButton
+                            variant="mini"
+                            title={t("Cancel")}
+                            // Keep focus on the recorder so its onBlur
+                            // doesn't fire before this click lands.
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={stopRecording}
+                          >
+                            <X size={11} />
+                          </IconButton>
+                        ) : (
+                          <IconButton
+                            variant="mini"
+                            title={t("Change shortcut")}
+                            onClick={() => startRecording(b.id)}
+                          >
+                            <Pencil size={11} />
+                          </IconButton>
+                        )}
+                      </>
+                    ) : (
+                      <span
+                        className="keymap-lock"
+                        title={b.lockReason ? t(b.lockReason) : undefined}
+                      >
+                        <Lock size={11} />
+                      </span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </Fragment>
       ))}
 
-      <div className="settings__row-desc" style={{ marginTop: "var(--sp-3)" }}>
-        {t("Rebinding is not supported yet — edit src/lib/keybindings.ts to update this list when adding new handlers.")}
+      <div className="keymap-footer">
+        <span className="settings__row-desc">
+          {t("Click the pencil on a global shortcut to rebind it. Locked rows are owned by the OS, the editor, or dev tools.")}
+        </span>
+        {hasOverrides && (
+          <button type="button" className="btn is-ghost is-compact" onClick={resetAll}>
+            <RotateCcw size={12} />
+            {t("Reset all")}
+          </button>
+        )}
       </div>
     </>
   );

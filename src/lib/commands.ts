@@ -1687,6 +1687,36 @@ export type SoftwareVersionVariant = {
   label: string;
 };
 
+export type ProvisionFieldKind = "text" | "password" | "port" | "path" | "bool";
+
+/** One input in a software's guided post-install / install form. */
+export type ProvisionField = {
+  key: string;
+  label: string;
+  kind: ProvisionFieldKind;
+  /** Prefilled default; never a real secret (password fields are empty). */
+  default: string;
+  required: boolean;
+  /** Mask in the UI + offer a generator; never logged. */
+  secret: boolean;
+  help: string;
+};
+
+/** Guided "configure account / password" spec for a software — the
+ *  form schema the panel renders. The backend handler is not exposed. */
+export type ProvisionSpec = {
+  id: string;
+  title: string;
+  summary: string;
+  fields: ProvisionField[];
+  /** Auto-surface the form right after a successful install. */
+  promptAfterInstall: boolean;
+  /** `true` when applying the form installs the software itself
+   *  (native binary channel) rather than configuring an installed
+   *  package. Drives the "安装并配置" card vs. per-row "配置" action. */
+  isInstaller: boolean;
+};
+
 /** One row in the software registry. Order is the rendering order. */
 export type SoftwareDescriptor = {
   id: string;
@@ -1718,6 +1748,11 @@ export type SoftwareDescriptor = {
    *  Empty string = "其它" / Other. The panel maps these onto
    *  localized section titles. */
   category: string;
+  /** Guided post-install configuration (set DB app account, redis
+   *  password, …). `null` = no guided step. Standalone guided
+   *  installers (MinIO) are not here — fetch them via
+   *  `softwareProvisionSpecs`. */
+  provision: ProvisionSpec | null;
 };
 
 export type HostPackageEnv = {
@@ -2348,6 +2383,21 @@ export const redisSetPasswordRemote = (
 export const redisOpenRemote = (params: SshParams) =>
   invoke<PostgresActionReport>("redis_open_remote_remote", params);
 
+// ── Guided provisioning (v2.x) ──────────────────────────────────
+
+/** All guided-provisioning specs — post-install config (attached to
+ *  registry rows via `descriptor.provision`) plus standalone guided
+ *  installers (`isInstaller`). */
+export const softwareProvisionSpecs = () =>
+  invoke<ProvisionSpec[]>("software_provision_specs");
+
+/** Run a guided provisioning step. `values` is the submitted form
+ *  keyed by `ProvisionField.key`. Returns the action report whose
+ *  `command` is already redacted of secrets. */
+export const softwareProvisionApply = (
+  params: SshParams & { id: string; values: Record<string, string> },
+) => invoke<PostgresActionReport>("software_provision_apply", params);
+
 // ── Docker Compose templates (v2.11) ────────────────────────────
 
 export type ComposeTemplate = {
@@ -2728,6 +2778,9 @@ export const sqliteBrowseRemote = (
   params: SshParams & {
     dbPath: string;
     table?: string | null;
+    /** `true` when remote sqlite3 ≥ 3.33 (use `-json`); `false` falls
+     *  back to the `-csv -header` wire format for older binaries. */
+    supportsJson: boolean;
     /** Sudo password — EACCES on a root-owned `.db` runs `sqlite3` via
      *  `sudo`/`sudo -u` so the panel follows the terminal's identity. */
     sudoPassword?: string | null;
@@ -2744,6 +2797,8 @@ export const sqliteExecuteRemote = (
   params: SshParams & {
     dbPath: string;
     sql: string;
+    /** See {@link sqliteBrowseRemote} — selects `-json` vs `-csv`. */
+    supportsJson: boolean;
     sudoPassword?: string | null;
     effectiveUser?: string | null;
   },
@@ -2755,6 +2810,18 @@ export const sqliteFindInDir = (
   invoke<RemoteSqliteCandidate[]>("sqlite_find_in_dir", {
     ...params,
     maxDepth: params.maxDepth ?? null,
+  });
+
+/** Auto-probe the remote host for `.db` / `.sqlite` / `.sqlite3` files
+ *  in the locations app databases usually live (plus the shell cwd when
+ *  known) — no directory to type. Walks a curated set of roots in one
+ *  `find`, pruning heavy dirs. */
+export const sqliteAutodetect = (
+  params: SshParams & { cwd?: string | null },
+) =>
+  invoke<RemoteSqliteCandidate[]>("sqlite_autodetect_remote", {
+    ...params,
+    cwd: params.cwd ?? null,
   });
 
 // ── Nginx panel ────────────────────────────────────────────────

@@ -69,6 +69,8 @@ import { toast } from "./stores/useToastStore";
 import { checkForUpdates, RELEASES_PAGE } from "./lib/updateCheck";
 import { useThemeStore as useThemeStoreRef } from "./stores/useThemeStore";
 import { useUiActionsStore } from "./stores/useUiActionsStore";
+import { useKeybindingsStore } from "./stores/useKeybindingsStore";
+import { REBINDABLE, matchChord, isKeybindingRecording } from "./lib/keybindings";
 import "./styles/fonts.css";
 import "./styles/tokens.css";
 import "./styles/atoms.css";
@@ -437,6 +439,8 @@ function App() {
     // Prod: the same combinations are swallowed so they can't reach the
     // webview's built-in inspector.
     const onKeyDown = (e: KeyboardEvent) => {
+      // Don't toggle DevTools while the Keymap recorder is capturing.
+      if (isKeybindingRecording()) return;
       const isF12 = e.key === "F12";
       const isInspect =
         (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "i") ||
@@ -914,48 +918,45 @@ function App() {
 
   const handleGlobalKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      // The Keymap recorder is capturing a chord — stand down so the
+      // keystroke it's recording isn't also dispatched as a command.
+      if (isKeybindingRecording()) return;
+
       const mod = e.metaKey || e.ctrlKey;
 
-      // Cmd+K — Command palette
-      if (mod && e.key.toLowerCase() === "k") {
+      // Rebindable global commands (palette / new-terminal / close-tab
+      // / new-ssh / settings / toggle-git / toggle-ai). Dispatch through
+      // the effective chord: factory default merged with the user's
+      // override from useKeybindingsStore. Order follows KEYBINDINGS, so
+      // the first match wins — same precedence as the old if-ladder.
+      const overrides = useKeybindingsStore.getState().overrides;
+      for (const b of REBINDABLE) {
+        const chord = overrides[b.id] ?? b.defaultChord;
+        if (!chord || !matchChord(e, chord)) continue;
         e.preventDefault();
-        setPaletteOpen((p) => !p);
-        return;
-      }
-      // Cmd+T — New tab
-      if (mod && !e.shiftKey && e.key.toLowerCase() === "t") {
-        e.preventDefault();
-        openLocalTerminal();
-        return;
-      }
-      // Cmd+W — Close tab
-      if (mod && !e.shiftKey && e.key.toLowerCase() === "w") {
-        e.preventDefault();
-        if (activeTabId) closeTab(activeTabId);
-        return;
-      }
-      // Cmd+N — New SSH
-      if (mod && !e.shiftKey && e.key.toLowerCase() === "n") {
-        e.preventDefault();
-        openNewConnectionDialog();
-        return;
-      }
-      // Cmd+, — Settings
-      if (mod && e.key === ",") {
-        e.preventDefault();
-        setSettingsOpen((p) => !p);
-        return;
-      }
-      // Cmd+Shift+G — Toggle Git panel
-      if (mod && e.shiftKey && e.key.toLowerCase() === "g") {
-        e.preventDefault();
-        handleToolChange("git");
-        return;
-      }
-      // Cmd+Shift+A — AI panel (§5.14 / §7.1)
-      if (mod && e.shiftKey && e.key.toLowerCase() === "a") {
-        e.preventDefault();
-        handleToolChange("ai");
+        switch (b.command) {
+          case "palette":
+            setPaletteOpen((p) => !p);
+            break;
+          case "new-terminal":
+            openLocalTerminal();
+            break;
+          case "close-tab":
+            if (activeTabId) closeTab(activeTabId);
+            break;
+          case "new-ssh":
+            openNewConnectionDialog();
+            break;
+          case "settings":
+            setSettingsOpen((p) => !p);
+            break;
+          case "toggle-git":
+            handleToolChange("git");
+            break;
+          case "toggle-ai":
+            handleToolChange("ai");
+            break;
+        }
         return;
       }
       // Cmd+1..9 — Switch to tab by ordinal index.

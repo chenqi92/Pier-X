@@ -34,6 +34,7 @@ import type {
   MirrorId,
   MirrorLatency,
   MirrorState,
+  ProvisionSpec,
   SoftwareBundle,
   SoftwareDescriptor,
   SoftwareInstallReport,
@@ -294,6 +295,12 @@ function SoftwarePanelBody({ tab, isActive = true }: Props) {
   const [graphHighlight, setGraphHighlight] = useState<string | null>(null);
   /** "Record command as bundle" dialog open flag. */
   const [recordBundleOpen, setRecordBundleOpen] = useState(false);
+  // Guided provisioning: `provisionSpec` drives the form dialog;
+  // `installerSpecs` are the standalone "install & configure" cards
+  // (e.g. MinIO native). Post-install config specs ride on each
+  // descriptor's `.provision` instead.
+  const [provisionSpec, setProvisionSpec] = useState<ProvisionSpec | null>(null);
+  const [installerSpecs, setInstallerSpecs] = useState<ProvisionSpec[]>([]);
   /** Co-install suggestion cache, keyed by descriptor id. We cache
    *  per session so a row that already showed chips doesn't refetch. */
   const [coInstallCache, setCoInstallCache] = useState<Record<string, string[]>>({});
@@ -438,6 +445,20 @@ function SoftwarePanelBody({ tab, isActive = true }: Props) {
     sshParams,
     sshTarget ? `${displayUser}@${sshTarget.host}` : t("the remote host"),
   );
+
+  // Fetch the guided-installer specs once (static backend data).
+  useEffect(() => {
+    let alive = true;
+    void cmd
+      .softwareProvisionSpecs()
+      .then((specs) => {
+        if (alive) setInstallerSpecs(specs.filter((s) => s.isInstaller));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // Pull the registry once. It's a static const on the backend so we
   // don't refetch when the host changes.
@@ -2246,6 +2267,30 @@ function SoftwarePanelBody({ tab, isActive = true }: Props) {
           )}
         </div>
       )}
+      {installerSpecs.length > 0 && canManage && (
+        <div className="sw-panel__bundles">
+          <div className="sw-panel__bundles-title mono">
+            {t("Managed services")}
+          </div>
+          <div className="sw-panel__bundles-grid">
+            {installerSpecs.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className="sw-panel__bundle-card"
+                disabled={!!bundleRunning || !!busyPackageId}
+                onClick={() => setProvisionSpec(s)}
+                title={s.summary}
+              >
+                <div className="sw-panel__bundle-card-head">
+                  <span className="sw-panel__bundle-card-label">{s.title}</span>
+                </div>
+                <div className="sw-panel__bundle-card-desc">{s.summary}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {bundles.length > 0 && canManage && (
         <div className="sw-panel__bundles">
           <div className="sw-panel__bundles-title mono">
@@ -2621,6 +2666,11 @@ function SoftwarePanelBody({ tab, isActive = true }: Props) {
         schedules={schedules}
         onChange={setSchedules}
         sshParams={sshParams}
+      />
+      <ProvisionDialog
+        spec={provisionSpec}
+        sshParams={sshParams}
+        onClose={() => setProvisionSpec(null)}
       />
       <PgQuickConfigDialog
         target={pgQuickTarget}
@@ -4201,6 +4251,188 @@ function RecordBundleDialog({
  *  create role, create database, allow remote connections. Each
  *  form has its own outcome area so users can run them
  *  out of order. */
+/** Cryptographically-random secret for the "generate" buttons in the
+ *  provisioning dialog. Ambiguous glyphs (0/O/1/l/I) are omitted. */
+function genSecret(len = 20): string {
+  const chars =
+    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const arr = new Uint32Array(len);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, (n) => chars[n % chars.length]).join("");
+}
+
+/** Generic guided-provisioning dialog. Renders a `ProvisionSpec`'s
+ *  fields, submits them to `software_provision_apply`, and shows the
+ *  (already-redacted) report. Used for standalone installers (MinIO
+ *  native) and post-install config alike. Secrets are masked locally
+ *  and never logged. */
+function ProvisionDialog({
+  spec,
+  sshParams,
+  onClose,
+}: {
+  spec: ProvisionSpec | null;
+  sshParams: SshParams | null;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [ok, setOk] = useState(false);
+
+  // Seed defaults whenever a different spec opens.
+  useEffect(() => {
+    if (!spec) return;
+    const seed: Record<string, string> = {};
+    for (const f of spec.fields) seed[f.key] = f.default;
+    setValues(seed);
+    setMessage("");
+    setOk(false);
+  }, [spec?.id]);
+
+  if (!spec || !sshParams) return null;
+
+  const setField = (key: string, v: string) =>
+    setValues((cur) => ({ ...cur, [key]: v }));
+
+  const missingRequired = spec.fields.some(
+    (f) => f.required && !(values[f.key] ?? "").trim(),
+  );
+
+  function describe(report: cmd.PostgresActionReport): {
+    msg: string;
+    ok: boolean;
+  } {
+    if (report.status === "ok") return { msg: t("Done."), ok: true };
+    if (report.status === "sudo-requires-password") {
+      return {
+        msg: t(
+          "sudo requires a password — connect as root or configure passwordless sudo.",
+        ),
+        ok: false,
+      };
+    }
+    return {
+      msg: t("Failed (exit {code}). {tail}", {
+        code: report.exitCode,
+        tail: report.outputTail.split("\n").slice(-1)[0] ?? "",
+      }),
+      ok: false,
+    };
+  }
+
+  async function handleApply() {
+    if (busy || missingRequired || !spec || !sshParams) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const r = await cmd.softwareProvisionApply({
+        ...sshParams,
+        id: spec.id,
+        values,
+      });
+      const d = describe(r);
+      setMessage(d.msg);
+      setOk(d.ok);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+      setOk(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={!!spec}
+      title={spec.title}
+      subtitle={spec.summary}
+      size="md"
+      onClose={onClose}
+    >
+      <div className="sw-pg-form">
+        <fieldset className="sw-pg-form__section" disabled={busy}>
+          {spec.fields.map((f) => (
+            <div key={f.key} className="sw-provision__field">
+              <span>
+                {f.label}
+                {f.required ? " *" : ""}
+              </span>
+              {f.kind === "bool" ? (
+                <label className="sw-pg-form__check">
+                  <input
+                    type="checkbox"
+                    checked={(values[f.key] ?? "") === "true"}
+                    onChange={(e) =>
+                      setField(f.key, e.currentTarget.checked ? "true" : "false")
+                    }
+                  />
+                  {f.help}
+                </label>
+              ) : (
+                <div className="sw-provision__field-input">
+                  <input
+                    className="dlg-input"
+                    type={
+                      f.secret
+                        ? "password"
+                        : f.kind === "port"
+                          ? "number"
+                          : "text"
+                    }
+                    value={values[f.key] ?? ""}
+                    onChange={(e) => setField(f.key, e.currentTarget.value)}
+                    placeholder={f.default}
+                    spellCheck={false}
+                    autoCorrect="off"
+                    autoComplete={f.secret ? "new-password" : "off"}
+                  />
+                  {f.secret && (
+                    <button
+                      type="button"
+                      className="btn is-ghost is-compact"
+                      onClick={() => setField(f.key, genSecret())}
+                    >
+                      {t("Generate")}
+                    </button>
+                  )}
+                </div>
+              )}
+              {f.help && f.kind !== "bool" && (
+                <span className="sw-provision__help">{f.help}</span>
+              )}
+            </div>
+          ))}
+          <div className="sw-provision__actions">
+            <button
+              type="button"
+              className="btn is-primary is-compact"
+              onClick={() => void handleApply()}
+              disabled={busy || missingRequired}
+            >
+              {busy
+                ? t("Running...")
+                : spec.isInstaller
+                  ? t("Install & configure")
+                  : t("Apply")}
+            </button>
+          </div>
+          {message && (
+            <div
+              className={`sw-pg-form__msg mono${
+                ok ? " sw-provision__msg--ok" : ""
+              }`}
+            >
+              {message}
+            </div>
+          )}
+        </fieldset>
+      </div>
+    </Dialog>
+  );
+}
+
 function PgQuickConfigDialog({
   target,
   sshParams,

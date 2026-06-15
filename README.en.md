@@ -14,6 +14,35 @@ Pier-X is the cross-platform successor to [Pier](https://github.com/chenqi92/Pie
 
 > The full product spec lives in [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md) (Chinese, authoritative). Visual tokens are in [.agents/skills/pier-design-system/SKILL.md](.agents/skills/pier-design-system/SKILL.md). Code rules are in [CLAUDE.md](CLAUDE.md).
 
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="screenShots/ai.png" alt="AI assistant" width="100%"><br><sub><b>AI assistant</b></sub></td>
+    <td width="50%" align="center"><img src="screenShots/git.png" alt="Git" width="100%"><br><sub><b>Git</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="screenShots/md.png" alt="Markdown preview" width="100%"><br><sub><b>Markdown preview</b></sub></td>
+    <td width="50%" align="center"><img src="screenShots/监控.png" alt="Server Monitor" width="100%"><br><sub><b>Server Monitor</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="screenShots/docker.png" alt="Docker" width="100%"><br><sub><b>Docker</b></sub></td>
+    <td width="50%" align="center"><img src="screenShots/sftp.png" alt="SFTP" width="100%"><br><sub><b>SFTP</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="screenShots/db.png" alt="Database" width="100%"><br><sub><b>Database (MySQL / PostgreSQL)</b></sub></td>
+    <td width="50%" align="center"><img src="screenShots/redis.png" alt="Redis" width="100%"><br><sub><b>Redis</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="screenShots/web.png" alt="Web Server" width="100%"><br><sub><b>Web Server</b></sub></td>
+    <td width="50%" align="center"><img src="screenShots/软件.png" alt="Software" width="100%"><br><sub><b>Software</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="screenShots/日志.png" alt="Logs" width="100%"><br><sub><b>Logs</b></sub></td>
+    <td width="50%" align="center"><img src="screenShots/端口.png" alt="Port forwarding" width="100%"><br><sub><b>Port forwarding</b></sub></td>
+  </tr>
+</table>
+
 ## Features
 
 The UI is a three-pane IDE layout: **left Sidebar + center Tab workspace + right tool panel**. Every Tab carries its own right-tool preference, and SSH state, database connections, SFTP paths, and AI conversations follow the active Tab.

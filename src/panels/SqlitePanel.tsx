@@ -159,6 +159,9 @@ function SqlitePanelBody({ tab }: Props) {
   const [scanInput, setScanInput] = useState("");
   const [scanInputTouched, setScanInputTouched] = useState(false);
   const [manualPath, setManualPath] = useState("");
+  // True while the on-connect / Re-probe auto-scan walks the remote
+  // host for .db files.
+  const [autoScanning, setAutoScanning] = useState(false);
 
   // Remote mode whenever sqlite3 is installed on the host — regardless
   // of version. The wire format (`-json` vs `-csv`) is chosen per-call
@@ -245,6 +248,18 @@ function SqlitePanelBody({ tab }: Props) {
     sshTarget?.savedConnectionIndex,
     (sshTarget?.password.length ?? 0) > 0,
   ]);
+
+  // Auto-probe common server locations for .db files once remote
+  // sqlite3 is confirmed installed — saves the user from typing a
+  // directory. Runs once per (host, port, user); the splash's Re-probe
+  // button re-runs it. `shellCwd` is read at call time (not a dep) so a
+  // later cwd change doesn't retrigger a scan. `autodetect` is a
+  // hoisted function declaration defined below.
+  useEffect(() => {
+    if (!isRemoteMode || !sshTarget) return;
+    void autodetect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRemoteMode, sshTarget?.host, sshTarget?.port, sshTarget?.user]);
 
   const canBrowse = path.trim().length > 0 && (!hasSsh || sshReady);
   const needsWrite = sql.trim() !== "" && !isReadOnlySql(sql);
@@ -422,6 +437,31 @@ function SqlitePanelBody({ tab }: Props) {
     }
   }
 
+  // Walk the host's common app-data locations (+ shell cwd) for .db
+  // files without the user typing a directory. Populates the
+  // "auto-detected" list; the manual scan box can still override it.
+  async function autodetect() {
+    if (!sshTarget) return;
+    setAutoScanning(true);
+    try {
+      const rows = await cmd.sqliteAutodetect({
+        host: sshTarget.host,
+        port: sshTarget.port,
+        user: sshTarget.user,
+        authMode: sshTarget.authMode,
+        password: sshTarget.password,
+        keyPath: sshTarget.keyPath,
+        savedConnectionIndex: sshTarget.savedConnectionIndex,
+        cwd: shellCwd,
+      });
+      setCandidates(rows);
+    } catch {
+      /* leave candidates as-is — the manual scan box remains available */
+    } finally {
+      setAutoScanning(false);
+    }
+  }
+
   function disconnect() {
     setState(null);
     setError("");
@@ -433,7 +473,7 @@ function SqlitePanelBody({ tab }: Props) {
   // ── Splash rows (candidates as detected; no saved creds for SQLite yet) ──
   const probeTarget = tab && sshTarget ? `${effectiveShellUser(tab, sshTarget)}@${sshTarget.host}` : null;
   const probeState =
-    remoteStatus.kind === "unknown"
+    remoteStatus.kind === "unknown" || autoScanning
       ? "scanning"
       : remoteStatus.kind === "missing"
         ? "error"
@@ -728,7 +768,7 @@ function SqlitePanelBody({ tab }: Props) {
         kind="sqlite"
         probeTarget={probeTarget}
         probeState={probeState}
-        onReprobe={undefined}
+        onReprobe={isRemoteMode ? () => void autodetect() : undefined}
         detected={detectedRows}
         saved={[]}
         onAddManual={() => {

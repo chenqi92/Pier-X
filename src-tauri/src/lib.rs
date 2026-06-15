@@ -14139,7 +14139,7 @@ fn sqlite_autodetect_remote_impl(
     // project tree.
     let cmd = format!(
         "find {roots} -maxdepth 6 \
-\\( -name node_modules -o -name .git -o -name .cache -o -name vendor -o -name __pycache__ -o -name 'site-packages' -o -name .npm -o -name .cargo -o -name proc -o -name sys \\) -prune -o \
+\\( -name node_modules -o -name .git -o -name .cache -o -name vendor -o -name __pycache__ -o -name 'site-packages' -o -name .npm -o -name .cargo \\) -prune -o \
 -type f \\( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \\) -print 2>/dev/null | head -n 80 | while IFS= read -r p; do \
 sz=$(wc -c < \"$p\" 2>/dev/null | tr -d ' '); \
 m=$(stat -c '%Y' \"$p\" 2>/dev/null || stat -f '%m' \"$p\" 2>/dev/null); \

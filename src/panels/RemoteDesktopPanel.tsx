@@ -110,6 +110,14 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cursorCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+  // Ordered paint queue. JPEG tiles decode asynchronously (createImageBitmap),
+  // so without serialisation a slow decode can land *after* a newer RGBA/JPEG
+  // tile for the same region and overwrite it — visible as tearing or stale
+  // rectangles under motion. Every canvas write goes through this chain so it
+  // is applied in arrival order; `paintGenRef` invalidates work queued by a
+  // previous connection on reconnect.
+  const paintTailRef = useRef<Promise<void>>(Promise.resolve());
+  const paintGenRef = useRef(0);
   const sessionIdRef = useRef<string | null>(null);
   const remoteSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const cursorStateRef = useRef<CursorState>({
@@ -214,11 +222,20 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
     return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
   }, []);
 
+  // Append one canvas op to the ordered paint chain. `gen` is captured at
+  // enqueue time; ops from a superseded connection are skipped.
+  const enqueuePaint = useCallback((gen: number, op: () => void | Promise<void>) => {
+    paintTailRef.current = paintTailRef.current
+      .then(() => {
+        if (gen === paintGenRef.current) return op();
+      })
+      .catch(() => {});
+  }, []);
+
   // ── Apply one decoded packet to the canvas. ──
   const onPacket = useCallback(
     (packet: RdPacket) => {
       const canvas = canvasRef.current;
-      const ctx = ctxRef.current;
       switch (packet.kind) {
         case "connected":
         case "resize": {
@@ -232,39 +249,37 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
           break;
         }
         case "tile": {
-          if (!ctx) break;
-          const len = packet.width * packet.height * 4;
+          const gen = paintGenRef.current;
+          const { x, y, width, height } = packet;
           if (packet.encoding === "rgba") {
+            const len = width * height * 4;
             if (packet.data.byteLength < len) break;
-            const clamped = new Uint8ClampedArray(packet.data.buffer, packet.data.byteOffset, len);
-            // Copy out of the channel buffer — ImageData keeps a reference.
-            const img = new ImageData(new Uint8ClampedArray(clamped), packet.width, packet.height);
-            ctx.putImageData(img, packet.x, packet.y);
+            // Copy out of the channel buffer now (it is reused next turn);
+            // ImageData keeps the reference, so the queued paint is safe.
+            const img = new ImageData(new Uint8ClampedArray(packet.data.subarray(0, len)), width, height);
+            enqueuePaint(gen, () => {
+              ctxRef.current?.putImageData(img, x, y);
+            });
           } else {
-            const { x, y, data } = packet;
-            const blob = new Blob([data.slice()], { type: "image/jpeg" });
-            void createImageBitmap(blob)
-              .then((bmp) => {
-                ctxRef.current?.drawImage(bmp, x, y);
-                bmp.close();
-              })
-              .catch(() => {});
+            // Copy the JPEG bytes now; decode + paint on the queue so a slow
+            // decode can't overwrite a newer tile.
+            const blob = new Blob([packet.data.slice()], { type: "image/jpeg" });
+            enqueuePaint(gen, async () => {
+              const bmp = await createImageBitmap(blob);
+              ctxRef.current?.drawImage(bmp, x, y);
+              bmp.close();
+            });
           }
           break;
         }
         case "copy": {
-          if (!ctx || !canvas) break;
-          ctx.drawImage(
-            canvas,
-            packet.srcX,
-            packet.srcY,
-            packet.width,
-            packet.height,
-            packet.dstX,
-            packet.dstY,
-            packet.width,
-            packet.height,
-          );
+          const gen = paintGenRef.current;
+          const { srcX, srcY, width, height, dstX, dstY } = packet;
+          enqueuePaint(gen, () => {
+            const c = canvasRef.current;
+            const cx = ctxRef.current;
+            if (c && cx) cx.drawImage(c, srcX, srcY, width, height, dstX, dstY, width, height);
+          });
           break;
         }
         case "cursor":
@@ -319,7 +334,7 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
         }
       }
     },
-    [fitCanvas, positionCursorOverlay],
+    [fitCanvas, positionCursorOverlay, enqueuePaint],
   );
 
   // ── Connect on mount / reconnect; close on unmount. ──
@@ -334,6 +349,10 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
     setStatus("connecting");
     setErrorMsg("");
     resetCursorOverlay();
+    // Invalidate any paints still queued from a previous session and start a
+    // fresh ordered chain for this connection.
+    paintGenRef.current += 1;
+    paintTailRef.current = Promise.resolve();
 
     const initW = Math.min(1920, Math.max(800, Math.round(window.innerWidth)));
     const initH = Math.min(1200, Math.max(600, Math.round(window.innerHeight)));

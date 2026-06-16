@@ -17,6 +17,8 @@ mod frame;
 mod input;
 #[cfg(feature = "rdp")]
 pub mod rdp;
+#[cfg(feature = "rdp-freerdp")]
+pub mod rdp_freerdp;
 pub mod vnc;
 
 pub use error::{RemoteDesktopError, Result};
@@ -65,9 +67,13 @@ pub struct RemoteDesktopConfig {
 }
 
 impl RemoteDesktopConfig {
-    /// RDP dirty regions tend to arrive as larger screen areas, so a lower
-    /// threshold keeps the WebView IPC stream bounded.
-    pub const DEFAULT_RDP_JPEG_THRESHOLD_PX: u32 = 64 * 64;
+    /// Only re-encode genuinely large dirty rects to JPEG; everything below
+    /// this area ships as lossless RGBA. The tile stream crosses a local IPC
+    /// channel (not a network), so the win from JPEG is bounded while its cost
+    /// — lossy text on every medium UI/scroll update — is not. A 256×256 floor
+    /// keeps typical UI repaints and full-width text-line scrolls
+    /// (e.g. 1920×~34) crisp, leaving JPEG for full-screen / photo updates.
+    pub const DEFAULT_RDP_JPEG_THRESHOLD_PX: u32 = 256 * 256;
     /// VNC zlib/raw rectangles are often small and frequent. Keeping those
     /// raw avoids a costly inflate -> JPEG encode -> WebView JPEG decode loop.
     pub const DEFAULT_VNC_JPEG_THRESHOLD_PX: u32 = 256 * 256;
@@ -159,9 +165,13 @@ async fn run_session(
 ) {
     let result = match config.protocol {
         RemoteProtocol::Vnc => vnc::run(config, sink.clone(), input_rx, control_rx).await,
-        #[cfg(feature = "rdp")]
+        // FreeRDP supersedes IronRDP for the RDP protocol when its (experimental)
+        // feature is compiled in — it adds the real H.264/AVC444 path IronRDP lacks.
+        #[cfg(feature = "rdp-freerdp")]
+        RemoteProtocol::Rdp => rdp_freerdp::run(config, sink.clone(), input_rx, control_rx).await,
+        #[cfg(all(feature = "rdp", not(feature = "rdp-freerdp")))]
         RemoteProtocol::Rdp => rdp::run(config, sink.clone(), input_rx, control_rx).await,
-        #[cfg(not(feature = "rdp"))]
+        #[cfg(all(not(feature = "rdp"), not(feature = "rdp-freerdp")))]
         RemoteProtocol::Rdp => Err(RemoteDesktopError::Unsupported(
             "RDP support was not compiled into this build".to_string(),
         )),

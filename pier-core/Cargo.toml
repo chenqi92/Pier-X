@@ -208,6 +208,16 @@ aes = "0.8"
 num-bigint = "0.4"
 flate2 = "1"
 
+# Dirty-rect re-encode for the RDP canvas path. IronRDP software-decodes
+# RemoteFX into a full RGBA framebuffer; we slice each dirty rect and JPEG
+# it before it crosses the WebView IPC channel. `jpeg-encoder` is a
+# pure-Rust baseline encoder with a SIMD fast path (no C / libjpeg-turbo
+# system dep, so the cross-target builds stay portable) and encodes
+# straight from RGBA — several× faster than `image`'s scalar encoder on
+# this per-frame hot path, which keeps the encode synchronous (and frame
+# order intact) instead of needing a worker.
+jpeg-encoder = "0.6"
+
 # RDP via IronRDP (Devolutions) — a headless, UI-agnostic protocol stack.
 # Behind the default `rdp` feature so the VNC path (and the rest of the
 # crate) still builds with `--no-default-features` while the heavier RDP
@@ -225,6 +235,18 @@ default = ["rdp"]
 # `--no-default-features` to build only the in-crate VNC client plus the
 # rest of pier-core (faster iteration, no rustls build).
 rdp = ["dep:ironrdp", "dep:ironrdp-tokio", "dep:ironrdp-tls"]
+
+# EXPERIMENTAL FreeRDP-backed RDP client — real H.264 / AVC444 EGFX via FFI to
+# libfreerdp3, the capability IronRDP 0.x lacks entirely (verified: no H.264
+# decoder, and its architecture only emits decoded dirty-rects). OFF by default
+# and intentionally NOT in `default`: the protocol code, the bindgen layer, and
+# the per-target libfreerdp3 build land incrementally behind this flag so the
+# shipping IronRDP path stays green until FreeRDP proves out on every release
+# target (Windows x64/ARM64, macOS universal, Linux deb/rpm/AppImage). When this
+# flag is on it supersedes `rdp` for the RDP protocol. This deliberately crosses
+# the crate's "no C-ABI bridge / pure-Rust" stance for the H.264 win; see
+# remote_desktop::rdp_freerdp and docs/PRODUCT-SPEC.md once migration lands.
+rdp-freerdp = []
 
 # Unix PTY — forkpty + ioctl wrappers live in libc. Only pulled in on
 # Unix targets; Windows uses the ConPTY-backed implementation below.

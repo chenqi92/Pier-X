@@ -119,8 +119,11 @@ impl std::fmt::Debug for FrameSink {
     }
 }
 
-/// JPEG quality (0–100) used when a backend re-encodes a raw tile.
-pub const JPEG_QUALITY: u8 = 80;
+/// JPEG quality (0–100) used when a backend re-encodes a raw tile. The tile
+/// stream crosses a *local* IPC channel, not a network, so bandwidth is cheap
+/// relative to fidelity: keep this high enough that the large rects which do
+/// compress (full-screen / photo updates) don't show JPEG ringing on text.
+pub const JPEG_QUALITY: u8 = 85;
 
 /// Encode a raw RGBA tile to a [`FrameTile`]. Tiles whose pixel area is at
 /// or above `jpeg_threshold_px` (and ≥ 16×16) are JPEG-compressed to keep
@@ -149,23 +152,18 @@ pub fn encode_tile(
 /// Compress an RGBA buffer to a baseline JPEG (alpha dropped). Returns
 /// `None` if encoding fails (the caller falls back to raw RGBA).
 fn rgba_to_jpeg(rgba: &[u8], width: u16, height: u16, quality: u8) -> Option<Vec<u8>> {
-    let w = u32::from(width);
-    let h = u32::from(height);
-    let expected = (w as usize) * (h as usize) * 4;
+    let expected = usize::from(width) * usize::from(height) * 4;
     if rgba.len() < expected {
         return None;
     }
-    // Pack RGB (JPEG has no alpha).
-    let mut rgb = Vec::with_capacity((w as usize) * (h as usize) * 3);
-    for px in rgba[..expected].chunks_exact(4) {
-        rgb.push(px[0]);
-        rgb.push(px[1]);
-        rgb.push(px[2]);
-    }
+    // Encode straight from RGBA (the encoder drops alpha) with the SIMD
+    // baseline encoder — no intermediate RGB repack, and several× faster
+    // than `image`'s scalar encoder on the RDP re-encode hot path, so the
+    // call can stay synchronous without stalling the protocol read loop.
     let mut out: Vec<u8> = Vec::new();
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality);
+    let encoder = jpeg_encoder::Encoder::new(&mut out, quality);
     encoder
-        .encode(&rgb, w, h, image::ExtendedColorType::Rgb8)
+        .encode(&rgba[..expected], width, height, jpeg_encoder::ColorType::Rgba)
         .ok()?;
     Some(out)
 }

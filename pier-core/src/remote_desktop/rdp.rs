@@ -296,7 +296,14 @@ fn build_config(config: &RemoteDesktopConfig) -> connector::Config {
         request_data: None,
         autologon: false,
         enable_audio_playback: false,
-        performance_flags: PerformanceFlags::default(),
+        // On top of the IronRDP defaults (no full-window-drag, no menu
+        // animations, font smoothing on) also tell the server to skip the
+        // desktop wallpaper and cursor shadow — the two biggest sources of
+        // redundant screen bitmaps. Themes are left on so the remote desktop
+        // still looks normal; this only trims eye-candy redraws.
+        performance_flags: PerformanceFlags::default()
+            | PerformanceFlags::DISABLE_WALLPAPER
+            | PerformanceFlags::DISABLE_CURSOR_SHADOW,
         license_cache: None,
         timezone_info: TimezoneInfo::default(),
         compression_type: None,

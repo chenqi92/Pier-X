@@ -303,8 +303,11 @@ if (-not (Get-Variable -Name __pierxPromptInstalled -Scope Global -ErrorAction S
 /// inject `--rcfile` over SSH (the channel runs the user's login
 /// shell directly), so we send a single semicolon-joined line via
 /// stdin after the channel comes up. The line is shell-detecting:
-/// it sets up a hook for whichever of bash/zsh is hosting it, and
-/// is a silent no-op under fish/sh/dash.
+/// it sets up a hook for whichever of bash/zsh is hosting it. The
+/// shell-specific code is `eval`'d behind a `$BASH_VERSION` /
+/// `$ZSH_VERSION` guard, so a non-matching POSIX shell never has to
+/// *parse* it and the line stays a clean no-op (see the body for why
+/// guarding execution alone isn't enough).
 ///
 /// Behaviour:
 ///
@@ -312,8 +315,9 @@ if (-not (Get-Variable -Name __pierxPromptInstalled -Scope Global -ErrorAction S
 ///   (preserving any existing value), and wraps `PS1` with OSC 133.
 /// * **zsh** — adds the function to `precmd_functions` and wraps
 ///   `PROMPT` with `%{...%}`-marked OSC 133.
-/// * **fish / sh / dash** — the conditional fails silently; no harm
-///   done.
+/// * **ash / dash / sh (any POSIX shell)** — both guards are false, the
+///   quoted bodies are never parsed, and the line no-ops cleanly. (fish
+///   / csh aren't POSIX and were never targeted.)
 ///
 /// Reference: this mirrors VTE's `vte.sh` and wezterm's
 /// `shell-integration.sh` patterns. We send it as one line so it
@@ -321,51 +325,87 @@ if (-not (Get-Variable -Name __pierxPromptInstalled -Scope Global -ErrorAction S
 /// keeps it out of history under any shell with `HISTCONTROL`
 /// containing `ignorespace` — Ubuntu/Fedora default).
 pub fn remote_init_payload() -> Vec<u8> {
-    // Build the line carefully — every newline would split the line
-    // and bash would execute halves separately. Use `;` as the only
-    // statement separator. Trailing `\n` actually executes the line.
+    // The two bodies below are bash- / zsh-only: they use `$'...'`,
+    // `[[ ]]`, `name+=(...)`, `typeset` — none of which a POSIX login
+    // shell (BusyBox ash, dash, plain sh) can parse. And a shell parses
+    // an entire `if … elif … fi` *before* it runs any branch, so guarding
+    // execution with `$BASH_VERSION` / `$ZSH_VERSION` is not enough on its
+    // own: ash would still choke trying to PARSE the bodies, never reach
+    // the trailing screen-clear, and leave its raw echo on screen stuck at
+    // a `>` continuation prompt (observed connecting to iStoreOS/OpenWRT).
     //
-    // We emit a leading SPACE so `HISTCONTROL=ignorespace` (default
-    // in most modern distros) drops it from history.
-    const SCRIPT: &str = concat!(
-        " ",
-        // bash branch
-        "if [ -n \"${BASH_VERSION:-}\" ]; then ",
-            "__pierx_osc7() { printf '\\033]7;file://%s%s\\033\\\\' \"${HOSTNAME:-localhost}\" \"$PWD\"; printf '\\033]1337;CurrentUser=%s\\033\\\\' \"$(id -un 2>/dev/null || whoami 2>/dev/null || printf %s ${USER:-})\"; }; ",
-            "case \"${PROMPT_COMMAND:-}\" in *__pierx_osc7*) ;; ",
-                "'') PROMPT_COMMAND='__pierx_osc7' ;; ",
-                "*) PROMPT_COMMAND='__pierx_osc7;'\"$PROMPT_COMMAND\" ;; ",
-            "esac; ",
-            "if [ -z \"${PIERX_PROMPT_WRAPPED:-}\" ]; then ",
-                "PS1=$'\\001\\033]133;A\\007\\002'\"$PS1\"$'\\001\\033]133;B\\007\\002'; ",
-                "export PIERX_PROMPT_WRAPPED=1; ",
-            "fi; ",
-            "__pierx_osc7; ",
-        // zsh branch
-        "elif [ -n \"${ZSH_VERSION:-}\" ]; then ",
-            "__pierx_osc7() { printf '\\e]7;file://%s%s\\e\\\\' \"${HOST:-localhost}\" \"$PWD\"; printf '\\e]1337;CurrentUser=%s\\e\\\\' \"$(id -un 2>/dev/null || whoami 2>/dev/null || printf %s ${USER:-})\"; }; ",
-            "typeset -ga precmd_functions; ",
-            "if [[ -z \"${precmd_functions[(r)__pierx_osc7]:-}\" ]]; then precmd_functions+=(__pierx_osc7); fi; ",
-            "if [[ -z \"${PIERX_PROMPT_WRAPPED:-}\" ]]; then ",
-                "PROMPT=$'%{\\e]133;A\\a%}'\"$PROMPT\"$'%{\\e]133;B\\a%}'; ",
-                "export PIERX_PROMPT_WRAPPED=1; ",
-            "fi; ",
-            "__pierx_osc7; ",
+    // So each body is handed to `eval` as a single opaque single-quoted
+    // argument (see `single_quote`). To the outer shell the bodies are
+    // just string literals — the whole line is plain POSIX that every
+    // shell can parse — and only bash / zsh ever `eval` (hence parse) the
+    // body that matches them. On any other shell both guards are false,
+    // the bodies are never parsed, and the line collapses to the trailing
+    // `printf '\033[H\033[2J'` that wipes the echoed init: clean prompt,
+    // no hang.
+
+    // bash body: append `__pierx_osc7` to PROMPT_COMMAND (preserving any
+    // existing value), wrap PS1 with OSC 133, then call the hook once so
+    // cwd is reported before the first prompt. No leading/trailing `;` —
+    // the wrapper supplies the separators around `eval …`.
+    const BASH_BODY: &str = concat!(
+        "__pierx_osc7() { printf '\\033]7;file://%s%s\\033\\\\' \"${HOSTNAME:-localhost}\" \"$PWD\"; printf '\\033]1337;CurrentUser=%s\\033\\\\' \"$(id -un 2>/dev/null || whoami 2>/dev/null || printf %s ${USER:-})\"; }; ",
+        "case \"${PROMPT_COMMAND:-}\" in *__pierx_osc7*) ;; ",
+            "'') PROMPT_COMMAND='__pierx_osc7' ;; ",
+            "*) PROMPT_COMMAND='__pierx_osc7;'\"$PROMPT_COMMAND\" ;; ",
+        "esac; ",
+        "if [ -z \"${PIERX_PROMPT_WRAPPED:-}\" ]; then ",
+            "PS1=$'\\001\\033]133;A\\007\\002'\"$PS1\"$'\\001\\033]133;B\\007\\002'; ",
+            "export PIERX_PROMPT_WRAPPED=1; ",
         "fi; ",
-        // Wipe the visible echo of this very line. The PTY's terminal
-        // driver echoes everything we write to its master back as
-        // printable input (the remote shell hasn't reached its
-        // readline loop yet, so input is in canonical+echo mode), so
-        // without this the user sees ~10 wrapped lines of the init
-        // script before bash silently runs it. `printf '\033[H\033[2J'`
-        // clears the visible screen after the line executes — the
-        // banner / prompt that follows lands on a clean canvas. We
-        // intentionally don't `\033[3J` (erase scrollback): the user
-        // can still scroll up to see the SSH login banner if needed.
-        "printf '\\033[H\\033[2J'; true",
-        "\n",
+        "__pierx_osc7",
     );
-    SCRIPT.as_bytes().to_vec()
+
+    // zsh body: same idea via `precmd_functions` and `%{…%}`-marked OSC
+    // 133, kept idempotent so re-sourcing zshrc doesn't stack hooks.
+    const ZSH_BODY: &str = concat!(
+        "__pierx_osc7() { printf '\\e]7;file://%s%s\\e\\\\' \"${HOST:-localhost}\" \"$PWD\"; printf '\\e]1337;CurrentUser=%s\\e\\\\' \"$(id -un 2>/dev/null || whoami 2>/dev/null || printf %s ${USER:-})\"; }; ",
+        "typeset -ga precmd_functions; ",
+        "if [[ -z \"${precmd_functions[(r)__pierx_osc7]:-}\" ]]; then precmd_functions+=(__pierx_osc7); fi; ",
+        "if [[ -z \"${PIERX_PROMPT_WRAPPED:-}\" ]]; then ",
+            "PROMPT=$'%{\\e]133;A\\a%}'\"$PROMPT\"$'%{\\e]133;B\\a%}'; ",
+            "export PIERX_PROMPT_WRAPPED=1; ",
+        "fi; ",
+        "__pierx_osc7",
+    );
+
+    // POSIX wrapper. Leading SPACE → `HISTCONTROL=ignorespace` (default on
+    // modern distros) keeps it out of history. One line: a bare newline
+    // would split it and the shell would run the halves separately, so `;`
+    // is the only separator until the trailing `\n` that submits the line.
+    // The final `printf '\033[H\033[2J'` clears the visible echo of this
+    // line so the banner / prompt that follows lands on a clean canvas; we
+    // intentionally skip `\033[3J` so the SSH login banner stays in
+    // scrollback.
+    let line = format!(
+        " if [ -n \"${{BASH_VERSION:-}}\" ]; then eval {bash}; elif [ -n \"${{ZSH_VERSION:-}}\" ]; then eval {zsh}; fi; printf '\\033[H\\033[2J'; true\n",
+        bash = single_quote(BASH_BODY),
+        zsh = single_quote(ZSH_BODY),
+    );
+    line.into_bytes()
+}
+
+/// Quote `s` as a single POSIX `eval` argument: wrap it in `'…'` and
+/// rewrite every embedded `'` as `'\''` (close-quote, backslash-escaped
+/// quote, reopen-quote). The result is one opaque string token to any
+/// POSIX shell, so the bash-/zsh-only syntax inside it never reaches the
+/// parser of a shell that isn't going to run it.
+fn single_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 #[cfg(test)]
@@ -512,6 +552,77 @@ mod tests {
         assert!(s.contains("CurrentUser="), "must report shell user");
         // Leading space → HISTCONTROL=ignorespace drops it from history.
         assert!(s.starts_with(' '), "leading space for history-skip");
+    }
+
+    /// The shell-specific bodies must be eval-wrapped so they're quoted
+    /// out of sight of a non-bash/zsh parser. Belt-and-suspenders check:
+    /// the raw bash-/zsh-only tokens (`[[`, `name+=(`, `typeset`) appear
+    /// only inside an `eval '…'` argument, never at the top level of the
+    /// line where a POSIX login shell would have to parse them.
+    #[test]
+    fn remote_init_payload_evalwraps_shell_specific_syntax() {
+        let s = String::from_utf8(remote_init_payload()).unwrap();
+        // Both branches hand their body to `eval '…'` (after their `then`).
+        assert_eq!(
+            s.matches("then eval '").count(),
+            2,
+            "both bash and zsh bodies must be eval-wrapped",
+        );
+        assert!(
+            s.contains("${ZSH_VERSION:-}\" ]; then eval '"),
+            "zsh body must be eval-wrapped behind the ZSH_VERSION guard",
+        );
+        // These would crash a POSIX parse if they leaked to the top level.
+        for tok in ["[[", "+=(", "typeset", "$'"] {
+            assert!(s.contains(tok), "expected {tok:?} somewhere (inside eval)");
+        }
+    }
+
+    /// Regression for the iStoreOS/OpenWRT report: a BusyBox-ash login
+    /// shell has to PARSE the whole line before running it, even though it
+    /// executes neither branch. The pre-fix payload's bash-/zsh-only
+    /// syntax tripped that parse, so the screen-clear never ran and the
+    /// raw init blob lingered with the shell stuck at `>`. Syntax-check the
+    /// payload with a strict `-n` (parse-only) pass; skipped when no POSIX
+    /// shell is on PATH (e.g. a bare Windows CI image).
+    #[cfg(unix)]
+    #[test]
+    fn remote_init_payload_parses_under_posix_sh() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let payload = remote_init_payload();
+        // dash is the strictest commonly-available POSIX sh (Debian's
+        // /bin/sh); fall back to whatever `sh` is. busybox is the closest
+        // analogue to the box that hit this bug.
+        for prog in [&["dash", "-n"][..], &["busybox", "ash", "-n"][..], &["sh", "-n"][..]] {
+            let mut child = match Command::new(prog[0])
+                .args(&prog[1..])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(_) => continue, // not installed — try the next shell
+            };
+            child
+                .stdin
+                .take()
+                .expect("piped stdin")
+                .write_all(&payload)
+                .expect("write payload to shell stdin");
+            let out = child.wait_with_output().expect("wait for shell");
+            assert!(
+                out.status.success(),
+                "`{} -n` rejected the remote init payload — it must parse \
+                 on a non-bash/zsh login shell:\n{}",
+                prog.join(" "),
+                String::from_utf8_lossy(&out.stderr),
+            );
+            return; // verified with the first shell we found
+        }
+        // No POSIX shell available; nothing to verify here.
     }
 
     #[test]

@@ -90,8 +90,12 @@
   line-height: calc(13px * 1.45);
   /* Containing block for the smart-mode syntax overlay. The overlay's
    * `top` / `left` are computed in cell × cell-metric space, anchored
-   * to the top-left of the screen's content box. */
+   * to the top-left of the screen's content box. `isolation: isolate`
+   * makes this a self-contained stacking context so the selection
+   * overlay (z-index 0), glyph cells (1) and cursor (2) order
+   * deterministically regardless of ancestor z-indices. */
   position: relative;
+  isolation: isolate;
 }
 
 /* Smart-mode syntax overlay (see TerminalSyntaxOverlay.tsx). Sits
@@ -296,10 +300,41 @@
 .terminal-viewport--selecting .terminal-screen--ruled .terminal-row::after {
   display: none;
 }
-.terminal-screen,
-.terminal-row,
-.terminal-segment { user-select: text; }
-.terminal-screen ::selection { background: var(--selection-bg); color: var(--selection-fg); }
+/* Selection is painted by the model (see .terminal-selection-layer), not
+ * the browser's native text selection. Disabling user-select keeps a
+ * stray native range from forming and fighting the model during a drag —
+ * the source of the directional / flickering selection bugs on
+ * Chromium-based WebViews.
+ *
+ * shell.css's desktop user-select policy lists `.terminal-screen` as a
+ * selectable content island (`user-select: text`, specificity 0,1,0).
+ * These rules are scoped under `.terminal-viewport` (0,2,0) so they win
+ * regardless of stylesheet import order — relying on source order here
+ * is fragile (pier-x.css / shell.css / terminal-panel.css load in an
+ * order that isn't guaranteed). user-select inherits, so the screen
+ * value carries down to rows and segments. */
+.terminal-viewport .terminal-screen,
+.terminal-viewport .terminal-row,
+.terminal-viewport .terminal-segment {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Model-driven selection overlay. One translucent rect per selected row,
+ * painted beneath the glyph cells (z-index 0 < .terminal-segment's 1) so
+ * text stays crisp on top, matching the old native ::selection look. The
+ * layer never intercepts the pointer so drag / click pass through to the
+ * screen. */
+.terminal-selection-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.terminal-selection-rect {
+  position: absolute;
+  background: var(--selection-bg);
+}
 
 .terminal-segment {
   /* WebKit paints ::selection over the font's natural inline cell, not the row's

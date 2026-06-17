@@ -934,68 +934,61 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     return () => window.cancelAnimationFrame(raf);
   }, [focusTerminalSeq, focusTerminalSessionId, session, isActive]);
 
+  // Selection is fully model-driven: it is painted as overlay rects from
+  // `terminalSelection` (see the selection layer in render), not by
+  // borrowing the browser's native text selection. The old approach
+  // mirrored the model onto a DOM Range every drag tick
+  // (removeAllRanges/addRange); on Chromium-based WebViews that fought
+  // the in-progress native drag and produced the directional /
+  // flickering selection bugs. With model-only painting there is no
+  // native range to reconcile — we only drop the model selection when
+  // the tab goes inactive so a backgrounded tab keeps no stale highlight.
   useEffect(() => {
-    if (!isActive) {
-      setTerminalSelection(null);
-      setSelectingInTerminal(false);
-      return;
-    }
-
-    const updateSelectionState = () => {
-      if (terminalSelectionHasText(terminalSelectionRef.current)) {
-        // The user moved the native selection wholly outside the
-        // terminal (clicked / selected in another panel): drop the
-        // model selection, otherwise the snapshot-driven re-assert
-        // effect below keeps stomping the other panel's selection on
-        // every refresh. Skipped mid-drag — the drag owns the model.
-        const outside = window.getSelection?.();
-        const anchor = outside?.anchorNode ?? null;
-        const focus = outside?.focusNode ?? null;
-        const vp = viewportRef.current;
-        if (
-          !selectionDragRef.current &&
-          vp &&
-          outside &&
-          outside.rangeCount > 0 &&
-          anchor &&
-          focus &&
-          !vp.contains(anchor) &&
-          !vp.contains(focus)
-        ) {
-          setTerminalSelection(null);
-          return;
-        }
-        setSelectingInTerminal(true);
-        return;
-      }
-      const viewport = viewportRef.current;
-      const selection = window.getSelection?.();
-      if (!viewport || !selection || selection.isCollapsed || selection.rangeCount === 0) {
-        setSelectingInTerminal(false);
-        return;
-      }
-
-      const anchorInside =
-        selection.anchorNode instanceof Node && viewport.contains(selection.anchorNode);
-      const focusInside =
-        selection.focusNode instanceof Node && viewport.contains(selection.focusNode);
-      setSelectingInTerminal(anchorInside || focusInside);
-    };
-
-    document.addEventListener("selectionchange", updateSelectionState);
-    window.addEventListener("mouseup", updateSelectionState);
-    updateSelectionState();
-    return () => {
-      document.removeEventListener("selectionchange", updateSelectionState);
-      window.removeEventListener("mouseup", updateSelectionState);
-    };
+    if (isActive) return;
+    terminalSelectionRef.current = null;
+    setTerminalSelectionState(null);
+    setSelectingInTerminal(false);
   }, [isActive]);
 
-  useLayoutEffect(() => {
-    if (!isActive) return;
-    if (!terminalSelectionHasText(terminalSelection)) return;
-    applyTerminalSelectionToDom(terminalSelection);
-  }, [isActive, terminalSelection, snapshot, snapshotViewOffset]);
+  // Visible-window selection rectangles derived from the model. Rows
+  // scrolled out of the current snapshot window are simply not painted
+  // (the model still carries them for copy). One rect per selected row:
+  // the first row starts at the anchor column, the last ends at the
+  // focus column, and rows in between fill to the right margin so a
+  // multi-line selection reads as a continuous block.
+  const selectionRects = useMemo(() => {
+    const view = snapshot;
+    const normalized = normalizeTerminalSelection(terminalSelection);
+    if (!view || !normalized) return [] as Array<{
+      row: number;
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+    }>;
+    const { charWidth, rowHeight } = cellMetrics;
+    if (charWidth <= 0 || rowHeight <= 0) return [];
+    const visibleStart = visibleStartForSnapshot(view, snapshotViewOffset);
+    const visibleEnd = visibleStart + view.lines.length - 1;
+    const startRow = Math.max(normalized.start.row, visibleStart);
+    const endRow = Math.min(normalized.end.row, visibleEnd);
+    if (startRow > endRow) return [];
+    const rects: Array<{ row: number; top: number; left: number; width: number; height: number }> = [];
+    for (let row = startRow; row <= endRow; row += 1) {
+      const fromCol = row === normalized.start.row ? normalized.start.col : 0;
+      const toCol = row === normalized.end.row ? normalized.end.col : view.cols;
+      const width = (Math.max(fromCol, toCol) - fromCol) * charWidth;
+      if (width <= 0) continue;
+      rects.push({
+        row,
+        top: (row - visibleStart) * rowHeight,
+        left: fromCol * charWidth,
+        width,
+        height: rowHeight,
+      });
+    }
+    return rects;
+  }, [snapshot, terminalSelection, snapshotViewOffset, cellMetrics]);
 
   // ── Resize session (trigger-based) ──────────────────────────
   //
@@ -2385,101 +2378,47 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     };
   }
 
-  function domPositionForTerminalCell(
-    row: HTMLElement,
-    col: number,
-  ): { node: Node; offset: number } {
-    const segments = Array.from(row.querySelectorAll<HTMLElement>(".terminal-segment"));
-    let cursor = 0;
-    for (const segment of segments) {
-      const cells = Number(segment.dataset.terminalCells ?? 0);
-      const next = cursor + cells;
-      if (col <= next) {
-        const textNode = Array.from(segment.childNodes).find(
-          (node) => node.nodeType === Node.TEXT_NODE,
-        );
-        if (!textNode) return { node: segment, offset: 0 };
-        return {
-          node: textNode,
-          offset: stringOffsetForTerminalCell(
-            textNode.textContent ?? "",
-            Math.max(0, Math.min(cells, col - cursor)),
-          ),
-        };
-      }
-      cursor = next;
-    }
-    return { node: row, offset: row.childNodes.length };
-  }
-
-  function rowElementForLocalRow(localRow: number): HTMLElement | null {
-    return screenRef.current?.querySelector<HTMLElement>(
-      `.terminal-row[data-terminal-row="${localRow}"]`,
-    ) ?? null;
-  }
-
-  function applyTerminalSelectionToDom(selection: TerminalSelectionModel | null) {
-    const normalized = normalizeTerminalSelection(selection);
+  // Word boundaries for double-click selection: the maximal run of
+  // non-whitespace cells around the clicked cell. Returns null when the
+  // click lands on whitespace or past the line content. Works in cell
+  // space (CJK-aware) by mapping the clicked column to a string offset
+  // and back through textCols.
+  function wordSelectionAt(clientX: number, clientY: number): TerminalSelectionModel | null {
+    const point = terminalPointFromClient(clientX, clientY);
     const view = snapshotRef.current;
-    const browserSelection = window.getSelection?.();
-    if (!normalized || !view || !browserSelection) return;
-
-    // Snapshots refresh every ~1.5s even when idle; don't let that
-    // re-assert stomp a selection the user is making in another panel.
-    const viewport = viewportRef.current;
-    if (
-      viewport &&
-      !browserSelection.isCollapsed &&
-      browserSelection.rangeCount > 0 &&
-      browserSelection.anchorNode &&
-      browserSelection.focusNode &&
-      !viewport.contains(browserSelection.anchorNode) &&
-      !viewport.contains(browserSelection.focusNode)
-    ) {
-      return;
-    }
-
-    const visibleStart = visibleStartForSnapshot(view, snapshotViewOffsetRef.current);
-    const visibleEnd = visibleStart + view.lines.length - 1;
-    const startRow = Math.max(normalized.start.row, visibleStart);
-    const endRow = Math.min(normalized.end.row, visibleEnd);
-    if (startRow > endRow) {
-      browserSelection.removeAllRanges();
-      return;
-    }
-
-    const startCol = startRow === normalized.start.row ? normalized.start.col : 0;
-    const endCol = endRow === normalized.end.row ? normalized.end.col : view.cols;
-    if (startRow === endRow && startCol === endCol) {
-      browserSelection.removeAllRanges();
-      return;
-    }
-
-    const startEl = rowElementForLocalRow(startRow - visibleStart);
-    const endEl = rowElementForLocalRow(endRow - visibleStart);
-    if (!startEl || !endEl) return;
-
-    const start = domPositionForTerminalCell(startEl, startCol);
-    const end = domPositionForTerminalCell(endEl, endCol);
-    const range = document.createRange();
-    range.setStart(start.node, start.offset);
-    range.setEnd(end.node, end.offset);
-    browserSelection.removeAllRanges();
-    browserSelection.addRange(range);
+    if (!point || !view) return null;
+    const line = view.lines[point.row - visibleStartForSnapshot(view, snapshotViewOffsetRef.current)];
+    if (!line) return null;
+    const text = line.segments.map((s) => s.text).join("");
+    if (!text) return null;
+    const clickChar = stringOffsetForTerminalCell(text, point.col);
+    const isWord = (ch: string | undefined) => ch !== undefined && ch !== " " && ch !== "\t";
+    if (!isWord(text[clickChar])) return null;
+    let startChar = clickChar;
+    while (startChar > 0 && isWord(text[startChar - 1])) startChar -= 1;
+    let endChar = clickChar;
+    while (endChar < text.length && isWord(text[endChar])) endChar += 1;
+    return {
+      anchor: { row: point.row, col: textCols(text.slice(0, startChar)) },
+      focus: { row: point.row, col: textCols(text.slice(0, endChar)) },
+    };
   }
 
-  function getNativeSelectionText(): string {
-    const viewport = viewportRef.current;
-    const sel = window.getSelection();
-    if (!viewport || !sel || sel.rangeCount === 0 || sel.isCollapsed) return "";
-    const anchor = sel.anchorNode;
-    const focus = sel.focusNode;
-    if (!anchor || !focus || !viewport.contains(anchor) || !viewport.contains(focus)) return "";
-    return sel.toString();
+  // Whole visible row for triple-click selection (column 0 → line
+  // content end). Returns null for an empty row.
+  function lineSelectionAt(clientX: number, clientY: number): TerminalSelectionModel | null {
+    const point = terminalPointFromClient(clientX, clientY);
+    const view = snapshotRef.current;
+    if (!point || !view) return null;
+    const line = view.lines[point.row - visibleStartForSnapshot(view, snapshotViewOffsetRef.current)];
+    if (!line) return null;
+    const end = terminalLineCells(line);
+    if (end <= 0) return null;
+    return { anchor: { row: point.row, col: 0 }, focus: { row: point.row, col: end } };
   }
 
   function hasCopyableSelection(): boolean {
-    return terminalSelectionHasText(terminalSelectionRef.current) || getNativeSelectionText().length > 0;
+    return terminalSelectionHasText(terminalSelectionRef.current);
   }
 
   async function getTerminalSelectionText(): Promise<string> {
@@ -2560,8 +2499,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   }
 
   async function getSelectionTextForCopy(): Promise<string> {
-    const terminalText = await getTerminalSelectionText();
-    return terminalText || getNativeSelectionText();
+    return getTerminalSelectionText();
   }
 
   // ── M4: Tab completion popover ─────────────────────────────────
@@ -3021,21 +2959,19 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     setTerminalSelection(next);
   }
 
-  function handleTerminalSelectionMouseDown(event: React.MouseEvent<HTMLDivElement>) {
-    if (event.button !== 0) return;
-    // Double / triple click: let the browser's native word / line
-    // selection stand — a zero-length model drag would erase it on
-    // mouseup. The model stays null, so the re-assert effect skips it.
-    if (event.detail > 1) return;
-    if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
-    const anchor = terminalPointFromClient(event.clientX, event.clientY);
-    if (!anchor) return;
-
+  // Start a model-driven selection drag. `anchor` is the fixed end;
+  // `focus` is the initial moving end (equal to anchor for a fresh
+  // click, or the clicked point for a Shift-extend that preserves the
+  // existing anchor). Window-level capture listeners keep the drag alive
+  // when the pointer leaves the screen box.
+  function beginTerminalSelectionDrag(
+    anchor: TerminalSelectionPoint,
+    focus: TerminalSelectionPoint,
+  ) {
     selectionDragCleanupRef.current?.();
-    const hadModelSelection = terminalSelectionHasText(terminalSelectionRef.current);
-    const initial = { anchor, focus: anchor };
+    const initial = { anchor, focus };
     selectionDragRef.current = initial;
-    setTerminalSelection(null);
+    setTerminalSelection(terminalSelectionHasText(initial) ? initial : null);
 
     let cleanup = () => {};
     const onMouseMove = (moveEvent: MouseEvent) => {
@@ -3050,15 +2986,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
       const finalSelection = selectionDragRef.current;
       cleanup();
       selectionDragRef.current = null;
-      if (!terminalSelectionHasText(finalSelection)) {
-        setTerminalSelection(null);
-        // Only wipe the DOM selection when a prior model selection was
-        // actually painted there — a plain click must not destroy a
-        // native (e.g. double-click word) selection it never owned.
-        if (hadModelSelection) window.getSelection?.()?.removeAllRanges();
-        return;
-      }
-      setTerminalSelection(finalSelection);
+      setTerminalSelection(terminalSelectionHasText(finalSelection) ? finalSelection : null);
     };
     cleanup = () => {
       window.removeEventListener("mousemove", onMouseMove, true);
@@ -3070,6 +2998,41 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     selectionDragCleanupRef.current = cleanup;
     window.addEventListener("mousemove", onMouseMove, true);
     window.addEventListener("mouseup", onMouseUp, true);
+  }
+
+  function handleTerminalSelectionMouseDown(event: React.MouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    // Modifiers other than Shift are reserved (cursor-position click,
+    // future column-select) — leave the selection untouched.
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+    // Shift+click / Shift+drag extends the current selection: keep the
+    // existing anchor (or start one at the click point) and move focus.
+    if (event.shiftKey) {
+      const point = terminalPointFromClient(event.clientX, event.clientY);
+      if (!point) return;
+      const existing = terminalSelectionRef.current;
+      beginTerminalSelectionDrag(existing ? existing.anchor : point, point);
+      return;
+    }
+
+    // Double-click selects the word under the cursor; triple-click the
+    // whole row. Both are terminal-modeled (native selection is disabled
+    // on the screen), so there is nothing to defer to the browser.
+    if (event.detail === 2) {
+      const word = wordSelectionAt(event.clientX, event.clientY);
+      if (word) setTerminalSelection(word);
+      return;
+    }
+    if (event.detail >= 3) {
+      const line = lineSelectionAt(event.clientX, event.clientY);
+      if (line) setTerminalSelection(line);
+      return;
+    }
+
+    const anchor = terminalPointFromClient(event.clientX, event.clientY);
+    if (!anchor) return;
+    beginTerminalSelectionDrag(anchor, anchor);
   }
 
   function handleWheel(event: React.WheelEvent<HTMLDivElement>) {
@@ -3111,8 +3074,9 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     // TUI alt-screens (vim, htop, less) own mouse events themselves —
     // don't synthesize keystrokes that would compete with their input.
     if (snapshot.altScreen) return;
-    const selectionText = window.getSelection?.()?.toString() ?? "";
-    if (selectionText.length > 0) return;
+    // A live model selection means the user just dragged/clicked to
+    // select — don't also reposition the shell cursor on this click.
+    if (terminalSelectionHasText(terminalSelectionRef.current)) return;
 
     const screen = event.currentTarget;
     const rect = screen.getBoundingClientRect();
@@ -3196,14 +3160,13 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   }
 
   function selectAllInTerminal() {
-    const screen = viewportRef.current?.querySelector(".terminal-screen");
-    if (!screen) return;
-    setTerminalSelection(null);
-    const range = document.createRange();
-    range.selectNodeContents(screen);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
+    const view = snapshotRef.current;
+    if (!view || view.lines.length === 0) return;
+    const visibleStart = visibleStartForSnapshot(view, snapshotViewOffsetRef.current);
+    setTerminalSelection({
+      anchor: { row: visibleStart, col: 0 },
+      focus: { row: visibleStart + view.lines.length - 1, col: view.cols },
+    });
   }
 
   // ── "Ask AI" bridge (§5.14.5) ────────────────────────────────
@@ -3366,6 +3329,22 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
             {snapshot.lines.map((line, i) => (
               <TerminalRow key={`line-${i}`} line={line} env={rowEnv} rowIndex={i} />
             ))}
+            {selectionRects.length > 0 && (
+              <div className="terminal-selection-layer" aria-hidden>
+                {selectionRects.map((rect) => (
+                  <div
+                    key={`sel-${rect.row}`}
+                    className="terminal-selection-rect"
+                    style={{
+                      top: rect.top,
+                      left: rect.left,
+                      width: rect.width,
+                      height: rect.height,
+                    }}
+                  />
+                ))}
+              </div>
+            )}
             {smartActive &&
               !mirrorDesynced &&
               snapshot.promptEnd &&

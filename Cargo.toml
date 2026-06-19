@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["pier-core", "src-tauri", "tools/pier-x-completions-importer"]
+members = ["pier-core", "src-tauri", "freerdp-sys", "tools/pier-x-completions-importer"]

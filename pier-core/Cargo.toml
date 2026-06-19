@@ -229,6 +229,12 @@ ironrdp = { version = "0.15", default-features = false, features = ["connector",
 ironrdp-tokio = { version = "0.9", features = ["reqwest"], optional = true }
 ironrdp-tls = { version = "0.2", default-features = false, features = ["rustls"], optional = true }
 
+# FreeRDP-backed RDP via the `freerdp-sys` workspace crate (vendored
+# libfreerdp3 built from source with the MS-RDPEGFX H.264/AVC444 pipeline).
+# Optional + behind the `rdp-freerdp` feature: only this edge pulls in the
+# cmake/bindgen native build, so the default IronRDP build stays pure-Rust.
+freerdp-sys = { path = "../freerdp-sys", optional = true }
+
 [features]
 default = ["rdp"]
 # Compile the IronRDP-backed RDP client. On by default; disable with
@@ -246,7 +252,7 @@ rdp = ["dep:ironrdp", "dep:ironrdp-tokio", "dep:ironrdp-tls"]
 # flag is on it supersedes `rdp` for the RDP protocol. This deliberately crosses
 # the crate's "no C-ABI bridge / pure-Rust" stance for the H.264 win; see
 # remote_desktop::rdp_freerdp and docs/PRODUCT-SPEC.md once migration lands.
-rdp-freerdp = []
+rdp-freerdp = ["dep:freerdp-sys"]
 
 # Unix PTY — forkpty + ioctl wrappers live in libc. Only pulled in on
 # Unix targets; Windows uses the ConPTY-backed implementation below.

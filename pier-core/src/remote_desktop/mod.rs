@@ -15,7 +15,9 @@
 mod error;
 mod frame;
 mod input;
-#[cfg(feature = "rdp")]
+// IronRDP is the RDP backend only when FreeRDP isn't superseding it; skip
+// compiling it (and its rustls stack) entirely when `rdp-freerdp` is on.
+#[cfg(all(feature = "rdp", not(feature = "rdp-freerdp")))]
 pub mod rdp;
 #[cfg(feature = "rdp-freerdp")]
 pub mod rdp_freerdp;

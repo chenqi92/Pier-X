@@ -50,3 +50,11 @@ tokio-util = { version = "0.7", default-features = false }
 tokio = { version = "1", features = ["sync", "time", "net", "io-util"] }
 tokio-tungstenite = "0.29"
 pier-core = { path = "../pier-core" }
+
+[features]
+# Opt-in: route the RDP protocol through the FreeRDP H.264/AVC444 backend
+# instead of IronRDP. OFF by default — enabling it triggers the native
+# libfreerdp3 source build in `freerdp-sys` (cmake + bindgen + a H.264 decoder).
+# Build with `cargo tauri build --features rdp-freerdp` (or `cargo build -p
+# pierx --features rdp-freerdp`). The default app build stays pure-Rust.
+rdp-freerdp = ["pier-core/rdp-freerdp"]

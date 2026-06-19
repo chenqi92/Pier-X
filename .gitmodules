@@ -1,0 +1,3 @@
+[submodule "pier-core/vendor/FreeRDP"]
+	path = freerdp-sys/vendor/FreeRDP
+	url = https://github.com/FreeRDP/FreeRDP.git

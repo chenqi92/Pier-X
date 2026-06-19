@@ -15,6 +15,7 @@ import RFB, {
 import type { TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import {
+  diagnoseRemoteDesktopError,
   keyToInput,
   remoteDesktopClose,
   remoteDesktopConnect,
@@ -540,6 +541,10 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
 
   const reconnect = useCallback(() => setConnectAttempt((n) => n + 1), []);
 
+  // Friendly, actionable line derived from the raw backend error; the raw
+  // string is still shown beneath it as the technical detail.
+  const errorHint = errorMsg ? diagnoseRemoteDesktopError(errorMsg) : null;
+
   return (
     <section
       className="rd-panel"
@@ -611,6 +616,7 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
                     ? i18n.t("Connection failed")
                     : i18n.t("Session ended")}
                 </span>
+                {errorHint && <span className="rd-panel__overlay-hint">{i18n.t(errorHint)}</span>}
                 {errorMsg && <span className="rd-panel__overlay-detail">{errorMsg}</span>}
                 <button type="button" className="btn is-primary" onClick={reconnect}>
                   <RotateCw size={14} />
@@ -847,6 +853,8 @@ function NoVncRemoteDesktopPanel({ tab, isActive }: Props) {
     return () => window.cancelAnimationFrame(frame);
   }, [isActive, status]);
 
+  const errorHint = errorMsg ? diagnoseRemoteDesktopError(errorMsg) : null;
+
   return (
     <section
       className="rd-panel"
@@ -967,6 +975,7 @@ function NoVncRemoteDesktopPanel({ tab, isActive }: Props) {
                 <span className="rd-panel__overlay-title">
                   {status === "error" ? i18n.t("Connection failed") : i18n.t("Session ended")}
                 </span>
+                {errorHint && <span className="rd-panel__overlay-hint">{i18n.t(errorHint)}</span>}
                 {errorMsg && <span className="rd-panel__overlay-detail">{errorMsg}</span>}
                 <button type="button" className="btn is-primary" onClick={reconnect}>
                   <RotateCw size={14} />

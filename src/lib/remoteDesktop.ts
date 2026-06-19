@@ -180,6 +180,42 @@ export const remoteDesktopVncProxyStart = (params: { host: string; port: number 
 export const remoteDesktopVncProxyStop = (proxyId: string) =>
   invoke<void>("remote_desktop_vnc_proxy_stop", { proxyId });
 
+/** Turn a raw backend RDP/VNC error string into one actionable, human hint
+ *  (an English source string the i18n layer translates), or `null` when the
+ *  raw detail is already the best we can say. Matching is substring-based on
+ *  the leaf causes the IronRDP connect path and our wrappers surface — see
+ *  `pier-core/src/remote_desktop/{rdp,error}.rs`. Order matters: the most
+ *  specific causes are tested first. */
+export function diagnoseRemoteDesktopError(raw: string): string | null {
+  const s = raw.toLowerCase();
+  if (!s) return null;
+  if (s.includes("timed out") || s.includes("timeout"))
+    return "The host didn't answer in time. Check it's powered on and reachable, and that the RDP port (default 3389) isn't blocked by a firewall.";
+  if (s.includes("refused"))
+    return "Connection refused — nothing is listening on that port. Enable Remote Desktop on the host and confirm the port number.";
+  if (s.includes("standard rdp security") || (s.includes("ssl") && s.includes("not allowed")))
+    return "The host only offers legacy RDP encryption (RC4), which isn't supported. Enable TLS / Network Level Authentication for Remote Desktop on the host.";
+  if (s.includes("kerberos") || s.includes("kdc"))
+    return "This host requires Kerberos / domain sign-in, which isn't supported yet — only username + password (NTLM) works.";
+  if (s.includes("security type"))
+    return "The VNC server uses an authentication method that isn't supported.";
+  if (
+    s.includes("access denied") ||
+    s.includes("accessdenied") ||
+    s.includes("logon") ||
+    s.includes("credssp") ||
+    s.includes("authentication")
+  )
+    return "Sign-in was rejected. Check the username, password, and domain. For a Microsoft/AD account use the full name (e.g. user@domain or DOMAIN\\user).";
+  if (s.includes("resize") || s.includes("display mode"))
+    return "The host changed its display resolution. Reconnect to continue.";
+  if (s.includes("tls"))
+    return "The secure (TLS) handshake with the host failed.";
+  if (s.includes("negotiation"))
+    return "The host rejected the RDP security negotiation. Confirm Remote Desktop with TLS/NLA is enabled.";
+  return null;
+}
+
 /** Build a key input from a DOM `KeyboardEvent`, or `null` if unmappable. */
 export function keyToInput(e: KeyboardEvent, pressed: boolean): RemoteInput | null {
   const resolved = resolveKey(e);

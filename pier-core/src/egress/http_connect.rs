@@ -19,6 +19,17 @@ pub(super) async fn dial(
     target_port: u16,
     creds: Option<&(String, String)>,
 ) -> io::Result<EgressStream> {
+    // The target host is interpolated into the CONNECT request line and the
+    // Host header. A value carrying CR/LF (or other control chars) would
+    // smuggle extra request lines/headers into the proxy connection
+    // (request smuggling / SSRF). Reject anything that isn't a plausible
+    // hostname/IP-literal byte before it reaches the request.
+    if !is_valid_request_host(target_host) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("HTTP CONNECT: invalid target host {target_host:?}"),
+        ));
+    }
     let mut stream = TcpStream::connect((proxy_host, proxy_port)).await?;
 
     // Build the CONNECT request. Using HTTP/1.1 and a Host header
@@ -76,6 +87,19 @@ async fn read_until_double_crlf(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
             ));
         }
     }
+}
+
+/// True when `host` is safe to splice into the CONNECT request line and
+/// Host header: no control characters, whitespace, or other bytes that
+/// could inject CRLF / extra headers. Allows letters, digits, `.`, `-`,
+/// `_`, and the `[` / `]` / `:` used by bracketed IPv6 literals. Empty is
+/// rejected.
+fn is_valid_request_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(b, b'.' | b'-' | b'_' | b'[' | b']' | b':')
+        })
 }
 
 /// Parse the numeric status code out of `HTTP/1.1 200 Connection established\r\n…`.
@@ -155,6 +179,29 @@ mod tests {
             base64_encode(b"Aladdin:open sesame"),
             "QWxhZGRpbjpvcGVuIHNlc2FtZQ=="
         );
+    }
+
+    #[test]
+    fn rejects_crlf_injection_hosts() {
+        assert!(is_valid_request_host("example.com"));
+        assert!(is_valid_request_host("10.0.0.1"));
+        assert!(is_valid_request_host("[2001:db8::1]"));
+        assert!(is_valid_request_host("host-1_2.internal"));
+        assert!(!is_valid_request_host(""));
+        assert!(!is_valid_request_host("evil.com\r\nX-Injected: 1"));
+        assert!(!is_valid_request_host("evil.com\nGET /"));
+        assert!(!is_valid_request_host("a b.com"));
+        assert!(!is_valid_request_host("evil.com\r\n\r\nGET http://internal/"));
+    }
+
+    #[tokio::test]
+    async fn dial_rejects_crlf_target_host() {
+        // The Ok variant (boxed stream) isn't Debug, so match rather than
+        // unwrap_err/expect_err.
+        match dial("127.0.0.1", 1, "evil.com\r\nX-Injected: 1", 443, None).await {
+            Ok(_) => panic!("CRLF host should have been rejected"),
+            Err(e) => assert_eq!(e.kind(), io::ErrorKind::InvalidInput),
+        }
     }
 
     #[test]

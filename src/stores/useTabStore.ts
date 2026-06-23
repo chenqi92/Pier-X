@@ -238,9 +238,15 @@ function closeTabTunnels(tab: TabState | undefined) {
   if (!tab) {
     return;
   }
-  closeTunnel(tab.redisTunnelId);
-  closeTunnel(tab.mysqlTunnelId);
-  closeTunnel(tab.pgTunnelId);
+  // Close every `*TunnelId` the tab carries, derived from its fields rather
+  // than a hand-maintained list — otherwise adding a new DB kind silently
+  // leaks its forwarder (this previously closed only redis/mysql/pg and
+  // leaked the SQL Server `mssqlTunnelId` and InfluxDB `influxTunnelId`).
+  for (const [key, value] of Object.entries(tab)) {
+    if (key.endsWith("TunnelId") && typeof value === "string") {
+      closeTunnel(value);
+    }
+  }
 }
 
 /** `user@host:port` strings for every SSH target still referenced by

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Play, RefreshCw, Table2, Unplug } from "lucide-react";
+import { Lock, Play, RefreshCw, Table2, Unlock, Unplug } from "lucide-react";
 import type { DbProduct, QueryExecutionResult, TabState } from "../lib/types";
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
@@ -143,6 +143,9 @@ function RemoteSqlBody({ tab, kind }: { tab: TabState; kind: RemoteKind }) {
   const [sql, setSql] = useState("SELECT * FROM v$version");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Default read-only write-lock, matching the other DB panels: the backend
+  // rejects non-read statements unless the lock is released.
+  const [readOnly, setReadOnly] = useState(true);
 
   function resetPanel() {
     setConnected(false);
@@ -175,6 +178,7 @@ function RemoteSqlBody({ tab, kind }: { tab: TabState; kind: RemoteKind }) {
       dbUser: user.trim(),
       dbPassword: pw,
       sql: sqlText,
+      readOnly,
     };
     if (kind === "oracle") {
       const service = draft ? draft.database ?? "" : tab.oracleService;
@@ -353,6 +357,15 @@ function RemoteSqlBody({ tab, kind }: { tab: TabState; kind: RemoteKind }) {
             <div className="dbq-editor__bar">
               <button type="button" className="btn is-primary is-compact" disabled={busy} onClick={() => void run()}>
                 <Play size={11} /> {t("Run")}
+              </button>
+              <button
+                type="button"
+                className={"btn is-ghost is-compact" + (readOnly ? "" : " is-active")}
+                title={readOnly ? t("Read-only — click to allow writes") : t("Writes enabled — click to lock")}
+                onClick={() => setReadOnly((v) => !v)}
+              >
+                {readOnly ? <Lock size={11} /> : <Unlock size={11} />}
+                {readOnly ? t("read-only") : t("editable")}
               </button>
               <span className="dbq-editor__hint">⌘⏎</span>
               <DbAiGenerate

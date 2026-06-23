@@ -1104,6 +1104,7 @@ pub fn git_commit_detail(
     if commit_hash.is_empty() {
         return Err(String::from("commit hash cannot be empty"));
     }
+    reject_flaglike_ref(commit_hash, "commit hash")?;
 
     let meta = run_git_at(
         &repo_path,
@@ -1141,6 +1142,7 @@ pub fn git_commit_file_diff(
     if commit_hash.is_empty() || relative_path.is_empty() {
         return Err(String::from("commit hash and file path are required"));
     }
+    reject_flaglike_ref(commit_hash, "commit hash")?;
 
     run_git_at(
         &repo_path,
@@ -1167,6 +1169,7 @@ pub fn git_comparison_files(
     if commit_hash.is_empty() {
         return Err(String::from("commit hash cannot be empty"));
     }
+    reject_flaglike_ref(commit_hash, "commit hash")?;
     let output = run_git_at(&repo_path, &["diff", "--name-only", commit_hash, "HEAD"])?;
     Ok(output
         .lines()
@@ -1203,6 +1206,7 @@ pub fn git_comparison_diff(
     if commit_hash.is_empty() || relative_path.is_empty() {
         return Err(String::from("commit hash and file path are required"));
     }
+    reject_flaglike_ref(commit_hash, "commit hash")?;
     run_git_at(
         &repo_path,
         &["diff", "--stat=0", commit_hash, "HEAD", "--", relative_path],
@@ -1795,6 +1799,7 @@ pub fn git_revert_commit(
     if commit_hash.is_empty() {
         return Err(String::from("commit hash cannot be empty"));
     }
+    reject_flaglike_ref(commit_hash, "commit hash")?;
     let mut args: Vec<&str> = vec!["revert"];
     if no_commit.unwrap_or(false) {
         args.push("--no-commit");
@@ -1819,6 +1824,7 @@ pub fn git_cherry_pick_commit(
     if commit_hash.is_empty() {
         return Err(String::from("commit hash cannot be empty"));
     }
+    reject_flaglike_ref(commit_hash, "commit hash")?;
     let mut args: Vec<&str> = vec!["cherry-pick"];
     if no_commit.unwrap_or(false) {
         args.push("--no-commit");

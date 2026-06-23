@@ -212,6 +212,9 @@ const NGINX_CONF_PATH: &str = "/etc/nginx/nginx.conf";
 const NGINX_CONF_D_DIR: &str = "/etc/nginx/conf.d";
 const NGINX_SITES_AVAILABLE_DIR: &str = "/etc/nginx/sites-available";
 const NGINX_SITES_ENABLED_DIR: &str = "/etc/nginx/sites-enabled";
+/// Root of the nginx config tree. Edits via [`save_file_validate_reload`]
+/// must stay within this subtree.
+const NGINX_ROOT_DIR: &str = "/etc/nginx";
 
 /// One-shot probe: nginx presence + version + built-in modules + the
 /// files we'd render in the file tree. Cheap enough to call on panel
@@ -616,6 +619,20 @@ fn is_allowed_create_path(path: &str) -> bool {
     !path.split('/').any(|seg| seg == "..")
 }
 
+/// Path-allowlist for [`save_file_validate_reload`]: the target must live
+/// somewhere under `/etc/nginx/` (so `nginx.conf` and any include can be
+/// edited — broader than [`is_allowed_create_path`], which is limited to
+/// `conf.d/` and `sites-available/`), end in a real filename, and contain
+/// no `.`/`..` segments or NUL. Keeps the sudo-backed write confined to the
+/// nginx tree so it can't be turned into an arbitrary root-owned write.
+fn is_allowed_edit_path(path: &str) -> bool {
+    let root = format!("{NGINX_ROOT_DIR}/");
+    path.starts_with(&root)
+        && !path.ends_with('/')
+        && !path.contains('\0')
+        && !path.split('/').any(|seg| seg == "." || seg == "..")
+}
+
 /// Save → validate → reload. Layout:
 ///
 /// 1. `cp <path> <path>.pier-bak.<ts>` — backup. We use a timestamped
@@ -632,6 +649,16 @@ pub async fn save_file_validate_reload(
     path: &str,
     content: &str,
 ) -> Result<NginxSaveResult> {
+    // Path-allowlist: this writes `content` to `path` under sudo, so a
+    // caller that reaches the IPC (a compromised/XSS'd renderer) must not be
+    // able to overwrite arbitrary root-owned files (authorized_keys,
+    // sudoers.d, cron.d, systemd units). Confine writes to the nginx tree.
+    if !is_allowed_edit_path(path) {
+        return Err(crate::ssh::error::SshError::InvalidConfig(format!(
+            "refusing to write {path}: must live under {NGINX_ROOT_DIR}/ with no `..` segments"
+        )));
+    }
+
     // Identity probe: keep this on the bare `exec_command` so the
     // returned uid reflects the SSH user, not whatever sudo would
     // become. Otherwise a non-root user with armed sudo gets
@@ -1828,6 +1855,23 @@ http {
         assert!(!is_allowed_create_path("/etc/nginx/conf.d/.."));
         assert!(!is_allowed_create_path("conf.d/foo.conf")); // not absolute
         assert!(!is_allowed_create_path(""));
+    }
+
+    #[test]
+    fn is_allowed_edit_path_confines_to_nginx_tree() {
+        // Editing may touch the whole nginx tree, including nginx.conf.
+        assert!(is_allowed_edit_path("/etc/nginx/nginx.conf"));
+        assert!(is_allowed_edit_path("/etc/nginx/conf.d/mysite.conf"));
+        assert!(is_allowed_edit_path("/etc/nginx/sites-available/blog"));
+        assert!(is_allowed_edit_path("/etc/nginx/snippets/ssl/params.conf"));
+        // But never escapes the tree or writes arbitrary root files.
+        assert!(!is_allowed_edit_path("/root/.ssh/authorized_keys"));
+        assert!(!is_allowed_edit_path("/etc/sudoers.d/x"));
+        assert!(!is_allowed_edit_path("/etc/nginx/../sudoers.d/x"));
+        assert!(!is_allowed_edit_path("/etc/nginx/")); // no leaf
+        assert!(!is_allowed_edit_path("/etc/nginx")); // the dir itself
+        assert!(!is_allowed_edit_path("/etc/nginxx/foo")); // prefix-trick
+        assert!(!is_allowed_edit_path(""));
     }
 
     #[test]

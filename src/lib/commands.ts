@@ -1292,6 +1292,7 @@ export const oracleQuery = (
     dbPassword: string;
     dbService: string;
     sql: string;
+    readOnly: boolean;
   },
 ) => invoke<QueryExecutionResult>("oracle_query", params);
 
@@ -1304,6 +1305,7 @@ export const damengQuery = (
     dbUser: string;
     dbPassword: string;
     sql: string;
+    readOnly: boolean;
   },
 ) => invoke<QueryExecutionResult>("dameng_query", params);
 

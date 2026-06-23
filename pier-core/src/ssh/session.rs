@@ -1316,7 +1316,10 @@ impl SshSession {
         // so failure strings like `Authentication failure` stay matchable.
         // `su -` still resets the env for the inner login shell, so the
         // command runs under the target user's normal locale.
-        let full = format!("LC_ALL=C su - {user} -c '{escaped}'");
+        // Single-quote the username so a value with shell metacharacters
+        // can't break out of the `su` token (mirrors the wrappers in
+        // `crate::sudo`; the value should already be validated upstream).
+        let full = format!("LC_ALL=C su - {} -c '{escaped}'", crate::sudo::quote_user(user));
 
         let mut channel = self.handle.channel_open_session().await?;
         // A minimal PTY: `dumb` term keeps escape sequences out of the

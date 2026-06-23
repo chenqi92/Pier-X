@@ -2239,6 +2239,14 @@ fn ssh_set_host_effective_user(
     // Only a *different* user counts as elevation; the login user (or an
     // empty value) clears the entry — the terminal is back to baseline.
     let value = effective_user.filter(|eu| !eu.is_empty() && *eu != user);
+    // Validate at the boundary: this value is later spliced into a
+    // `su`/`sudo -u` command, so reject anything that isn't a plain POSIX
+    // username before it can reach the elevated shell string.
+    if let Some(eu) = &value {
+        if !pier_core::sudo::is_valid_username(eu) {
+            return Err(format!("Invalid effective user name: {eu:?}"));
+        }
+    }
     {
         let mut m = state
             .host_effective_user
@@ -7827,7 +7835,14 @@ fn remote_cli_query_impl(
     db_password: String,
     db_service: String,
     sql: String,
+    read_only: bool,
 ) -> Result<QueryExecutionResult, String> {
+    // Read-only write-lock: same backend gate as every other DB engine, so
+    // Oracle/Dameng honor the panel's write lock instead of running DML/DDL
+    // unconditionally on the remote vendor CLI.
+    if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
+        return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
+    }
     let session = get_or_open_ssh_session_elevated(
         &state,
         &host,
@@ -7882,6 +7897,7 @@ async fn oracle_query(
     db_password: String,
     db_service: String,
     sql: String,
+    read_only: bool,
 ) -> Result<QueryExecutionResult, String> {
     run_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
@@ -7903,6 +7919,7 @@ async fn oracle_query(
             db_password,
             db_service,
             sql,
+            read_only,
         )
     })
     .await
@@ -7927,6 +7944,7 @@ async fn dameng_query(
     db_user: String,
     db_password: String,
     sql: String,
+    read_only: bool,
 ) -> Result<QueryExecutionResult, String> {
     run_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
@@ -7948,6 +7966,7 @@ async fn dameng_query(
             db_password,
             String::new(),
             sql,
+            read_only,
         )
     })
     .await

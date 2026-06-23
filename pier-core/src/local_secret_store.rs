@@ -130,23 +130,78 @@ fn store_path() -> io::Result<PathBuf> {
     Ok(data_dir()?.join(STORE_FILE))
 }
 
-/// Read the store file, returning an empty store when it's missing or
-/// unparseable (a corrupt file shouldn't wedge every future write).
-fn load_store() -> StoreFile {
-    let Ok(path) = store_path() else {
-        return StoreFile::default();
+/// Read + parse the store. `Ok(None)` = the file is absent; `Ok(Some(_))`
+/// = parsed cleanly; `Err` = present but unreadable/unparseable. Writers
+/// must distinguish these so a corrupt file is never treated as "empty"
+/// and blindly overwritten — which would drop every other stored secret.
+fn read_store_file() -> io::Result<Option<StoreFile>> {
+    let path = store_path()?;
+    let bytes = match fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
     };
-    match fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
-        Err(_) => StoreFile::default(),
+    serde_json::from_slice(&bytes).map(Some).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("secret store is corrupt: {e}"),
+        )
+    })
+}
+
+/// Lenient load for read-only callers ([`get`]): a missing or corrupt file
+/// degrades to an empty store (caller treats it as "no stored secret" and
+/// re-prompts). Never writes, so it cannot clobber anything.
+fn load_store_lenient() -> StoreFile {
+    read_store_file().ok().flatten().unwrap_or_default()
+}
+
+/// Load for a read-modify-write ([`set`] / [`delete`]). On a corrupt file
+/// it quarantines the bad file to `secrets.enc.corrupt` and logs, so the
+/// next write starts clean instead of silently overwriting (and thereby
+/// destroying) the other entries. If the bad file can't even be moved
+/// aside, it refuses rather than risk clobbering it.
+fn load_store_for_write() -> io::Result<StoreFile> {
+    match read_store_file() {
+        Ok(Some(store)) => Ok(store),
+        Ok(None) => Ok(StoreFile::default()),
+        Err(e) => {
+            let path = store_path()?;
+            let aside = path.with_file_name(format!("{STORE_FILE}.corrupt"));
+            match fs::rename(&path, &aside) {
+                Ok(()) => {
+                    log::warn!(
+                        "local secret store was corrupt ({e}); quarantined to {}",
+                        aside.display()
+                    );
+                    Ok(StoreFile::default())
+                }
+                Err(re) => Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!(
+                        "secret store is corrupt and could not be quarantined: {re} (original: {e})"
+                    ),
+                )),
+            }
+        }
     }
 }
 
+/// Persist `store` atomically: write to a sibling temp file, fsync, then
+/// rename over the target. A crash leaves either the old or the new file
+/// fully intact — never a truncated mix that the next load would reject.
 fn save_store(store: &StoreFile) -> io::Result<()> {
     let dir = data_dir()?;
     fs::create_dir_all(&dir)?;
     let bytes = serde_json::to_vec_pretty(store).map_err(io_other)?;
-    write_private(&dir.join(STORE_FILE), &bytes)
+    let final_path = dir.join(STORE_FILE);
+    let tmp_path = dir.join(format!("{STORE_FILE}.tmp"));
+    write_private(&tmp_path, &bytes)?;
+    // Make the temp file's bytes durable before the rename swaps it in.
+    if let Ok(f) = fs::File::open(&tmp_path) {
+        let _ = f.sync_all();
+    }
+    fs::rename(&tmp_path, &final_path)
 }
 
 /// Seal `value` under `key`. Overwrites any existing entry.
@@ -163,7 +218,7 @@ pub fn set(key: &str, value: &str) -> io::Result<()> {
     blob.extend_from_slice(&nonce_bytes);
     blob.extend_from_slice(&ciphertext);
 
-    let mut store = load_store();
+    let mut store = load_store_for_write()?;
     store.version = STORE_VERSION;
     store.entries.insert(key.to_string(), hex::encode(&blob));
     save_store(&store)
@@ -173,7 +228,7 @@ pub fn set(key: &str, value: &str) -> io::Result<()> {
 /// entry, or when the entry can't be decrypted (key rotated, file
 /// tampered) — callers treat both as "no stored secret" and re-prompt.
 pub fn get(key: &str) -> io::Result<Option<String>> {
-    let store = load_store();
+    let store = load_store_lenient();
     let Some(hexed) = store.entries.get(key) else {
         return Ok(None);
     };
@@ -194,7 +249,7 @@ pub fn get(key: &str) -> io::Result<Option<String>> {
 
 /// Drop the entry for `key`. A missing entry is not an error.
 pub fn delete(key: &str) -> io::Result<()> {
-    let mut store = load_store();
+    let mut store = load_store_for_write()?;
     if store.entries.remove(key).is_some() {
         save_store(&store)?;
     }

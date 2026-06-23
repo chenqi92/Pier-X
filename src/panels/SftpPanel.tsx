@@ -333,6 +333,8 @@ function SftpPanelBody({ tab }: Props) {
 
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
   const transferSeq = useRef(0);
+  // Monotonic id so overlapping browse() calls can't land out of order.
+  const browseSeq = useRef(0);
   const [dropDepth, setDropDepth] = useState(0);
   const [osDropHover, setOsDropHover] = useState(false);
   const dropHover = dropDepth > 0 || osDropHover;
@@ -614,6 +616,12 @@ function SftpPanelBody({ tab }: Props) {
       setError(sshRequired);
       return;
     }
+    // Generation guard: rapid navigation (clicking into A then B, or B
+    // resolving faster than a still-pending A) can fire overlapping
+    // browses. Only the most recent call may apply its result — otherwise
+    // a slower earlier request lands last and strands the panel on the
+    // wrong directory (and persists a wrong sftpLastPath).
+    const seq = ++browseSeq.current;
     setBusy(true);
     setError("");
     setNotice("");
@@ -622,6 +630,7 @@ function SftpPanelBody({ tab }: Props) {
         ...sshArgs,
         path: targetPath,
       });
+      if (seq !== browseSeq.current) return;
       if (opts.pushHistory && state?.currentPath && state.currentPath !== next.currentPath) {
         setHistory((h) => [...h, state.currentPath]);
         setForward([]);
@@ -643,6 +652,8 @@ function SftpPanelBody({ tab }: Props) {
         void syncTerminalToRemotePath(next.currentPath);
       }
     } catch (e) {
+      // A superseded browse must not clobber the newer one's error/path.
+      if (seq !== browseSeq.current) return;
       // Keep the last successful listing on screen — wiping `state`
       // here would strand the user on a "Browse" empty view, break
       // the back/up buttons (they require `state`), and leave the
@@ -662,7 +673,9 @@ function SftpPanelBody({ tab }: Props) {
         setPathDraft(state.currentPath);
       }
     } finally {
-      setBusy(false);
+      // Only the latest browse clears the busy flag; a superseded one
+      // leaving it set would let the in-flight newer browse finish.
+      if (seq === browseSeq.current) setBusy(false);
     }
   }
 

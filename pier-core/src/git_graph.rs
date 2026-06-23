@@ -184,8 +184,16 @@ pub fn graph_log(
         cmd.arg(format!("--after={}", filter.after_timestamp));
     }
 
-    // Branch filter or all refs
+    // Branch filter or all refs. The branch is a bare positional arg to
+    // `git log`, so a value like `--output=/path` would be parsed as an
+    // option (arbitrary file write). Reject anything flag-like — a real
+    // git refname can never start with `-`.
     if let Some(ref branch_name) = filter.branch {
+        if branch_name.trim_start().starts_with('-') {
+            return Err(format!(
+                "invalid branch filter (must not start with '-'): {branch_name}"
+            ));
+        }
         cmd.arg(branch_name.as_str());
     } else {
         cmd.arg("--branches").arg("--remotes").arg("--tags");

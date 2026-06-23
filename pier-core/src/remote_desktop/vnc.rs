@@ -284,8 +284,13 @@ async fn read_loop<R: AsyncRead + Unpin>(
                 // ServerCutText (clipboard) — latin-1 text.
                 let mut pad = [0u8; 3];
                 rd.read_exact(&mut pad).await?;
-                let len = rd.read_u32().await?;
-                let mut buf = vec![0u8; len as usize];
+                let len = rd.read_u32().await? as usize;
+                if len > MAX_STRING_BYTES {
+                    return Err(RemoteDesktopError::Protocol(format!(
+                        "server cut text too long: {len}"
+                    )));
+                }
+                let mut buf = vec![0u8; len];
                 rd.read_exact(&mut buf).await?;
                 let text: String = buf.iter().map(|&b| b as char).collect();
                 sink.emit(FrameEvent::Clipboard(text));
@@ -299,6 +304,15 @@ async fn read_loop<R: AsyncRead + Unpin>(
     }
 }
 
+/// Hard caps on server-controlled sizes so a malicious or MITM'd VNC
+/// server can't announce huge dimensions/lengths and drive the client
+/// into OOM. A rect can't exceed the framebuffer; 64 MiB covers a
+/// 4096×4096 BGRA tile. Compressed payloads and protocol strings (names,
+/// clipboard, security-failure reasons) are capped well below that.
+const MAX_RECT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_COMP_BYTES: usize = 64 * 1024 * 1024;
+const MAX_STRING_BYTES: usize = 4 * 1024 * 1024;
+
 async fn read_raw_rect<R: AsyncRead + Unpin>(
     rd: &mut R,
     sink: &FrameSink,
@@ -311,7 +325,13 @@ async fn read_raw_rect<R: AsyncRead + Unpin>(
     if w == 0 || h == 0 {
         return Ok(());
     }
-    let mut buf = vec![0u8; (w as usize) * (h as usize) * 4];
+    let size = (w as usize) * (h as usize) * 4;
+    if size > MAX_RECT_BYTES {
+        return Err(RemoteDesktopError::Protocol(format!(
+            "raw rect too large: {w}x{h}"
+        )));
+    }
+    let mut buf = vec![0u8; size];
     rd.read_exact(&mut buf).await?;
     force_opaque(&mut buf);
     sink.emit(FrameEvent::Tile(frame::encode_tile(
@@ -336,12 +356,22 @@ async fn read_zlib_rect<R: AsyncRead + Unpin>(
     jpeg_threshold: u32,
 ) -> Result<()> {
     let comp_len = rd.read_u32().await? as usize;
+    if comp_len > MAX_COMP_BYTES {
+        return Err(RemoteDesktopError::Protocol(format!(
+            "zlib rect compressed length too large: {comp_len}"
+        )));
+    }
     let mut comp = vec![0u8; comp_len];
     rd.read_exact(&mut comp).await?;
     if w == 0 || h == 0 {
         return Ok(());
     }
     let expected = (w as usize) * (h as usize) * 4;
+    if expected > MAX_RECT_BYTES {
+        return Err(RemoteDesktopError::Protocol(format!(
+            "zlib rect too large: {w}x{h}"
+        )));
+    }
     let mut out = vec![0u8; expected];
     let mut filled = 0usize;
     let mut consumed = 0usize;
@@ -730,8 +760,13 @@ fn parse_minor(banner: &[u8; 12]) -> u32 {
 }
 
 async fn read_string_u32<R: AsyncRead + Unpin>(rd: &mut R) -> Result<String> {
-    let len = rd.read_u32().await?;
-    let mut buf = vec![0u8; len as usize];
+    let len = rd.read_u32().await? as usize;
+    if len > MAX_STRING_BYTES {
+        return Err(RemoteDesktopError::Protocol(format!(
+            "string too long: {len}"
+        )));
+    }
+    let mut buf = vec![0u8; len];
     rd.read_exact(&mut buf).await?;
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }

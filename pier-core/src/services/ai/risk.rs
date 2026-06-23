@@ -189,9 +189,27 @@ fn sensitive_path_reason(path: &str) -> Option<&'static str> {
         "gshadow",
         "htpasswd",
         "credentials",
+        ".npmrc",
+        ".pypirc",
+        "credentials.tfrc.json",
+        "application_default_credentials.json",
     ];
     if SECRET_FILES.contains(&base) {
         return Some("a credential/secret file");
+    }
+    // Shell / REPL history often contains inline passwords and tokens.
+    const HISTORY_FILES: &[&str] = &[
+        ".bash_history",
+        ".zsh_history",
+        ".sh_history",
+        ".python_history",
+        ".mysql_history",
+        ".psql_history",
+        ".rediscli_history",
+        ".node_repl_history",
+    ];
+    if HISTORY_FILES.contains(&base) {
+        return Some("a shell/REPL history file (may contain inline secrets)");
     }
     // Private-key / certificate material by extension.
     const KEY_EXTS: &[&str] = &[
@@ -218,6 +236,10 @@ fn sensitive_path_reason(path: &str) -> Option<&'static str> {
         || p.starts_with("/etc/sudoers.d/")
     {
         return Some("a system credential file");
+    }
+    // Process environment dumps expose every secret in the environment.
+    if p == "/proc/self/environ" || (p.starts_with("/proc/") && p.ends_with("/environ")) {
+        return Some("a process environment dump (/proc/.../environ)");
     }
     None
 }
@@ -1062,19 +1084,40 @@ fn classify_head(
             (RiskLevel::L1, Some("PowerShell write verb".into()))
         }
 
+        // ── File-content readers ───────────────────────────────────
+        // These dump file contents to the model's context, so they
+        // auto-read (L0) for ordinary files but raise to L2 when a target
+        // names a credential store — otherwise `cat ~/.ssh/id_rsa`,
+        // `grep -r AWS_SECRET /srv`, `cat /proc/self/environ`, etc. would
+        // exfiltrate secrets with no approval, side-stepping the
+        // `read_file` gate (which inspects the same paths via
+        // `classify_read_path`).
+        "cat" | "head" | "tail" | "less" | "more" | "strings" | "xxd" | "hexdump" | "od"
+        | "zcat" | "grep" | "egrep" | "fgrep" | "rg" | "sort" | "uniq" | "cut" | "tr"
+        | "column" | "jq" | "yq" | "diff" => {
+            if non_flag_args(args)
+                .iter()
+                .any(|a| sensitive_path_reason(a).is_some())
+            {
+                (RiskLevel::L2, Some("reads a credential/secret file".into()))
+            } else {
+                (RiskLevel::L0, None)
+            }
+        }
+
         // ── Read-only allowlist ────────────────────────────────────
-        "ls" | "dir" | "cat" | "head" | "tail" | "less" | "more" | "pwd" | "whoami" | "id"
+        "ls" | "dir" | "pwd" | "whoami" | "id"
         | "uname" | "hostname" | "date" | "uptime" | "df" | "du" | "free" | "ps" | "top"
         | "htop" | "vmstat" | "iostat" | "mpstat" | "pidstat" | "sar" | "sensors" | "numastat"
         | "lscpu" | "lsblk" | "lsmem" | "lsusb" | "lspci" | "findmnt"
-        | "stat" | "file" | "wc" | "grep" | "egrep" | "fgrep" | "rg" | "which" | "whereis"
+        | "stat" | "file" | "wc" | "which" | "whereis"
         | "type" | "echo" | "printf" | "ss" | "netstat" | "ifconfig" | "ping" | "traceroute"
-        | "tracepath" | "dig" | "nslookup" | "host" | "sort" | "uniq" | "cut" | "tr" | "column"
+        | "tracepath" | "dig" | "nslookup" | "host"
         | "basename" | "dirname" | "realpath" | "readlink" | "md5sum" | "sha256sum" | "sha1sum"
-        | "cksum" | "diff" | "cmp" | "strings" | "nproc" | "arch" | "groups" | "last" | "w"
+        | "cksum" | "cmp" | "nproc" | "arch" | "groups" | "last" | "w"
         | "who" | "tasklist" | "systeminfo" | "ipconfig" | "ver" | "where" | "export" | "cd"
-        | "test" | "true" | "false" | "sleep" | "watch" | "man" | "tldr" | "jq" | "yq" | "tree"
-        | "numfmt" | "xxd" | "hexdump" | "od" | "zcat" | "lsof" | "uptime.exe" | "getent"
+        | "test" | "true" | "false" | "sleep" | "watch" | "man" | "tldr" | "tree"
+        | "numfmt" | "lsof" | "uptime.exe" | "getent"
         | "timedatectl" | "loginctl" | "hostnamectl" => {
             let ip_like = false;
             let _ = ip_like;
@@ -1455,6 +1498,24 @@ mod tests {
         assert_eq!(classify_list_path("/home/me/.ssh/").level, RiskLevel::L1);
         assert_eq!(classify_list_path("/home/me/project").level, RiskLevel::L0);
         assert_eq!(classify_list_path("/home/sshfoo").level, RiskLevel::L0);
+    }
+
+    #[test]
+    fn reading_secret_via_run_command_is_not_auto_run() {
+        // Ordinary reads stay auto-run (L0).
+        assert_eq!(level("cat /var/www/app/index.html"), RiskLevel::L0);
+        assert_eq!(level("grep TODO src/main.rs"), RiskLevel::L0);
+        assert_eq!(level("tail -n 50 /var/log/app.log"), RiskLevel::L0);
+        // But dumping a credential store must require approval (>= L2),
+        // matching the read_file gate rather than side-stepping it.
+        assert!(level("cat /home/me/.ssh/id_ed25519") >= RiskLevel::L2);
+        assert!(level("cat /home/me/.env") >= RiskLevel::L2);
+        assert!(level("head /root/.aws/credentials") >= RiskLevel::L2);
+        assert!(level("grep -r AWS_SECRET /home/me/.aws") >= RiskLevel::L2);
+        assert!(level("cat /etc/shadow") >= RiskLevel::L2);
+        assert!(level("cat /proc/self/environ") >= RiskLevel::L2);
+        assert!(level("cat /home/me/.bash_history") >= RiskLevel::L2);
+        assert!(level("xxd /opt/tls/server.key") >= RiskLevel::L2);
     }
 
     // Red line #1 — root-level recursive delete / permission rewrite.

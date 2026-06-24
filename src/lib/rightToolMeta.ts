@@ -6,6 +6,7 @@ import {
   FolderSync,
   GitBranch,
   Globe,
+  Network,
   Package,
   Search,
   Server,
@@ -89,7 +90,17 @@ export const RIGHT_TOOL_ORDER: RightTool[] = [
   "redis",
   "webserver",
   "software",
+  "nanolink",
 ];
+
+// Tools that only appear in the strip once `detectServices` reports them
+// on the active host (vs. rendering unconditionally and only dimming via
+// `REMOTE_ONLY_TOOLS`). Currently EMPTY: NanoLink used to live here, but
+// hiding it on un-installed hosts made the panel's own "install NanoLink"
+// flow unreachable — so it now renders on every SSH tab (still showing a
+// `detected` dot when found). The mechanism is kept for a future tool
+// that genuinely has no use until detected.
+export const DETECTION_GATED_TOOLS = new Set<RightTool>([]);
 
 // Firewall is intentionally NOT here: it's a universal capability of any
 // Linux host, not a "detected service" — chips here only render when
@@ -104,6 +115,7 @@ export const SERVICE_CHIP_TOOLS: RightTool[] = [
   "postgres",
   "redis",
   "sqlite",
+  "nanolink",
 ];
 
 export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
@@ -252,6 +264,19 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
     splashTitle: "Software",
     splashSubtitle:
       "Open an SSH tab to view the host's tool stack and install or update packages with live progress.",
+  },
+  // Detection-gated (see `DETECTION_GATED_TOOLS`): only appears once the
+  // NanoLink agent or server is found on the active host. The panel then
+  // renders a role-aware view — install / server / client / both.
+  nanolink: {
+    label: "NanoLink",
+    category: "service",
+    icon: Network,
+    remoteOnly: true,
+    tintVar: "var(--svc-nanolink)",
+    splashTitle: "NanoLink",
+    splashSubtitle:
+      "Manage NanoLink on this host — install the agent, control its connections, or browse the server dashboard.",
   },
 };
 

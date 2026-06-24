@@ -93,6 +93,7 @@ pub async fn detect_all(session: &SshSession) -> Vec<DetectedService> {
     let redis = detect_redis(session).await;
     let postgres = detect_postgresql(session).await;
     let docker = detect_docker(session).await;
+    let nanolink = detect_nanolink(session).await;
 
     let mut services = Vec::new();
     if let Some(s) = mysql {
@@ -105,6 +106,9 @@ pub async fn detect_all(session: &SshSession) -> Vec<DetectedService> {
         services.push(s);
     }
     if let Some(s) = docker {
+        services.push(s);
+    }
+    if let Some(s) = nanolink {
         services.push(s);
     }
     log::info!("detected {} services on remote host", services.len());
@@ -304,6 +308,85 @@ async fn detect_docker(session: &SshSession) -> Option<DetectedService> {
         version,
         status,
         port: 0, // Docker doesn't tunnel over a fixed TCP port.
+    })
+}
+
+/// Detect NanoLink — either the `nanolink-agent` (client) or the
+/// `nanolink-server` (collector), or both. Unlike the DB probes this is
+/// role-agnostic: it only needs to know "is NanoLink here" so the tool
+/// strip can surface the NanoLink panel, which then asks
+/// [`crate::services::nanolink::status`] for the full role/running
+/// breakdown. The `name` MUST stay exactly `"nanolink"` — the frontend's
+/// `mapServiceToTool` keys off it.
+async fn detect_nanolink(session: &SshSession) -> Option<DetectedService> {
+    // Either binary present?
+    let (_, which_out) = session
+        .exec_with_sudo(
+            "command -v nanolink-agent >/dev/null 2>&1 && echo agent; \
+             command -v nanolink-server >/dev/null 2>&1 && echo server",
+        )
+        .await
+        .unwrap_or((-1, String::new()));
+    let mut present = which_out.contains("agent") || which_out.contains("server");
+
+    // Fallback: an agent config file (binary may be in a non-PATH dir).
+    if !present {
+        let (_, cfg) = session
+            .exec_with_sudo(
+                "[ -f /etc/nanolink/nanolink.yaml ] || [ -f /etc/nanolink.yaml ] || \
+                 [ -f /etc/nanolink/config.yaml ]; echo $?",
+            )
+            .await
+            .unwrap_or((-1, String::new()));
+        if cfg.trim() == "0" {
+            present = true;
+        }
+    }
+
+    // Fallback: a live server answering its REST health endpoint (covers
+    // a containerized server with no host binary).
+    let server_live = port_listening(session, 8080).await
+        && session
+            .exec_with_sudo("curl -fsS -m 3 http://localhost:8080/api/health >/dev/null 2>&1 && echo yes")
+            .await
+            .map(|(_, o)| o.contains("yes"))
+            .unwrap_or(false);
+    if server_live {
+        present = true;
+    }
+
+    if !present {
+        return None;
+    }
+
+    let version = {
+        let (_, v) = session
+            .exec_with_sudo(
+                "nanolink-agent --version 2>/dev/null || nanolink-server --version 2>/dev/null",
+            )
+            .await
+            .unwrap_or((-1, String::new()));
+        parse_version(&v)
+    };
+
+    let status = if server_live {
+        ServiceStatus::Running
+    } else {
+        check_service_status(
+            session,
+            &[
+                "systemctl is-active nanolink-agent 2>/dev/null",
+                "systemctl is-active nanolink-server 2>/dev/null",
+            ],
+        )
+        .await
+    };
+
+    Some(DetectedService {
+        name: "nanolink".to_string(),
+        version,
+        status,
+        port: 0, // agent has no inbound port; server port is config-driven.
     })
 }
 

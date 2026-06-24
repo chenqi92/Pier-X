@@ -15,6 +15,7 @@ use pier_core::services::remote_db_cli::{self, CliConn, CliKind};
 use pier_core::services::mysql::{
     self as mysql_service, MysqlClient, MysqlConfig, MysqlProcessRow,
 };
+use pier_core::services::nanolink;
 use pier_core::services::nginx;
 use pier_core::services::package_manager;
 use pier_core::services::package_mirror;
@@ -9535,6 +9536,401 @@ async fn detect_services(
     })
     .await
     .map_err(|e| format!("detect_services join: {e}"))?
+}
+
+// ── NanoLink ────────────────────────────────────────────────────
+//
+// pier-core's `nanolink` types are already camelCase serde, so these
+// commands return them directly (no separate view layer). Read-only
+// probes/queries reuse the shared SSH session without sudo; control
+// actions (service start/stop, server add/remove) attach the sudo
+// password the same way the Docker / software commands do.
+
+#[tauri::command]
+async fn nanolink_status(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<nanolink::NanoLinkStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nanolink::status_blocking(&session).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nanolink_status join: {e}"))?
+}
+
+#[tauri::command]
+async fn nanolink_agent_status(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        let text = nanolink::agent_status_text_blocking(&session).map_err(|e| e.to_string())?;
+        let servers =
+            nanolink::agent_servers_text_blocking(&session).map_err(|e| e.to_string())?;
+        Ok(format!("{text}\n\n── server list ──\n{servers}"))
+    })
+    .await
+    .map_err(|e| format!("nanolink_agent_status join: {e}"))?
+}
+
+#[tauri::command]
+async fn nanolink_agent_service(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    action: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<nanolink::CommandReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session_with_sudo(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+            sudo_password,
+        )?;
+        nanolink::agent_service_action_blocking(&session, &action).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nanolink_agent_service join: {e}"))?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn nanolink_agent_add_server(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    target_host: String,
+    target_port: u16,
+    token: String,
+    permission: u8,
+    no_tls: bool,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<nanolink::CommandReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session_with_sudo(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+            sudo_password,
+        )?;
+        nanolink::agent_add_server_blocking(
+            &session,
+            &target_host,
+            target_port,
+            &token,
+            permission,
+            no_tls,
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nanolink_agent_add_server join: {e}"))?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn nanolink_agent_remove_server(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    target_host: String,
+    target_port: u16,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<nanolink::CommandReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session_with_sudo(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+            sudo_password,
+        )?;
+        nanolink::agent_remove_server_blocking(&session, &target_host, target_port)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nanolink_agent_remove_server join: {e}"))?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn nanolink_server_login(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    nl_port: u16,
+    nl_username: String,
+    nl_password: String,
+    saved_connection_index: Option<usize>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nanolink::server_login_blocking(&session, nl_port, &nl_username, &nl_password)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nanolink_server_login join: {e}"))?
+}
+
+#[tauri::command]
+async fn nanolink_server_summary(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    nl_port: u16,
+    jwt: String,
+    saved_connection_index: Option<usize>,
+) -> Result<nanolink::ServerSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nanolink::server_summary_blocking(&session, nl_port, &jwt).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nanolink_server_summary join: {e}"))?
+}
+
+#[tauri::command]
+async fn nanolink_server_agents(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    nl_port: u16,
+    jwt: String,
+    saved_connection_index: Option<usize>,
+) -> Result<Vec<nanolink::ServerAgent>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nanolink::server_agents_blocking(&session, nl_port, &jwt).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nanolink_server_agents join: {e}"))?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn nanolink_server_generate_config(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    nl_port: u16,
+    jwt: String,
+    server_url: String,
+    token: String,
+    permission: u8,
+    tls_verify: bool,
+    hostname: String,
+    saved_connection_index: Option<usize>,
+) -> Result<nanolink::GenerateConfigResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nanolink::server_generate_config_blocking(
+            &session,
+            nl_port,
+            &jwt,
+            &server_url,
+            &token,
+            permission,
+            tls_verify,
+            &hostname,
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nanolink_server_generate_config join: {e}"))?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn nanolink_server_send_command(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    nl_port: u16,
+    jwt: String,
+    agent_id: String,
+    cmd_type: String,
+    target: String,
+    saved_connection_index: Option<usize>,
+) -> Result<nanolink::CommandDispatch, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nanolink::server_send_command_blocking(&session, nl_port, &jwt, &agent_id, &cmd_type, &target)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nanolink_server_send_command join: {e}"))?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn nanolink_server_command_result(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    nl_port: u16,
+    jwt: String,
+    agent_id: String,
+    command_id: String,
+    saved_connection_index: Option<usize>,
+) -> Result<nanolink::CommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nanolink::server_command_result_blocking(&session, nl_port, &jwt, &agent_id, &command_id)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nanolink_server_command_result join: {e}"))?
 }
 
 // ── DB Instance Detection ───────────────────────────────────────
@@ -19595,6 +19991,17 @@ pub fn run() {
             server_monitor_probe,
             firewall_snapshot,
             detect_services,
+            nanolink_status,
+            nanolink_agent_status,
+            nanolink_agent_service,
+            nanolink_agent_add_server,
+            nanolink_agent_remove_server,
+            nanolink_server_login,
+            nanolink_server_summary,
+            nanolink_server_agents,
+            nanolink_server_generate_config,
+            nanolink_server_send_command,
+            nanolink_server_command_result,
             db_detect,
             db_cred_save,
             db_cred_update,

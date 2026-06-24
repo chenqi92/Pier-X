@@ -131,6 +131,8 @@ export function mapServiceToTool(name: string): RightTool | null {
       return "redis";
     case "docker":
       return "docker";
+    case "nanolink":
+      return "nanolink";
     default:
       return null;
   }

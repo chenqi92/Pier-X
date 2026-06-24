@@ -5049,6 +5049,61 @@ const PROVISION_SPECS: &[ProvisionSpec] = &[
         is_installer: true,
         handler: "minio-native",
     },
+    ProvisionSpec {
+        id: "nanolink",
+        title: "NanoLink Agent（被监控端）",
+        summary: "安装 nanolink-agent 并连到一台 NanoLink 服务器：systemd 主机走官方 install.sh --silent，OpenWRT/iStoreOS 自动改用 procd（仅 x86_64/aarch64）。需要目标机有 curl。",
+        fields: &[
+            ProvisionField {
+                key: "server_url",
+                label: "服务器地址",
+                kind: ProvisionFieldKind::Text,
+                default: "",
+                required: true,
+                secret: false,
+                help: "采集服务器 host:port，例如 192.168.1.10:39100。",
+            },
+            ProvisionField {
+                key: "token",
+                label: "认证 Token",
+                kind: ProvisionFieldKind::Password,
+                default: "",
+                required: true,
+                secret: true,
+                help: "服务器为该 Agent 颁发的认证 token。",
+            },
+            ProvisionField {
+                key: "permission",
+                label: "权限级别",
+                kind: ProvisionFieldKind::Text,
+                default: "0",
+                required: false,
+                secret: false,
+                help: "0=只读 1=基础写 2=服务控制 3=系统管理。",
+            },
+            ProvisionField {
+                key: "use_tls",
+                label: "启用 TLS",
+                kind: ProvisionFieldKind::Bool,
+                default: "true",
+                required: false,
+                secret: false,
+                help: "与服务器之间使用 TLS（关闭则以 --no-tls 安装）。",
+            },
+            ProvisionField {
+                key: "hostname",
+                label: "上报主机名",
+                kind: ProvisionFieldKind::Text,
+                default: "",
+                required: false,
+                secret: false,
+                help: "留空使用系统主机名。",
+            },
+        ],
+        prompt_after_install: false,
+        is_installer: true,
+        handler: "nanolink-agent",
+    },
     // NOTE: rustfs 原生安装（systemd）暂未内置——其 release 资产命名与
     // 服务端 CLI/环境变量需对照真实发行版确认，避免内置一个跑不通的安装
     // 脚本误导用户。rustfs 目前走 Compose 模板（见 compose_templates）。
@@ -5195,6 +5250,7 @@ pub async fn provision_apply(
             mysql_create_user(session, user, pass, db, None).await
         }
         "minio-native" => minio_install_native(session, values).await,
+        "nanolink-agent" => nanolink_agent_install(session, values).await,
         other => Err(SshError::InvalidConfig(format!("未知 handler: {other}"))),
     }
 }
@@ -5314,6 +5370,174 @@ async fn minio_install_native(
     let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
     let stdout = sanitize_sudo_output(&stdout, Some(root_password));
     Ok(provision_report(redacted_command, exit_code, stdout, env.is_root))
+}
+
+/// Shell body of the NanoLink Agent installer. Uses only shell/env
+/// variables (no Rust interpolation) so it can live as a static raw
+/// string: NL_URL / NL_PERMISSION / NL_NO_TLS / NL_HOSTNAME are set in a
+/// header prepended by the caller; NL_TOKEN comes from the exported
+/// (redacted-in-echo) env var. It pipes the *official* `install.sh` to
+/// `bash -s --` in `--silent` mode — the upstream installer handles arch
+/// detection, the systemd/launchd unit, and config writing.
+const NANOLINK_AGENT_INSTALL_BODY: &str = r##"
+set -e
+if [ -f /etc/openwrt_release ] || command -v opkg >/dev/null 2>&1; then
+  # ── OpenWRT / iStoreOS: no systemd, often no bash — install the
+  # static musl binary + a procd init script by hand. NanoLink ships
+  # no procd unit, so Pier-X provides it. Upstream only publishes
+  # linux x86_64/aarch64 (musl) agents — mips/mipsel/armv7 routers are
+  # unsupported and we error rather than fetch a 404.
+  echo "检测到 OpenWRT，使用 procd 安装 nanolink-agent"
+  opkg update >/dev/null 2>&1 || true
+  command -v curl >/dev/null 2>&1 || opkg install curl ca-bundle >/dev/null 2>&1 || true
+  command -v curl >/dev/null 2>&1 || { echo "需要 curl（opkg install curl 失败）" >&2; exit 1; }
+  ARCH=$(uname -m)
+  case "$ARCH" in
+    x86_64|amd64) NLARCH=x86_64 ;;
+    aarch64|arm64) NLARCH=aarch64 ;;
+    *) echo "NanoLink 官方仅发布 linux x86_64/aarch64 (musl) 二进制，不支持架构 $ARCH（mips/mipsel/armv7 无预编译包，需自行从源码编译）" >&2; exit 1 ;;
+  esac
+  URL="https://github.com/chenqi92/NanoLink/releases/latest/download/nanolink-agent-linux-${NLARCH}"
+  echo "下载 $URL"
+  curl -fsSL "$URL" -o /usr/bin/nanolink-agent.new
+  chmod +x /usr/bin/nanolink-agent.new
+  mv -f /usr/bin/nanolink-agent.new /usr/bin/nanolink-agent
+  NL_HOST="${NL_URL%:*}"
+  NL_PORT="${NL_URL##*:}"
+  [ "$NL_PORT" = "$NL_URL" ] && NL_PORT=39100
+  NL_TLS_VERIFY=$([ "$NL_NO_TLS" = "1" ] && echo false || echo true)
+  mkdir -p /etc/nanolink
+  # Canonical config shape (mirrors the server's /api/config/generate).
+  cat > /etc/nanolink/nanolink.yaml <<EOF
+agent:
+  heartbeat_interval: 30
+  reconnect_delay: 5
+  max_reconnect_delay: 300
+$([ -n "$NL_HOSTNAME" ] && echo "  hostname: \"$NL_HOSTNAME\"")
+
+servers:
+  - host: "$NL_HOST"
+    port: $NL_PORT
+    token: "$NL_TOKEN"
+    permission: $NL_PERMISSION
+    tls_enabled: true
+    tls_verify: $NL_TLS_VERIFY
+
+collector:
+  realtime_interval_ms: 1000
+  enable_per_core_cpu: true
+
+buffer:
+  capacity: 600
+
+logging:
+  level: info
+  audit_enabled: true
+EOF
+  chmod 600 /etc/nanolink/nanolink.yaml
+  # procd init script — quoted heredoc so $-vars stay literal for procd.
+  cat > /etc/init.d/nanolink-agent <<'INITD'
+#!/bin/sh /etc/rc.common
+USE_PROCD=1
+START=95
+STOP=10
+start_service() {
+  procd_open_instance
+  procd_set_param command /usr/bin/nanolink-agent -c /etc/nanolink/nanolink.yaml
+  procd_set_param respawn
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_close_instance
+}
+reload_service() {
+  procd_send_signal nanolink-agent
+}
+INITD
+  chmod +x /etc/init.d/nanolink-agent
+  /etc/init.d/nanolink-agent enable
+  /etc/init.d/nanolink-agent restart 2>/dev/null || /etc/init.d/nanolink-agent start
+  echo "OK nanolink-agent (procd) 已安装并启动"
+else
+  command -v curl >/dev/null 2>&1 || { echo "需要 curl" >&2; exit 1; }
+  ARGS="--silent --url $NL_URL --token $NL_TOKEN --permission $NL_PERMISSION"
+  [ "$NL_NO_TLS" = "1" ] && ARGS="$ARGS --no-tls-verify"
+  [ -n "$NL_HOSTNAME" ] && ARGS="$ARGS --hostname $NL_HOSTNAME"
+  echo "运行官方安装脚本 install.sh --silent"
+  curl -fsSL https://raw.githubusercontent.com/chenqi92/NanoLink/main/agent/scripts/install.sh | bash -s -- $ARGS
+  echo "OK nanolink-agent 安装流程已结束"
+fi
+"##;
+
+/// Install the NanoLink Agent via the upstream silent installer. The
+/// server URL / permission / hostname are validated and inlined; the
+/// token is exported into the sudo'd shell, redacted from the echoed
+/// command, and scrubbed from the returned output.
+async fn nanolink_agent_install(
+    session: &SshSession,
+    values: &std::collections::HashMap<String, String>,
+) -> Result<PostgresActionReport> {
+    let server_url = provision_required(values, "server_url")?;
+    nanolink_guard_server_url(server_url)?;
+    let token = provision_required(values, "token")?;
+    provision_token(token, "Token")?;
+    let permission = provision_field(values, "permission").unwrap_or("0");
+    if !matches!(permission, "0" | "1" | "2" | "3") {
+        return Err(SshError::InvalidConfig("权限级别必须是 0-3".into()));
+    }
+    // TLS on by default; only an explicit `false` opts out.
+    let no_tls = if provision_field(values, "use_tls") == Some("false") {
+        "1"
+    } else {
+        "0"
+    };
+    let hostname = provision_field(values, "hostname").unwrap_or("");
+    if !hostname.is_empty() {
+        provision_token(hostname, "主机名")?;
+    }
+
+    let env = probe_host_env(session).await;
+    let header = format!(
+        "NL_URL={u}\nNL_PERMISSION={p}\nNL_NO_TLS={t}\nNL_HOSTNAME={h}\n",
+        u = shell_single_quote(server_url),
+        p = permission,
+        t = no_tls,
+        h = shell_single_quote(hostname),
+    );
+    let script = format!(
+        "export NL_TOKEN={tok}\n{header}{body}",
+        tok = shell_single_quote(token),
+        header = header,
+        body = NANOLINK_AGENT_INSTALL_BODY,
+    );
+    let redacted_script = format!(
+        "export NL_TOKEN='***'\n{header}{body}",
+        header = header,
+        body = NANOLINK_AGENT_INSTALL_BODY,
+    );
+    let command = format!("sh -c {}", shell_single_quote(&script));
+    let redacted_command = format!("sh -c {}", shell_single_quote(&redacted_script));
+    let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
+    let stdout = sanitize_sudo_output(&stdout, Some(token));
+    Ok(provision_report(redacted_command, exit_code, stdout, env.is_root))
+}
+
+/// Validate a `host:port` server address inlined into the installer.
+fn nanolink_guard_server_url(s: &str) -> Result<()> {
+    let (host, port) = s
+        .rsplit_once(':')
+        .ok_or_else(|| SshError::InvalidConfig("服务器地址必须是 host:port".into()))?;
+    let host_ok = !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+    let port_ok = port.parse::<u16>().is_ok();
+    if host_ok && port_ok {
+        Ok(())
+    } else {
+        Err(SshError::InvalidConfig(
+            "服务器地址非法（应为 host:port，host 仅含字母数字 . -）".into(),
+        ))
+    }
 }
 
 /// Quote an SQL identifier (`"..."`) — escaping internal `"`.

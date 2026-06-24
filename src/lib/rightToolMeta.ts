@@ -6,7 +6,6 @@ import {
   FolderSync,
   GitBranch,
   Globe,
-  Network,
   Package,
   Search,
   Server,
@@ -15,6 +14,7 @@ import {
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import DockerIcon from "../components/icons/DockerIcon";
+import NanoLinkIcon from "../components/icons/NanoLinkIcon";
 import LogIcon from "../components/icons/LogIcon";
 import MySqlIcon from "../components/icons/MySqlIcon";
 import PostgresIcon from "../components/icons/PostgresIcon";
@@ -271,7 +271,7 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
   nanolink: {
     label: "NanoLink",
     category: "service",
-    icon: Network,
+    icon: NanoLinkIcon,
     remoteOnly: true,
     tintVar: "var(--svc-nanolink)",
     splashTitle: "NanoLink",

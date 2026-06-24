@@ -38,6 +38,7 @@ const SQLSERVER_ADAPTER: DbCredentialFieldAdapter = {
   readActiveCredId: (t) => t.mssqlActiveCredentialId,
   readTunnelId: (t) => t.mssqlTunnelId,
   readTunnelPort: (t) => t.mssqlTunnelPort,
+  readTlsMode: (t) => t.mssqlTlsMode,
   patchFromCred: (cred) => ({
     mssqlActiveCredentialId: cred.id,
     mssqlHost: cred.host,
@@ -47,6 +48,7 @@ const SQLSERVER_ADAPTER: DbCredentialFieldAdapter = {
     mssqlDatabase: cred.database ?? "",
     mssqlTunnelId: null,
     mssqlTunnelPort: null,
+    mssqlTlsMode: cred.tlsMode ?? "off",
   }),
   patchFromSaved: (cred) => ({
     mssqlActiveCredentialId: cred.id,
@@ -56,6 +58,7 @@ const SQLSERVER_ADAPTER: DbCredentialFieldAdapter = {
     mssqlDatabase: cred.database ?? "",
     mssqlTunnelId: null,
     mssqlTunnelPort: null,
+    mssqlTlsMode: cred.tlsMode ?? "off",
   }),
   patchFromDraft: (draft) => ({
     mssqlActiveCredentialId: null,
@@ -66,6 +69,7 @@ const SQLSERVER_ADAPTER: DbCredentialFieldAdapter = {
     mssqlDatabase: draft.database ?? "",
     mssqlTunnelId: null,
     mssqlTunnelPort: null,
+    mssqlTlsMode: draft.tlsMode,
   }),
   patchPassword: (password) => ({ mssqlPassword: password }),
   patchPasswordAfterRotate: (password) => ({ mssqlPassword: password }),
@@ -119,6 +123,7 @@ function SqlServerBody({ tab }: { tab: TabState }) {
         user: user.trim(),
         password: pw,
         database: database.trim() || null,
+        tlsMode: target.tlsMode,
       });
       setOverview(ov);
       if (ov.currentDatabase && ov.currentDatabase !== tab.mssqlDatabase) {
@@ -160,6 +165,7 @@ function SqlServerBody({ tab }: { tab: TabState }) {
           password: tab.mssqlPassword,
           database: tab.mssqlDatabase.trim() || null,
           sql: q,
+          tlsMode: target.tlsMode,
         }),
       );
     } catch (e) {
@@ -183,6 +189,7 @@ function SqlServerBody({ tab }: { tab: TabState }) {
         user: tab.mssqlUser.trim(),
         password: tab.mssqlPassword,
         database: tab.mssqlDatabase.trim() || null,
+        tlsMode: target.tlsMode,
       };
       const [cols, rows] = await Promise.all([
         cmd.mssqlColumns({ ...base, schema, table: name }),

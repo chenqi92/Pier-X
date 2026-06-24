@@ -8,6 +8,7 @@ import type {
   DbCredentialInput,
   DbCredentialPatch,
   DbCredentialResolved,
+  DbTlsMode,
   DbDetectionReport,
   DetectedServiceView,
   DockerImageView,
@@ -1173,6 +1174,8 @@ export const postgresBrowse = (params: {
   database?: string | null;
   schema?: string | null;
   table?: string | null;
+  /** Direct-connection TLS posture. Omit / `off` = cleartext. */
+  tlsMode?: DbTlsMode;
 }) => invoke<PostgresBrowserState>("postgres_browse", params);
 
 export const postgresExecute = (params: {
@@ -1186,6 +1189,8 @@ export const postgresExecute = (params: {
    *  read-only query — defense in depth behind the panel's lock. The
    *  query editor passes its lock state; other callers omit it. */
   readOnly?: boolean;
+  /** Direct-connection TLS posture. Omit / `off` = cleartext. */
+  tlsMode?: DbTlsMode;
 }) =>
   invoke<QueryExecutionResult>("postgres_execute", {
     ...params,
@@ -1214,6 +1219,8 @@ export const mssqlExecute = (params: {
    *  read-only query — defense in depth behind the panel's lock. The
    *  query editor passes its lock state; other callers omit it. */
   readOnly?: boolean;
+  /** Direct-connection TLS posture. Omit / `off` = cleartext. */
+  tlsMode?: DbTlsMode;
 }) =>
   invoke<QueryExecutionResult>("mssql_execute", {
     ...params,
@@ -1227,6 +1234,8 @@ export const mssqlOverview = (params: {
   user: string;
   password: string;
   database?: string | null;
+  /** Direct-connection TLS posture. Omit / `off` = cleartext. */
+  tlsMode?: DbTlsMode;
 }) => invoke<SqlServerOverview>("mssql_overview", params);
 
 export type SqlServerColumnView = {
@@ -1247,6 +1256,8 @@ export const mssqlColumns = (params: {
   database?: string | null;
   schema: string;
   table: string;
+  /** Direct-connection TLS posture. Omit / `off` = cleartext. */
+  tlsMode?: DbTlsMode;
 }) => invoke<SqlServerColumnView[]>("mssql_columns", params);
 
 // ── InfluxDB (InfluxQL over HTTP) ───────────────────────────────────
@@ -1376,6 +1387,8 @@ export const postgresListActivity = (params: {
   user: string;
   password: string;
   database?: string | null;
+  /** Direct-connection TLS posture. Omit / `off` = cleartext. */
+  tlsMode?: DbTlsMode;
 }) => invoke<PgActivityRow[]>("postgres_list_activity", params);
 
 /** `pg_cancel_backend(pid)` — abort the running query on `pid`. */
@@ -1386,6 +1399,8 @@ export const postgresCancelQuery = (params: {
   password: string;
   database?: string | null;
   pid: number;
+  /** Direct-connection TLS posture. Omit / `off` = cleartext. */
+  tlsMode?: DbTlsMode;
 }) => invoke<boolean>("postgres_cancel_query", params);
 
 /** `pg_terminate_backend(pid)` — drop the entire backend connection. */
@@ -1396,6 +1411,8 @@ export const postgresTerminateBackend = (params: {
   password: string;
   database?: string | null;
   pid: number;
+  /** Direct-connection TLS posture. Omit / `off` = cleartext. */
+  tlsMode?: DbTlsMode;
 }) => invoke<boolean>("postgres_terminate_backend", params);
 
 // ── Docker ──────────────────────────────────────────────────────

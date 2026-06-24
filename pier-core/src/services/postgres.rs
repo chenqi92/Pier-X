@@ -55,6 +55,16 @@ pub enum PostgresError {
     #[error("postgres: {0}")]
     Native(#[from] tokio_postgres::Error),
 
+    /// Connect-time failure on the TLS path, carrying the full
+    /// `source()` chain. tokio-postgres' own `Display` drops the cause —
+    /// which is exactly where the rustls certificate diagnostic lives —
+    /// so the TLS branch routes its connect error through
+    /// [`db_tls::error_chain`](super::db_tls::error_chain). Same
+    /// `postgres:` prefix as [`PostgresError::Native`]; only the
+    /// `Require`/`VerifyFull` branch produces it.
+    #[error("postgres: {0}")]
+    Connect(String),
+
     /// Caller supplied invalid config.
     #[error("invalid config: {0}")]
     InvalidConfig(String),
@@ -304,7 +314,14 @@ impl PostgresClient {
             let tls_config = super::db_tls::pg_rustls_config(config.tls_mode)
                 .map_err(PostgresError::InvalidConfig)?;
             let tls = tokio_postgres_rustls::MakeRustlsConnect::new(tls_config);
-            let (client, connection) = pg_config.connect(tls).await?;
+            // tokio-postgres' Display hides the rustls cert diagnostic
+            // behind `source()` — flatten the chain so "cert not trusted"
+            // / "hostname mismatch" survives to the UI. The plain-`NoTls`
+            // branch above is left untouched (byte-identical legacy path).
+            let (client, connection) = pg_config
+                .connect(tls)
+                .await
+                .map_err(|e| PostgresError::Connect(super::db_tls::error_chain(&e)))?;
             let handle = crate::ssh::runtime::shared().spawn(async move {
                 if let Err(e) = connection.await {
                     log::warn!("postgres connection error: {e}");

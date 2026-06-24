@@ -3026,4 +3026,26 @@ export const zhExtra: Record<string, string> = {
   "Running…": "执行中…",
   Send: "发送",
   "Timed out waiting for the agent's result.": "等待 agent 返回结果超时。",
+
+  // DB direct-connection TLS mode (DbAddCredentialDialog)
+  "Off — cleartext (SSH tunnel)": "关闭 —— 明文（走 SSH 隧道）",
+  "Require — encrypt, trust any cert": "Require —— 加密，信任任意证书",
+  "Verify-full — encrypt + verify cert": "Verify-full —— 加密并校验证书",
+  "Connecting to {host} in cleartext — the password and query data cross the network unencrypted. Pick Require / Verify-full, or connect through an SSH tunnel.":
+    "正在以明文连接 {host} —— 密码与查询数据将以未加密方式穿过网络。请选择 Require / Verify-full，或改走 SSH 隧道。",
+
+  // DB direct-connection TLS handshake failures (localizeMessage)
+  "PostgreSQL TLS handshake failed: {detail}": "PostgreSQL TLS 握手失败：{detail}",
+  "SQL Server TLS connection failed: {detail}": "SQL Server TLS 连接失败：{detail}",
+  "the server certificate could not be verified": "无法校验服务端证书",
+  "the certificate does not match the host name (use Require, or fix the cert's SAN)":
+    "证书与主机名不匹配（可改用 Require，或在证书 SAN 中补上该主机名）",
+  "the certificate is not trusted — self-signed or unknown CA (use Require to skip verification)":
+    "证书不被信任 —— 自签名或未知 CA（可改用 Require 跳过校验）",
+  "the certificate is expired or not yet valid": "证书已过期或尚未生效",
+  "the certificate has been revoked": "证书已被吊销",
+  "the server certificate was rejected ({verdict})": "服务端证书被拒绝（{verdict}）",
+  "the server certificate is not trusted (self-signed or unknown CA)":
+    "服务端证书不被信任（自签名或未知 CA）",
+  "the certificate does not match the host name": "证书与主机名不匹配",
 };

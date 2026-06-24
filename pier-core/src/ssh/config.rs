@@ -378,6 +378,14 @@ pub struct DbCredential {
     /// owning SSH session's tunnel, which is the legacy path).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress_id: Option<String>,
+    /// Opt-in TLS posture for *direct* (non-tunneled) connections,
+    /// as a wire string (`require` / `verify-full`). `None` means the
+    /// historical default (`off`, cleartext) — and is kept out of the
+    /// serialized form so existing/tunneled credentials round-trip
+    /// byte-identically. Only Postgres / SQL Server honour it; other
+    /// kinds ignore it. See [`crate::services::db_tls::TlsMode`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_mode: Option<String>,
 }
 
 fn default_db_cred_source_manual() -> DbCredentialSource {
@@ -483,6 +491,7 @@ mod tests {
             favorite: true,
             source: DbCredentialSource::Manual,
             egress_id: None,
+            tls_mode: None,
         };
         let json = serde_json::to_string(&original).expect("serialize");
         let parsed: DbCredential = serde_json::from_str(&json).expect("deserialize");
@@ -513,6 +522,7 @@ mod tests {
             favorite: false,
             source: DbCredentialSource::Manual,
             egress_id: None,
+            tls_mode: None,
         };
         let json = serde_json::to_string(&original).expect("serialize");
         let parsed: DbCredential = serde_json::from_str(&json).expect("deserialize");
@@ -565,6 +575,7 @@ mod tests {
                 signature: "file:///srv/app.db".into(),
             },
             egress_id: None,
+            tls_mode: None,
         };
         assert!(c.is_valid(), "sqlite credential with path must be valid");
         let mut bad = c.clone();
@@ -593,6 +604,7 @@ mod tests {
             favorite: true,
             source: DbCredentialSource::Manual,
             egress_id: None,
+            tls_mode: None,
         });
         let json = serde_json::to_string(&cfg).expect("serialize");
         let parsed: SshConfig = serde_json::from_str(&json).expect("deserialize");

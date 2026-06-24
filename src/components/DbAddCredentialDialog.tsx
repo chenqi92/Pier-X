@@ -1,13 +1,14 @@
 import { CheckCircle2, Loader2, Plug, Star, XCircle, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import IconButton from "./IconButton";
+import Select from "./Select";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { shakeDialogOverlay } from "../lib/dialogShake";
 import { localizeError } from "../i18n/localizeMessage";
 import * as cmd from "../lib/commands";
 import { DB_THEMES } from "./db/dbTheme";
-import type { DbCredential, DbKind, DetectedDbInstance, TabState } from "../lib/types";
+import type { DbCredential, DbKind, DbTlsMode, DetectedDbInstance, TabState } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 
@@ -28,6 +29,9 @@ export type DbConnectionDraft = {
   database: string | null;
   favorite: boolean;
   detectionSignature: string | null;
+  /** Direct-connection TLS posture. Only meaningful for
+   *  Postgres / SQL Server; other kinds carry `"off"`. */
+  tlsMode: DbTlsMode;
 };
 
 type Props = {
@@ -112,6 +116,7 @@ export default function DbAddCredentialDialog({
   const [password, setPassword] = useState("");
   const [database, setDatabase] = useState(seed.database);
   const [favorite, setFavorite] = useState(false);
+  const [tlsMode, setTlsMode] = useState<DbTlsMode>("off");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [testing, setTesting] = useState(false);
@@ -129,6 +134,7 @@ export default function DbAddCredentialDialog({
     setPassword("");
     setDatabase(seed.database);
     setFavorite(false);
+    setTlsMode("off");
     setError("");
     setTestResult(null);
   }, [open, seed]);
@@ -188,6 +194,19 @@ export default function DbAddCredentialDialog({
 
   const parsedPort = Number.parseInt(port, 10);
   const canPersist = savedConnectionIndex !== null;
+  // Only Postgres / SQL Server have a TLS backend; other kinds connect
+  // cleartext (over the encouraged SSH tunnel).
+  const supportsTls = kind === "postgres" || kind === "sqlserver";
+  // With an SSH context the connection rides a loopback tunnel that's
+  // already encrypted, so the "plaintext" warning only fires when the
+  // dialog will dial the host directly.
+  const hasSshContext = tab ? effectiveSshTarget(tab) !== null : false;
+  const showCleartextWarning =
+    supportsTls &&
+    tlsMode === "off" &&
+    !hasSshContext &&
+    host.trim() !== "" &&
+    !isLoopbackHost(host);
   // Redis's "database" field is a numeric DB index — a typo must fail
   // here, not silently coerce to DB 0 at connect time.
   const dbIndexValid =
@@ -267,6 +286,8 @@ export default function DbAddCredentialDialog({
             database: database.trim() || null,
             schema: null,
             table: null,
+            // TLS only on the direct probe; the tunnel hop is loopback.
+            tlsMode: via === "ssh-tunnel" ? "off" : tlsMode,
           });
         } else {
           // Redis: PING via redisBrowse with a tiny pattern. The
@@ -309,6 +330,7 @@ export default function DbAddCredentialDialog({
       database: database.trim() || null,
       favorite,
       detectionSignature: adopting?.signature ?? null,
+      tlsMode: supportsTls ? tlsMode : "off",
     };
   }
 
@@ -334,6 +356,7 @@ export default function DbAddCredentialDialog({
           sqlitePath: null,
           favorite: draft.favorite,
           detectionSignature: draft.detectionSignature,
+          tlsMode: draft.tlsMode,
         },
         draft.password.length > 0 ? draft.password : null,
       );
@@ -458,6 +481,26 @@ export default function DbAddCredentialDialog({
                 {t("DB index must be a non-negative integer.")}
               </div>
             )}
+            {supportsTls && (
+              <div className="dlg-row">
+                <label className="dlg-row-label">{t("TLS")}</label>
+                <Select
+                  className="dlg-input"
+                  value={tlsMode}
+                  onChange={(v) => setTlsMode(v as DbTlsMode)}
+                  items={[
+                    { value: "off", label: t("Off — cleartext (SSH tunnel)") },
+                    { value: "require", label: t("Require — encrypt, trust any cert") },
+                    { value: "verify-full", label: t("Verify-full — encrypt + verify cert") },
+                  ]}
+                />
+              </div>
+            )}
+            {showCleartextWarning && (
+              <div className="status-note status-note--warn">
+                {t("Connecting to {host} in cleartext — the password and query data cross the network unencrypted. Pick Require / Verify-full, or connect through an SSH tunnel.", { host: host.trim() })}
+              </div>
+            )}
             {canPersist && (
               <div className="dlg-row">
                 <label className="dlg-row-label">{t("Favorite")}</label>
@@ -547,6 +590,19 @@ export default function DbAddCredentialDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+/** True for hosts that never leave the machine, where cleartext is
+ *  fine and the "plaintext" TLS warning would be noise. */
+function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  return (
+    h === "localhost" ||
+    h === "::1" ||
+    h === "[::1]" ||
+    h === "0.0.0.0" ||
+    h.startsWith("127.")
   );
 }
 

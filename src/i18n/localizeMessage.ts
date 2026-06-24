@@ -34,6 +34,49 @@ function collapseRepeatedSegments(value: string): string {
   return deduped.join(": ");
 }
 
+/** Turn a rustls / native-tls failure detail into a readable phrase,
+ *  special-casing the certificate verdicts users actually hit with
+ *  `verify-full` (hostname mismatch, untrusted/self-signed CA, expired).
+ *  The backend flattens the driver's `source()` chain (see
+ *  `db_tls::error_chain`) so the rustls verdict — e.g. `invalid peer
+ *  certificate: NotValidForName` — survives into this string. Anything
+ *  unrecognized passes through unchanged so no detail is ever swallowed. */
+function localizeTlsDetail(detail: string, t: Translator): string {
+  const d = detail.trim();
+  if (!d) return t("the server certificate could not be verified");
+  // rustls: "invalid peer certificate: NotValidForName" / "UnknownIssuer" / …
+  const cert = d.match(/invalid peer certificate:?\s*([A-Za-z]+)/i);
+  if (cert) {
+    switch (cert[1].toLowerCase()) {
+      case "notvalidforname":
+        return t("the certificate does not match the host name (use Require, or fix the cert's SAN)");
+      case "unknownissuer":
+      case "unknownca":
+        return t("the certificate is not trusted — self-signed or unknown CA (use Require to skip verification)");
+      case "expired":
+      case "notvalidyet":
+        return t("the certificate is expired or not yet valid");
+      case "revoked":
+        return t("the certificate has been revoked");
+      default:
+        return t("the server certificate was rejected ({verdict})", { verdict: cert[1] });
+    }
+  }
+  // native-tls / Secure Transport wording (tiberius on some platforms).
+  if (/certificate/i.test(d)) {
+    if (/(host\s?name|does not match|NotValidForName|CN mismatch)/i.test(d)) {
+      return t("the certificate does not match the host name");
+    }
+    if (/(not trusted|untrusted|verify failed|unable to get local issuer|self.?signed|unknown)/i.test(d)) {
+      return t("the server certificate is not trusted (self-signed or unknown CA)");
+    }
+    if (/expired|not yet valid/i.test(d)) {
+      return t("the certificate is expired or not yet valid");
+    }
+  }
+  return d;
+}
+
 function localizeRuntimeMessageInternal(message: string, t: Translator, depth: number): string {
   const value = String(message || "").trim();
   if (!value) return "";
@@ -59,6 +102,23 @@ function localizeRuntimeMessageInternal(message: string, t: Translator, depth: n
     pattern: RegExp;
     resolve: (match: RegExpMatchArray) => string;
   }> = [
+    {
+      // Direct-connection TLS failure (Postgres). The backend flattens
+      // tokio-postgres' source() chain so the rustls cert verdict rides
+      // along after "error performing TLS handshake".
+      pattern: /^postgres:\s*error performing TLS handshake(?::\s*(.+))?$/i,
+      resolve: ([, detail]) => t("PostgreSQL TLS handshake failed: {detail}", {
+        detail: localizeTlsDetail((detail ?? "").trim(), t),
+      }),
+    },
+    {
+      // Direct-connection TLS failure (SQL Server / tiberius). tiberius
+      // already embeds the underlying TLS error in its Display string.
+      pattern: /^sqlserver:\s*Error forming TLS connection:\s*(.+)$/i,
+      resolve: ([, detail]) => t("SQL Server TLS connection failed: {detail}", {
+        detail: localizeTlsDetail(detail.trim(), t),
+      }),
+    },
     {
       pattern: /^unknown saved SSH connection: (.+)$/i,
       resolve: ([, index]) => t("Unknown saved SSH connection #{index}.", { index }),

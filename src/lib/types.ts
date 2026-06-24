@@ -353,6 +353,13 @@ export type DbCredentialSource =
   | { kind: "manual" }
   | { kind: "detected"; signature: string };
 
+/** Opt-in TLS posture for a *direct* (non-tunneled) DB connection.
+ *  `off` is the historical default (cleartext — expected to ride an
+ *  SSH tunnel); `require` encrypts but trusts any cert (self-signed
+ *  OK); `verify-full` also checks the cert chain + hostname. Only
+ *  Postgres / SQL Server honour it. */
+export type DbTlsMode = "off" | "require" | "verify-full";
+
 export type DbCredential = {
   id: string;
   kind: DbKind;
@@ -372,6 +379,9 @@ export type DbCredential = {
    *  to translate `(host, port)` into the loopback forwarder when
    *  this is set. `null` / undefined = direct. */
   egressId?: string | null;
+  /** Direct-connection TLS posture. Absent / undefined = `off`
+   *  (the backend omits it from storage for the default). */
+  tlsMode?: DbTlsMode | null;
 };
 
 /** Input shape for `db_cred_save` — `password: null` means
@@ -391,6 +401,9 @@ export type DbCredentialInput = {
   detectionSignature?: string | null;
   /** Optional `EgressProfile.id` this credential should route through. */
   egressId?: string | null;
+  /** Direct-connection TLS posture (`off` / `require` / `verify-full`).
+   *  Omit or `off` for the cleartext default. */
+  tlsMode?: DbTlsMode | null;
 };
 
 /** Patch for `db_cred_update`. Absent fields are not touched;
@@ -406,6 +419,9 @@ export type DbCredentialPatch = {
   favorite?: boolean;
   /** `null` clears, string sets, undefined leaves untouched. */
   egressId?: string | null;
+  /** `null` / `"off"` clears to cleartext, `"require"` / `"verify-full"`
+   *  sets the mode, undefined leaves untouched. */
+  tlsMode?: DbTlsMode | null;
 };
 
 /** Response from `db_cred_resolve`. Plaintext password is
@@ -1279,6 +1295,10 @@ export type TabState = {
   pgDatabase: string;
   pgTunnelId: string | null;
   pgTunnelPort: number | null;
+  /** TLS posture for direct PG connections (`off` / `require` /
+   *  `verify-full`). Only applied when connecting straight to the
+   *  host (no SSH tunnel / forwarder). */
+  pgTlsMode: DbTlsMode;
   // SQL Server connection (tunnel slot "sqlserver").
   mssqlHost: string;
   mssqlPort: number;
@@ -1287,6 +1307,9 @@ export type TabState = {
   mssqlDatabase: string;
   mssqlTunnelId: string | null;
   mssqlTunnelPort: number | null;
+  /** TLS posture for direct SQL Server connections. Only applied
+   *  when connecting straight to the host (no SSH tunnel). */
+  mssqlTlsMode: DbTlsMode;
   // InfluxDB connection (tunnel slot "influx"). `influxToken` carries the
   // 2.x API token; `influxPassword` the 1.x password. The keyring secret
   // maps to whichever the saved credential uses (token when user empty).

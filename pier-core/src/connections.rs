@@ -435,6 +435,11 @@ pub struct NewDbCredential {
     /// through. `None` = direct connection (the legacy path that
     /// rides the SSH session's tunnel).
     pub egress_id: Option<String>,
+    /// Opt-in TLS posture for direct connections as a wire string
+    /// (`off` / `require` / `verify-full`). Normalized on save —
+    /// `off` / empty / unknown collapse to `None` (the cleartext
+    /// default), so existing behavior is unchanged.
+    pub tls_mode: Option<String>,
 }
 
 /// Patch for [`update_db_credential`]. Every field is
@@ -459,6 +464,10 @@ pub struct DbCredentialPatch {
     /// `Some(Some(id))` sets the reference; `Some(None)` clears it
     /// (use direct); `None` leaves the existing value untouched.
     pub egress_id: Option<Option<String>>,
+    /// Change the direct-connection TLS posture. `Some(Some("require"))`
+    /// sets it; `Some(None)` / `Some(Some("off"))` clears to the
+    /// cleartext default; `None` leaves the existing value untouched.
+    pub tls_mode: Option<Option<String>>,
 }
 
 /// Resolved credential ready to connect with. The `password`
@@ -489,6 +498,26 @@ pub enum DbCredentialError {
     /// falls back to `Direct`).
     #[error("credential store error: {0}")]
     Credential(#[from] credentials::CredentialError),
+}
+
+/// Canonicalize a wire TLS-mode string for persistence. Returns the
+/// canonical form (`require` / `verify-full`) for the encrypting
+/// modes, or `None` for `off` / empty / unknown — keeping the default
+/// posture out of the YAML so existing and tunneled credentials
+/// serialize byte-identically. Mirrors the wire forms accepted by
+/// [`crate::services::db_tls::TlsMode::from_wire`].
+fn normalize_tls_mode(raw: Option<String>) -> Option<String> {
+    match raw
+        .as_deref()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("require") => Some("require".to_string()),
+        Some("verify-full") | Some("verify_full") | Some("verifyfull") => {
+            Some("verify-full".to_string())
+        }
+        _ => None,
+    }
 }
 
 /// Generate a fresh credential id. Uses high-resolution clock
@@ -588,6 +617,7 @@ pub fn save_db_credential(
             cred.sqlite_path = Some(sp);
         }
         cred.favorite = input.favorite;
+        cred.tls_mode = normalize_tls_mode(input.tls_mode);
         // Keep an existing detection signature if the new save
         // is Manual — otherwise re-saving a manually edited
         // adopted cred would forget where it came from.
@@ -630,6 +660,7 @@ pub fn save_db_credential(
         favorite: input.favorite,
         source: input.source,
         egress_id: input.egress_id.filter(|s| !s.is_empty()),
+        tls_mode: normalize_tls_mode(input.tls_mode),
     };
     store.connections[connection_index]
         .databases
@@ -744,6 +775,9 @@ pub fn update_db_credential(
         }
         if let Some(v) = patch.egress_id {
             c.egress_id = v.filter(|s| !s.trim().is_empty());
+        }
+        if let Some(v) = patch.tls_mode {
+            c.tls_mode = normalize_tls_mode(v);
         }
     }
 
@@ -1154,6 +1188,7 @@ mod tests {
             favorite: false,
             source,
             egress_id: None,
+            tls_mode: None,
         }
     }
 
@@ -1175,7 +1210,32 @@ mod tests {
             favorite: false,
             source,
             egress_id: None,
+            tls_mode: None,
         }
+    }
+
+    #[test]
+    fn normalize_tls_mode_canonicalizes_and_drops_default() {
+        // `off` / empty / unknown collapse to None so the default
+        // posture stays out of the YAML (byte-identical for existing
+        // and tunneled credentials).
+        assert_eq!(normalize_tls_mode(None), None);
+        assert_eq!(normalize_tls_mode(Some(String::new())), None);
+        assert_eq!(normalize_tls_mode(Some("off".into())), None);
+        assert_eq!(normalize_tls_mode(Some("bogus".into())), None);
+        // Encrypting modes canonicalize (trim + lowercase + dash form).
+        assert_eq!(
+            normalize_tls_mode(Some("  REQUIRE ".into())),
+            Some("require".to_string())
+        );
+        assert_eq!(
+            normalize_tls_mode(Some("verify_full".into())),
+            Some("verify-full".to_string())
+        );
+        assert_eq!(
+            normalize_tls_mode(Some("VERIFY-FULL".into())),
+            Some("verify-full".to_string())
+        );
     }
 
     #[test]

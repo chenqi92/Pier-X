@@ -5,6 +5,7 @@ import { shakeDialogOverlay } from "../../lib/dialogShake";
 import { localizeError } from "../../i18n/localizeMessage";
 import * as cmd from "../../lib/commands";
 import type { PgActivityRow } from "../../lib/commands";
+import type { DbTlsMode } from "../../lib/types";
 import { confirm } from "../../stores/useConfirmStore";
 
 type Props = {
@@ -19,6 +20,9 @@ type Props = {
     user: string;
     password: string;
     database?: string | null;
+    /** TLS posture, forwarded to the activity / cancel / terminate
+     *  connections. `off` on the tunneled (loopback) path. */
+    tlsMode?: DbTlsMode;
   };
 };
 

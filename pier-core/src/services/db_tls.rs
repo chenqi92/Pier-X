@@ -42,6 +42,27 @@ impl TlsMode {
     }
 }
 
+/// Flatten an error and its `source()` chain into a single `": "`-joined
+/// string. Several driver errors — notably [`tokio_postgres::Error`] —
+/// print only their own kind in `Display` (`error performing TLS
+/// handshake`) and hide the useful detail (the rustls certificate
+/// diagnostic) behind `source()`. Walking the chain surfaces it so the
+/// frontend can localize "cert not trusted" / "hostname mismatch".
+/// Adjacent duplicate segments are collapsed — an `io::Error` that just
+/// re-displays its inner error would otherwise repeat it verbatim.
+pub fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut parts: Vec<String> = vec![err.to_string()];
+    let mut source = err.source();
+    while let Some(e) = source {
+        let s = e.to_string();
+        if parts.last().map(|p| *p != s).unwrap_or(true) {
+            parts.push(s);
+        }
+        source = e.source();
+    }
+    parts.join(": ")
+}
+
 /// Build a rustls [`ClientConfig`](rustls::ClientConfig) for the PostgreSQL
 /// connector. Only meaningful for `Require` / `VerifyFull`; `Off` is handled
 /// by the caller (plain `NoTls`). An explicit `ring` provider is named
@@ -136,6 +157,57 @@ mod tests {
         assert_eq!(TlsMode::from_wire("VERIFY-FULL"), TlsMode::VerifyFull);
         assert!(TlsMode::Off.is_off());
         assert!(!TlsMode::Require.is_off());
+    }
+
+    #[test]
+    fn error_chain_surfaces_hidden_cause_and_dedups() {
+        use std::error::Error;
+        use std::fmt;
+
+        // Innermost: the rustls cert verdict.
+        #[derive(Debug)]
+        struct Cert;
+        impl fmt::Display for Cert {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("invalid peer certificate: NotValidForName")
+            }
+        }
+        impl Error for Cert {}
+
+        // Middle: mirrors `io::Error` wrapping — its Display equals the
+        // inner's, so error_chain must collapse the repeat.
+        #[derive(Debug)]
+        struct Io(Cert);
+        impl fmt::Display for Io {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl Error for Io {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        // Top: mirrors `tokio_postgres::Error` — Display prints only its
+        // own kind and hides the cause behind source().
+        #[derive(Debug)]
+        struct Top(Io);
+        impl fmt::Display for Top {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("error performing TLS handshake")
+            }
+        }
+        impl Error for Top {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        assert_eq!(
+            error_chain(&Top(Io(Cert))),
+            "error performing TLS handshake: invalid peer certificate: NotValidForName"
+        );
     }
 
     #[test]

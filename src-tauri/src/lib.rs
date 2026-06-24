@@ -1163,6 +1163,10 @@ struct DbCredentialView {
     /// Resolved against `egress_profile_list`. `None` = direct.
     #[serde(skip_serializing_if = "Option::is_none")]
     egress_id: Option<String>,
+    /// Direct-connection TLS posture (`require` / `verify-full`),
+    /// or absent for the cleartext default. Surfaced as `tlsMode`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tls_mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1208,6 +1212,10 @@ struct DbCredentialInput {
     /// Optional egress profile id (see `egress_profile_list`).
     #[serde(default)]
     egress_id: Option<String>,
+    /// Optional direct-connection TLS posture (`off` / `require` /
+    /// `verify-full`). Normalized + persisted by pier-core.
+    #[serde(default)]
+    tls_mode: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1234,6 +1242,11 @@ struct DbCredentialPatchInput {
     /// Some(Some("id")) replaces.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     egress_id: Option<Option<String>>,
+    /// Same double-Option semantics as `egress_id` — None leaves
+    /// existing untouched; Some(None) / Some(Some("off")) clears to
+    /// cleartext; Some(Some("require")) sets the mode.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    tls_mode: Option<Option<String>>,
 }
 
 /// Serde helper — distinguish "field absent" from
@@ -3136,6 +3149,7 @@ fn map_db_credential(c: &DbCredential) -> DbCredentialView {
             },
         },
         egress_id: c.egress_id.clone(),
+        tls_mode: c.tls_mode.clone(),
     }
 }
 
@@ -7116,9 +7130,10 @@ async fn postgres_browse(
     database: Option<String>,
     schema: Option<String>,
     table: Option<String>,
+    tls_mode: Option<String>,
 ) -> Result<PostgresBrowserState, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        postgres_browse_blocking(host, port, user, password, database, schema, table)
+        postgres_browse_blocking(host, port, user, password, database, schema, table, tls_mode)
     })
     .await
     .map_err(|e| format!("postgres_browse join: {e}"))?
@@ -7132,6 +7147,7 @@ fn postgres_browse_blocking(
     database: Option<String>,
     schema: Option<String>,
     table: Option<String>,
+    tls_mode: Option<String>,
 ) -> Result<PostgresBrowserState, String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
@@ -7145,7 +7161,9 @@ fn postgres_browse_blocking(
         user: resolved_user.to_string(),
         password,
         database: database.clone().filter(|v| !v.trim().is_empty()),
-        tls_mode: pier_core::services::db_tls::TlsMode::Off,
+        tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
+            tls_mode.as_deref().unwrap_or_default(),
+        ),
     })
     .map_err(|e| e.to_string())?;
 
@@ -7560,6 +7578,7 @@ async fn postgres_execute(
     database: Option<String>,
     sql: String,
     read_only: bool,
+    tls_mode: Option<String>,
 ) -> Result<QueryExecutionResult, String> {
     if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
         return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
@@ -7571,7 +7590,9 @@ async fn postgres_execute(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
-            tls_mode: pier_core::services::db_tls::TlsMode::Off,
+            tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
+                tls_mode.as_deref().unwrap_or_default(),
+            ),
         })
         .map_err(|e| e.to_string())?;
 
@@ -7629,6 +7650,7 @@ async fn mssql_execute(
     database: Option<String>,
     sql: String,
     read_only: bool,
+    tls_mode: Option<String>,
 ) -> Result<QueryExecutionResult, String> {
     if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
         return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
@@ -7640,7 +7662,9 @@ async fn mssql_execute(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
-            tls_mode: pier_core::services::db_tls::TlsMode::Off,
+            tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
+                tls_mode.as_deref().unwrap_or_default(),
+            ),
         })
         .map_err(|e| e.to_string())?;
 
@@ -7659,6 +7683,7 @@ async fn mssql_overview(
     user: String,
     password: String,
     database: Option<String>,
+    tls_mode: Option<String>,
 ) -> Result<SqlServerOverview, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut client = SqlServerClient::connect_blocking(SqlServerConfig {
@@ -7667,7 +7692,9 @@ async fn mssql_overview(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
-            tls_mode: pier_core::services::db_tls::TlsMode::Off,
+            tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
+                tls_mode.as_deref().unwrap_or_default(),
+            ),
         })
         .map_err(|e| e.to_string())?;
 
@@ -7707,6 +7734,7 @@ async fn mssql_columns(
     database: Option<String>,
     schema: String,
     table: String,
+    tls_mode: Option<String>,
 ) -> Result<Vec<SqlServerColumnView>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut client = SqlServerClient::connect_blocking(SqlServerConfig {
@@ -7715,7 +7743,9 @@ async fn mssql_columns(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
-            tls_mode: pier_core::services::db_tls::TlsMode::Off,
+            tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
+                tls_mode.as_deref().unwrap_or_default(),
+            ),
         })
         .map_err(|e| e.to_string())?;
 
@@ -7997,6 +8027,7 @@ async fn postgres_list_activity(
     user: String,
     password: String,
     database: Option<String>,
+    tls_mode: Option<String>,
 ) -> Result<Vec<PgActivityRow>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = PostgresClient::connect_blocking(PostgresConfig {
@@ -8005,7 +8036,9 @@ async fn postgres_list_activity(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
-            tls_mode: pier_core::services::db_tls::TlsMode::Off,
+            tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
+                tls_mode.as_deref().unwrap_or_default(),
+            ),
         })
         .map_err(|e| e.to_string())?;
         client.list_activity_blocking().map_err(|e| e.to_string())
@@ -8026,6 +8059,7 @@ async fn postgres_cancel_query(
     password: String,
     database: Option<String>,
     pid: i32,
+    tls_mode: Option<String>,
 ) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = PostgresClient::connect_blocking(PostgresConfig {
@@ -8034,7 +8068,9 @@ async fn postgres_cancel_query(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
-            tls_mode: pier_core::services::db_tls::TlsMode::Off,
+            tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
+                tls_mode.as_deref().unwrap_or_default(),
+            ),
         })
         .map_err(|e| e.to_string())?;
         client.cancel_query_blocking(pid).map_err(|e| e.to_string())
@@ -8053,6 +8089,7 @@ async fn postgres_terminate_backend(
     password: String,
     database: Option<String>,
     pid: i32,
+    tls_mode: Option<String>,
 ) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = PostgresClient::connect_blocking(PostgresConfig {
@@ -8061,7 +8098,9 @@ async fn postgres_terminate_backend(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
-            tls_mode: pier_core::services::db_tls::TlsMode::Off,
+            tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
+                tls_mode.as_deref().unwrap_or_default(),
+            ),
         })
         .map_err(|e| e.to_string())?;
         client
@@ -8092,6 +8131,7 @@ async fn db_test_connection(
     user: String,
     password: String,
     database: Option<String>,
+    tls_mode: Option<String>,
 ) -> Result<DbTestConnectionResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let host_trim = host.trim();
@@ -8138,7 +8178,9 @@ async fn db_test_connection(
                     user: user_trim.to_string(),
                     password,
                     database: database.filter(|v| !v.trim().is_empty()),
-                    tls_mode: pier_core::services::db_tls::TlsMode::Off,
+                    tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
+                        tls_mode.as_deref().unwrap_or_default(),
+                    ),
                 })
                 .map_err(|e| e.to_string())?;
                 let version = client
@@ -10056,6 +10098,7 @@ fn db_cred_save(
         favorite: credential.favorite,
         source,
         egress_id: credential.egress_id.filter(|s| !s.trim().is_empty()),
+        tls_mode: credential.tls_mode,
     };
     let cred = connections::save_db_credential(saved_connection_index, input, password)
         .map_err(|e| e.to_string())?;
@@ -10078,6 +10121,7 @@ fn db_cred_update(
         sqlite_path: patch.sqlite_path,
         favorite: patch.favorite,
         egress_id: patch.egress_id,
+        tls_mode: patch.tls_mode,
     };
     let cred = connections::update_db_credential(
         saved_connection_index,

@@ -94,6 +94,7 @@ const POSTGRES_ADAPTER: DbCredentialFieldAdapter = {
   readActiveCredId: (t) => t.pgActiveCredentialId,
   readTunnelId: (t) => t.pgTunnelId,
   readTunnelPort: (t) => t.pgTunnelPort,
+  readTlsMode: (t) => t.pgTlsMode,
   patchFromCred: (cred) => ({
     pgActiveCredentialId: cred.id,
     pgHost: cred.host,
@@ -103,6 +104,7 @@ const POSTGRES_ADAPTER: DbCredentialFieldAdapter = {
     pgDatabase: cred.database ?? "",
     pgTunnelId: null,
     pgTunnelPort: null,
+    pgTlsMode: cred.tlsMode ?? "off",
   }),
   patchFromSaved: (cred) => ({
     pgActiveCredentialId: cred.id,
@@ -112,6 +114,7 @@ const POSTGRES_ADAPTER: DbCredentialFieldAdapter = {
     pgDatabase: cred.database ?? "",
     pgTunnelId: null,
     pgTunnelPort: null,
+    pgTlsMode: cred.tlsMode ?? "off",
   }),
   patchFromDraft: (draft) => ({
     pgActiveCredentialId: null,
@@ -122,6 +125,7 @@ const POSTGRES_ADAPTER: DbCredentialFieldAdapter = {
     pgDatabase: draft.database ?? "",
     pgTunnelId: null,
     pgTunnelPort: null,
+    pgTlsMode: draft.tlsMode,
   }),
   patchPassword: (password) => ({ pgPassword: password }),
   patchPasswordAfterRotate: (password) => ({ pgPassword: password }),
@@ -271,6 +275,7 @@ function PostgresPanelBody({ tab }: Props) {
       const s = await cmd.postgresBrowse({
         host: target.host,
         port: target.port,
+        tlsMode: target.tlsMode,
         user: connectionUser.trim(),
         password: pw,
         database: (nextDb ?? connectionDatabase).trim() || null,
@@ -373,6 +378,7 @@ function PostgresPanelBody({ tab }: Props) {
         r = await cmd.postgresExecute({
           host: target.host,
           port: target.port,
+          tlsMode: target.tlsMode,
           user: tab.pgUser.trim(),
           password: tab.pgPassword,
           database: tab.pgDatabase.trim() || null,
@@ -460,6 +466,7 @@ function PostgresPanelBody({ tab }: Props) {
       const r = await cmd.postgresExecute({
         host: target.host,
         port: target.port,
+        tlsMode: target.tlsMode,
         user: tab.pgUser.trim(),
         password: tab.pgPassword,
         database: tab.pgDatabase.trim() || null,
@@ -494,6 +501,7 @@ function PostgresPanelBody({ tab }: Props) {
       const r = await cmd.postgresExecute({
         host: target.host,
         port: target.port,
+        tlsMode: target.tlsMode,
         user: tab.pgUser.trim(),
         password: tab.pgPassword,
         database: tab.pgDatabase.trim() || null,
@@ -719,6 +727,7 @@ function PostgresPanelBody({ tab }: Props) {
         await cmd.postgresExecute({
           host: target.host,
           port: target.port,
+          tlsMode: target.tlsMode,
           user: tab.pgUser.trim(),
           password: tab.pgPassword,
           database: tab.pgDatabase.trim() || null,
@@ -754,6 +763,7 @@ function PostgresPanelBody({ tab }: Props) {
         await cmd.postgresExecute({
           host: target.host,
           port: target.port,
+          tlsMode: target.tlsMode,
           user: tab.pgUser.trim(),
           password: tab.pgPassword,
           database: tab.pgDatabase.trim() || null,
@@ -785,6 +795,7 @@ function PostgresPanelBody({ tab }: Props) {
     return cmd.postgresExecute({
       host: target.host,
       port: target.port,
+      tlsMode: target.tlsMode,
       user: tab.pgUser.trim(),
       password: tab.pgPassword,
       database: tab.pgDatabase.trim() || null,
@@ -1046,6 +1057,8 @@ function PostgresPanelBody({ tab }: Props) {
                   database: tab.pgDatabase.trim() || null,
                   schema: null,
                   table: null,
+                  // Loopback when tunneled; only dial TLS straight to host.
+                  tlsMode: sshTarget ? "off" : tab.pgTlsMode,
                 });
                 return { ok: true, via };
               } finally {
@@ -1396,6 +1409,7 @@ function PostgresPanelBody({ tab }: Props) {
               const r = await cmd.postgresExecute({
                 host: target.host,
                 port: target.port,
+                tlsMode: target.tlsMode,
                 user: tab.pgUser.trim(),
                 password: tab.pgPassword,
                 database: tab.pgDatabase.trim() || null,
@@ -1443,6 +1457,7 @@ function PostgresPanelBody({ tab }: Props) {
                     await cmd.postgresExecute({
                       host: target.host,
                       port: target.port,
+                      tlsMode: target.tlsMode,
                       user: tab.pgUser.trim(),
                       password: tab.pgPassword,
                       database: tab.pgDatabase.trim() || null,
@@ -1488,6 +1503,9 @@ function PostgresPanelBody({ tab }: Props) {
           user: tab.pgUser,
           password: tab.pgPassword,
           database: tab.pgDatabase || null,
+          // Tunnel terminates on loopback (already encrypted); TLS only
+          // applies on the straight-to-host path.
+          tlsMode: tab.pgTunnelPort ? "off" : tab.pgTlsMode,
         }}
       />
       {elev.dialog}

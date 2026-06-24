@@ -1135,6 +1135,7 @@ export type RightTool =
   | "markdown"
   | "firewall"
   | "webserver"
+  | "nanolink"
   | "software";
 
 /**
@@ -1430,6 +1431,7 @@ export const REMOTE_ONLY_TOOLS: ReadonlySet<RightTool> = new Set<RightTool>([
   "redis",
   "sqlite",
   "webserver",
+  "nanolink",
   "software",
 ]);
 

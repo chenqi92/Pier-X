@@ -1,0 +1,313 @@
+/* NanoLink panel — scoped chrome. Tokens only (see CLAUDE.md Rule 1).
+   All selectors are `nl-*` so nothing here collides with shell.css /
+   pier-x.css cascade order. */
+
+.nl-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  font-size: var(--ui-fs);
+  color: var(--ink);
+}
+
+.nl-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* ── Empty / error states ── */
+.nl-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-6);
+  text-align: center;
+}
+.nl-empty__icon {
+  color: var(--svc-nanolink);
+  opacity: 0.85;
+}
+.nl-empty__title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+.nl-empty__sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+  max-width: 44ch;
+}
+.nl-pad {
+  padding: var(--sp-3);
+}
+
+.nl-error {
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  color: var(--neg);
+  font-size: var(--ui-fs-sm);
+}
+
+/* ── server/agent sub-tabs (role = both) ── */
+.nl-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  border-bottom: 1px solid var(--line);
+  margin: calc(-1 * var(--sp-1)) 0 var(--sp-1);
+}
+.nl-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+  cursor: pointer;
+}
+.nl-tab:hover {
+  color: var(--ink-2);
+}
+.nl-tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--svc-nanolink);
+}
+
+/* ── status row / key-value ── */
+.nl-stat-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.nl-stat-label {
+  font-weight: 600;
+}
+.nl-spacer {
+  flex: 1;
+}
+.nl-kv {
+  display: flex;
+  gap: var(--sp-2);
+  font-size: var(--ui-fs-sm);
+  color: var(--ink-2);
+}
+.nl-kv__k {
+  color: var(--muted);
+  min-width: 5rem;
+}
+.nl-mono {
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+}
+
+/* ── section header ── */
+.nl-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
+  font-weight: 600;
+  font-size: var(--ui-fs-sm);
+}
+
+/* ── forms ── */
+.nl-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--ui-fs-sm);
+  color: var(--ink-2);
+}
+.nl-field > span {
+  color: var(--muted);
+}
+.nl-field--row {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.nl-install,
+.nl-addform,
+.nl-login {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.nl-addform {
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.nl-install__head {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+.nl-install__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.nl-msg {
+  font-size: var(--ui-fs-sm);
+  color: var(--muted);
+}
+.nl-msg--block {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+
+.nl-output {
+  margin: 0;
+  padding: var(--sp-3);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+}
+.nl-output--tall {
+  max-height: 18rem;
+}
+
+/* ── server summary cards ── */
+.nl-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--sp-2);
+}
+.nl-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.nl-card__v {
+  font-size: var(--ui-fs-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+.nl-card__l {
+  font-size: var(--size-micro);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── agents table ── */
+.nl-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ui-fs-sm);
+}
+.nl-table th {
+  text-align: left;
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+.nl-table td {
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
+}
+
+/* ── B: generated config / copy blocks ── */
+.nl-gen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.nl-copyblock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.nl-copyblock__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.nl-details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+  padding: var(--sp-1) 0;
+}
+.nl-details[open] > summary {
+  color: var(--ink-2);
+}
+
+/* ── C: per-agent command sender ── */
+.nl-cmd-row > td {
+  background: var(--surface-2);
+  padding: var(--sp-2) var(--sp-3) !important;
+}
+.nl-cmd {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.nl-cmd__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.nl-cmd__bar .dlg-input {
+  flex: 1;
+  min-width: 8rem;
+}
+
+/* ── 3a: structured configured-server rows ── */
+.nl-srv-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.nl-srv-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--ui-fs-sm);
+}
+.nl-srv-tls {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}

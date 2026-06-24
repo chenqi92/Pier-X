@@ -49,6 +49,7 @@ pub mod local_exec;
 pub mod local_monitor;
 pub mod mysql;
 pub mod mysql_cli;
+pub mod nanolink;
 pub mod nginx;
 pub mod package_manager;
 pub mod package_mirror;

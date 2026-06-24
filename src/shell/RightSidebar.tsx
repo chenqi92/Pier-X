@@ -25,6 +25,7 @@ const CodeSearchPanel = lazy(() => import("../panels/CodeSearchPanel"));
 const FirewallPanel = lazy(() => import("../panels/FirewallPanel"));
 const WebServerPanel = lazy(() => import("../panels/WebServerPanel"));
 const SoftwarePanel = lazy(() => import("../panels/SoftwarePanel"));
+const NanoLinkPanel = lazy(() => import("../panels/NanoLinkPanel"));
 
 type Props = {
   activeTab: TabState | null;
@@ -43,7 +44,7 @@ type Props = {
   onToggleCollapsed: () => void;
 };
 
-type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "search" | "sftp" | "firewall" | "webserver" | "software";
+type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "search" | "sftp" | "firewall" | "webserver" | "software" | "nanolink";
 
 const DB_DETECTION_TOOLS = new Set<RightTool>(["database", "redis"]);
 const SERVICE_DETECTION_DELAY_MS = 2_000;
@@ -135,6 +136,8 @@ function ToolContent({
       return tab ? <WebServerPanel key={tab.id} tab={tab} /> : renderSplash("webserver", t, onConnectSaved, onNewConnection);
     case "software":
       return tab ? <SoftwarePanel key={tab.id} tab={tab} isActive={isActive} /> : renderSplash("software", t, onConnectSaved, onNewConnection);
+    case "nanolink":
+      return tab ? <NanoLinkPanel key={tab.id} tab={tab} isActive={isActive} /> : renderSplash("nanolink", t, onConnectSaved, onNewConnection);
     case "markdown":
       return <MarkdownPanel key={markdownPath} filePath={markdownPath} />;
     default:

@@ -2440,6 +2440,178 @@ export const softwareProvisionApply = (
   params: SshParams & { id: string; values: Record<string, string> },
 ) => invoke<PostgresActionReport>("software_provision_apply", params);
 
+// ── NanoLink ────────────────────────────────────────────────────
+//
+// NanoLink is a monitoring platform with two roles per host: an
+// `nanolink-agent` (client) and an `nanolink-server` (collector). A
+// host may run both. These wrappers drive role detection, agent
+// control (SSH exec of the CLI / systemctl), and server queries
+// (`curl localhost` over the same SSH session — the JWT never leaves
+// the box). Install reuses `softwareProvisionApply({ id: "nanolink" })`.
+
+/** Role + running state of NanoLink on a host. */
+export type NanoLinkStatus = {
+  installed: boolean;
+  hasAgent: boolean;
+  hasServer: boolean;
+  agentRunning: boolean;
+  serverRunning: boolean;
+  agentVersion: string;
+  serverVersion: string;
+  role: "none" | "client" | "server" | "both";
+  agentConfigPath: string;
+  /** Server REST/HTTP port (default 8080; 0 when no server). */
+  httpPort: number;
+  /** Server gRPC port from `/api/server-info` (0 when unknown). */
+  grpcPort: number;
+  /** Server dashboard WS port from `/api/server-info` (0 when unknown). */
+  wsPort: number;
+  authEnabled: boolean;
+};
+
+/** Redacted result of a NanoLink control command. `status` is
+ *  `ok` | `failed` | `sudo-requires-password`. */
+export type NanoLinkCommandReport = {
+  status: string;
+  exitCode: number;
+  output: string;
+};
+
+/** Cluster summary served by a NanoLink server (`/api/summary`). */
+export type NanoLinkServerSummary = {
+  connectedAgents: number;
+  avgCpuPercent: number;
+  memoryPercent: number;
+  diskPercent: number;
+  totalMemory: number;
+  totalDisk: number;
+};
+
+/** One agent row as a server reports it (`/api/agents`). */
+export type NanoLinkServerAgent = {
+  id: string;
+  hostname: string;
+  os: string;
+  arch: string;
+  version: string;
+  permissionLevel: number;
+  connectedAt: string;
+  lastHeartbeat: string;
+  online: boolean;
+};
+
+/** Detect NanoLink and classify the host's role. */
+export const nanolinkStatus = (params: SshParams) =>
+  invoke<NanoLinkStatus>("nanolink_status", params);
+
+/** Raw `nanolink-agent status` text for the panel. */
+export const nanolinkAgentStatus = (params: SshParams) =>
+  invoke<string>("nanolink_agent_status", params);
+
+/** One configured server upstream parsed from `nanolink-agent server list`. */
+export type NanoLinkAgentServer = {
+  host: string;
+  port: number;
+  permission: number;
+  permissionName: string;
+  tlsEnabled: boolean;
+  tlsVerify: boolean;
+};
+
+/** Structured list of the agent's configured server upstreams. */
+export const nanolinkAgentServers = (params: SshParams) =>
+  invoke<NanoLinkAgentServer[]>("nanolink_agent_servers", params);
+
+/** start | stop | restart the agent service (needs sudo). */
+export const nanolinkAgentService = (
+  params: SshParams & { action: "start" | "stop" | "restart" },
+) => invoke<NanoLinkCommandReport>("nanolink_agent_service", params);
+
+/** Point the agent at an additional server (needs sudo). */
+export const nanolinkAgentAddServer = (
+  params: SshParams & {
+    targetHost: string;
+    targetPort: number;
+    token: string;
+    permission: number;
+    noTls: boolean;
+  },
+) => invoke<NanoLinkCommandReport>("nanolink_agent_add_server", params);
+
+/** Remove a server upstream from the agent (needs sudo). */
+export const nanolinkAgentRemoveServer = (
+  params: SshParams & { targetHost: string; targetPort: number },
+) => invoke<NanoLinkCommandReport>("nanolink_agent_remove_server", params);
+
+/** Log in to the server REST API; returns a bearer JWT. */
+export const nanolinkServerLogin = (
+  params: SshParams & { nlPort: number; nlUsername: string; nlPassword: string },
+) => invoke<string>("nanolink_server_login", params);
+
+/** Cluster summary (`jwt` may be empty when auth is disabled). */
+export const nanolinkServerSummary = (
+  params: SshParams & { nlPort: number; jwt: string },
+) => invoke<NanoLinkServerSummary>("nanolink_server_summary", params);
+
+/** Connected-agent list from the server. */
+export const nanolinkServerAgents = (
+  params: SshParams & { nlPort: number; jwt: string },
+) => invoke<NanoLinkServerAgent[]>("nanolink_server_agents", params);
+
+/** Generated agent config + per-platform install commands. */
+export type NanoLinkGenerateConfig = {
+  configYaml: string;
+  installCommandUnix: string;
+  installCommandWindows: string;
+  /** Set only when the server minted a token (request `token` was empty). */
+  generatedToken: string;
+  serverId: string;
+};
+
+/** Outcome of dispatching a command to an agent. */
+export type NanoLinkCommandDispatch = { status: string; commandId: string };
+
+/** One poll of a dispatched command's result. `status` is `pending`
+ *  (202) or `done` (200); `json` carries the raw result body once done. */
+export type NanoLinkCommandResult = { status: string; json: string };
+
+/** Mint an agent config + install command for a new machine
+ *  (`/api/config/generate`, server admin only). Empty `token` → server
+ *  generates one (returned in `generatedToken`). */
+export const nanolinkServerGenerateConfig = (
+  params: SshParams & {
+    nlPort: number;
+    jwt: string;
+    serverUrl: string;
+    token: string;
+    permission: number;
+    tlsVerify: boolean;
+    hostname: string;
+  },
+) => invoke<NanoLinkGenerateConfig>("nanolink_server_generate_config", params);
+
+/** Dispatch a command to a connected agent. `cmdType` is a NanoLink
+ *  CommandType enum name (e.g. `SERVICE_RESTART`). */
+export const nanolinkServerSendCommand = (
+  params: SshParams & {
+    nlPort: number;
+    jwt: string;
+    agentId: string;
+    cmdType: string;
+    target: string;
+  },
+) => invoke<NanoLinkCommandDispatch>("nanolink_server_send_command", params);
+
+/** Poll a dispatched command's structured result once. */
+export const nanolinkServerCommandResult = (
+  params: SshParams & {
+    nlPort: number;
+    jwt: string;
+    agentId: string;
+    commandId: string;
+  },
+) => invoke<NanoLinkCommandResult>("nanolink_server_command_result", params);
+
 // ── Docker Compose templates (v2.11) ────────────────────────────
 
 export type ComposeTemplate = {

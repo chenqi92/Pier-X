@@ -1,7 +1,9 @@
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
+import { useMemo } from "react";
 import type { RightTool } from "../lib/types";
 import {
   CATEGORY_LABELS,
+  DETECTION_GATED_TOOLS,
   RIGHT_TOOL_META,
   RIGHT_TOOL_ORDER,
 } from "../lib/rightToolMeta";
@@ -17,8 +19,6 @@ type Props = {
   onToggleCollapsed: () => void;
 };
 
-const TOOLS = RIGHT_TOOL_ORDER.map((tool) => ({ tool, ...RIGHT_TOOL_META[tool] }));
-
 export default function ToolStrip({
   activeTool,
   onSelectTool,
@@ -30,13 +30,24 @@ export default function ToolStrip({
   const { t } = useI18n();
   const collapseTitle = collapsed ? t("Show right panel") : t("Hide right panel");
 
+  // Detection-gated tools (NanoLink) only appear once the active host
+  // reports them; every other tool renders unconditionally. Recompute
+  // when the detected set changes so the button shows/hides live.
+  const tools = useMemo(
+    () =>
+      RIGHT_TOOL_ORDER.filter(
+        (tool) => !DETECTION_GATED_TOOLS.has(tool) || (detectedTools?.has(tool) ?? false),
+      ).map((tool) => ({ tool, ...RIGHT_TOOL_META[tool] })),
+    [detectedTools],
+  );
+
   // Insert a thin divider between adjacent items whose `category`
   // changes. This visually clusters related tools (workspace ·
   // host · files · containers · database · service) without needing
   // text labels in the narrow strip.
   return (
     <div className="toolstrip">
-      {TOOLS.map((entry, i) => {
+      {tools.map((entry, i) => {
         const isActive = activeTool === entry.tool;
         const dim = entry.remoteOnly && !hasRemoteContext;
         // The umbrella "database" button lights up when any relational
@@ -46,7 +57,7 @@ export default function ToolStrip({
             ? (detectedTools?.has("mysql") ?? false) ||
               (detectedTools?.has("postgres") ?? false)
             : detectedTools?.has(entry.tool) ?? false;
-        const prevCategory = i > 0 ? TOOLS[i - 1].category : null;
+        const prevCategory = i > 0 ? tools[i - 1].category : null;
         const showDivider =
           prevCategory !== null && prevCategory !== entry.category;
         return (

@@ -12,7 +12,7 @@
 
 import type { AiProviderKind } from "./ai";
 
-export type AiVendorGroup = "official" | "cn" | "intl" | "local" | "custom";
+export type AiVendorGroup = "official" | "cn" | "intl" | "local" | "agent-cli" | "custom";
 
 export type AiVendorPreset = {
   /** Stable id — keyring slot suffix and persisted selection. */
@@ -30,6 +30,9 @@ export type AiVendorPreset = {
   keyHint?: string;
   /** Example model id for the model-input placeholder. */
   modelHint?: string;
+  /** `kind === "cli"` only: which agent CLI this preset drives
+   *  ("claude-code" / "codex"); see PRODUCT-SPEC §5.14.8. */
+  cliFlavor?: string;
 };
 
 export const AI_VENDOR_GROUP_LABELS: Record<AiVendorGroup, string> = {
@@ -37,6 +40,7 @@ export const AI_VENDOR_GROUP_LABELS: Record<AiVendorGroup, string> = {
   cn: "China platforms",
   intl: "International platforms",
   local: "Local inference",
+  "agent-cli": "Local agent CLI",
   custom: "Custom",
 };
 
@@ -221,6 +225,27 @@ export const AI_VENDORS: AiVendorPreset[] = [
     baseUrl: "http://localhost:8000/v1",
     needsKey: false,
   },
+  // ── Local agent CLI (reuse your logged-in CLI, no API key; §5.14.8) ──
+  {
+    id: "claude-code",
+    label: "Claude Code",
+    group: "agent-cli",
+    kind: "cli",
+    baseUrl: "",
+    needsKey: false,
+    cliFlavor: "claude-code",
+    modelHint: "sonnet (optional)",
+  },
+  {
+    id: "codex",
+    label: "OpenAI Codex",
+    group: "agent-cli",
+    kind: "cli",
+    baseUrl: "",
+    needsKey: false,
+    cliFlavor: "codex",
+    modelHint: "(account default)",
+  },
   // ── Custom ───────────────────────────────────────────────────
   {
     id: "custom",
@@ -248,7 +273,7 @@ export function aiVendorById(id: string): AiVendorPreset {
 
 /** Vendors in stable optgroup order for the settings <select>. */
 export function aiVendorsByGroup(): { group: AiVendorGroup; vendors: AiVendorPreset[] }[] {
-  const order: AiVendorGroup[] = ["official", "cn", "intl", "local", "custom"];
+  const order: AiVendorGroup[] = ["official", "cn", "intl", "local", "agent-cli", "custom"];
   return order.map((group) => ({
     group,
     vendors: AI_VENDORS.filter((v) => v.group === group),

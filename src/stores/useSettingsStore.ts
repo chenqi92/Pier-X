@@ -18,6 +18,8 @@ export type AiProfile = {
   baseUrl: string;
   model: string;
   maxTokens: number;
+  /** `cli` backends only: path to the agent CLI binary (§5.14.8). */
+  cliBin?: string;
 };
 
 function aiProfileName(vendorId: string, model: string): string {
@@ -98,6 +100,9 @@ type SettingsState = {
   aiProviderKind: AiProviderKind;
   /** Endpoint base URL. Empty = the provider kind's default. */
   aiBaseUrl: string;
+  /** `cli` backends only: path to the agent CLI binary. Empty =
+   *  resolve the flavor's default name on PATH (§5.14.8). */
+  aiCliBin: string;
   /** Model id. Empty = AI assistant unconfigured (panel shows guide). */
   aiModel: string;
   /** Per-turn output cap. 0 = backend default (4096). */
@@ -151,6 +156,7 @@ type SettingsState = {
   setAiVendorId: (id: string) => void;
   setAiProviderKind: (kind: AiProviderKind) => void;
   setAiBaseUrl: (url: string) => void;
+  setAiCliBin: (path: string) => void;
   setAiModel: (model: string) => void;
   setAiMaxTokens: (n: number) => void;
   setAiAutoContext: (on: boolean) => void;
@@ -215,6 +221,7 @@ type PersistedSettings = Partial<{
   aiVendorId: string;
   aiProviderKind: AiProviderKind;
   aiBaseUrl: string;
+  aiCliBin: string;
   aiModel: string;
   aiMaxTokens: number;
   aiAutoContext: boolean;
@@ -263,6 +270,7 @@ const DEFAULTS = {
   aiVendorId: "openai",
   aiProviderKind: "openai" as AiProviderKind,
   aiBaseUrl: "",
+  aiCliBin: "",
   aiModel: "",
   aiMaxTokens: 0,
   aiAutoContext: true,
@@ -378,6 +386,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     aiVendorId: stored.aiVendorId ?? stored.aiProviderKind ?? DEFAULTS.aiVendorId,
     aiProviderKind: stored.aiProviderKind ?? DEFAULTS.aiProviderKind,
     aiBaseUrl: stored.aiBaseUrl ?? DEFAULTS.aiBaseUrl,
+    aiCliBin: stored.aiCliBin ?? DEFAULTS.aiCliBin,
     aiModel: stored.aiModel ?? DEFAULTS.aiModel,
     aiMaxTokens: stored.aiMaxTokens ?? DEFAULTS.aiMaxTokens,
     aiAutoContext: stored.aiAutoContext ?? DEFAULTS.aiAutoContext,
@@ -400,6 +409,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       baseUrl: initial.aiBaseUrl,
       model: initial.aiModel,
       maxTokens: initial.aiMaxTokens,
+      cliBin: initial.aiCliBin,
     };
     initial.aiProfiles = [migrated];
     initial.aiActiveProfileId = migrated.id;
@@ -439,6 +449,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       aiVendorId: s.aiVendorId,
       aiProviderKind: s.aiProviderKind,
       aiBaseUrl: s.aiBaseUrl,
+      aiCliBin: s.aiCliBin,
       aiModel: s.aiModel,
       aiMaxTokens: s.aiMaxTokens,
       aiAutoContext: s.aiAutoContext,
@@ -454,7 +465,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   /** Mirror edits of the working fields into the active profile so
    *  "edit settings" and "edit the active profile" stay one action.
    *  Renames the profile when the model changes. */
-  const syncActiveAiProfile = (patch: Partial<Pick<AiProfile, "baseUrl" | "model" | "maxTokens">>) => {
+  const syncActiveAiProfile = (
+    patch: Partial<Pick<AiProfile, "baseUrl" | "model" | "maxTokens" | "cliBin">>,
+  ) => {
     const s = get();
     if (!s.aiActiveProfileId) return;
     set({
@@ -587,6 +600,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       syncActiveAiProfile({ baseUrl: trimmed });
       persist();
     },
+    setAiCliBin: (aiCliBin) => {
+      const trimmed = aiCliBin.trim();
+      set({ aiCliBin: trimmed });
+      syncActiveAiProfile({ cliBin: trimmed });
+      persist();
+    },
     setAiModel: (aiModel) => {
       const trimmed = aiModel.trim();
       set({ aiModel: trimmed });
@@ -621,7 +640,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     },
     saveCurrentAsAiProfile: () => {
       const s = get();
-      if (!s.aiModel.trim()) return;
+      // CLI backends may run on the account's default model, so an empty
+      // model is valid for them (§5.14.8); other kinds still require one.
+      if (!s.aiModel.trim() && s.aiProviderKind !== "cli") return;
       // Dedupe: re-saving an identical combo just re-activates it.
       const existing = s.aiProfiles.find(
         (p) => p.vendorId === s.aiVendorId && p.baseUrl === s.aiBaseUrl && p.model === s.aiModel,
@@ -630,7 +651,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         set({
           aiActiveProfileId: existing.id,
           aiProfiles: s.aiProfiles.map((p) =>
-            p.id === existing.id ? { ...p, maxTokens: s.aiMaxTokens, kind: s.aiProviderKind } : p,
+            p.id === existing.id
+              ? { ...p, maxTokens: s.aiMaxTokens, kind: s.aiProviderKind, cliBin: s.aiCliBin }
+              : p,
           ),
         });
         persist();
@@ -638,12 +661,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       }
       const profile: AiProfile = {
         id: crypto.randomUUID(),
-        name: aiProfileName(s.aiVendorId, s.aiModel),
+        name: aiProfileName(s.aiVendorId, s.aiModel || s.aiProviderKind),
         vendorId: s.aiVendorId,
         kind: s.aiProviderKind,
         baseUrl: s.aiBaseUrl,
         model: s.aiModel,
         maxTokens: s.aiMaxTokens,
+        cliBin: s.aiCliBin,
       };
       set({ aiProfiles: [...s.aiProfiles, profile], aiActiveProfileId: profile.id });
       persist();
@@ -657,6 +681,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         aiVendorId: profile.vendorId,
         aiProviderKind: profile.kind,
         aiBaseUrl: profile.baseUrl,
+        aiCliBin: profile.cliBin ?? "",
         aiModel: profile.model,
         aiMaxTokens: profile.maxTokens,
       });

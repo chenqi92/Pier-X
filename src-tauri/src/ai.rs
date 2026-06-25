@@ -32,7 +32,8 @@ use tokio_util::sync::CancellationToken;
 
 use pier_core::services::ai::{
     classify_command, classify_list_path, classify_read_path, classify_write_path, provider,
-    redact, ChatMessage, ProviderConfig, ProviderKind, RiskAssessment, RiskLevel, StopKind,
+    redact, ChatMessage, CliFlavor, ProviderConfig, ProviderKind, RiskAssessment, RiskLevel,
+    StopKind,
     ToolCall, ToolSpec,
 };
 
@@ -116,6 +117,14 @@ pub struct AiProviderSettings {
     /// for pre-vendor-registry configs.
     #[serde(default)]
     pub secret_id: Option<String>,
+    /// `kind == "cli"` only: which agent CLI to drive
+    /// ("claude-code" / "codex"); see PRODUCT-SPEC §5.14.8.
+    #[serde(default)]
+    pub cli_flavor: Option<String>,
+    /// `kind == "cli"` only: absolute path to the CLI binary (from the
+    /// settings picker / detection). Empty → resolve on PATH.
+    #[serde(default)]
+    pub cli_bin: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -192,6 +201,7 @@ fn provider_kind(kind: &str) -> ProviderKind {
     match kind {
         "anthropic" => ProviderKind::Anthropic,
         "ollama" => ProviderKind::Ollama,
+        "cli" => ProviderKind::Cli,
         _ => ProviderKind::Openai,
     }
 }
@@ -202,16 +212,27 @@ fn secret_key(kind: &str) -> String {
 
 fn build_provider_config(settings: &AiProviderSettings) -> ProviderConfig {
     let kind = provider_kind(&settings.kind);
-    let slot = settings.secret_id.as_deref().unwrap_or(&settings.kind);
-    let api_key = pier_core::credentials::get(&secret_key(slot))
-        .ok()
-        .flatten();
+    // CLI backends authenticate via the CLI's own login session — no
+    // keyring slot, no API key (PRODUCT-SPEC §5.14.8).
+    let api_key = if kind == ProviderKind::Cli {
+        None
+    } else {
+        let slot = settings.secret_id.as_deref().unwrap_or(&settings.kind);
+        pier_core::credentials::get(&secret_key(slot)).ok().flatten()
+    };
+    let cli_flavor = settings.cli_flavor.as_deref().and_then(|f| match f {
+        "claude-code" => Some(CliFlavor::ClaudeCode),
+        "codex" => Some(CliFlavor::Codex),
+        _ => None,
+    });
     ProviderConfig {
         kind,
         base_url: settings.base_url.clone(),
         api_key,
         model: settings.model.clone(),
         max_tokens: settings.max_tokens,
+        cli_flavor,
+        cli_bin: settings.cli_bin.clone(),
     }
 }
 

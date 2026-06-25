@@ -2205,6 +2205,7 @@ function AiSettingsPanel() {
   const settings = useSettingsStore();
   const vendorId = settings.aiVendorId;
   const vendor = aiVendorById(vendorId);
+  const isCli = vendor.kind === "cli";
 
   const [keyDraft, setKeyDraft] = useState("");
   const [keySaved, setKeySaved] = useState<boolean | null>(null);
@@ -2250,6 +2251,8 @@ function AiSettingsPanel() {
     model: settings.aiModel,
     maxTokens: settings.aiMaxTokens > 0 ? settings.aiMaxTokens : null,
     secretId: vendorId,
+    cliFlavor: vendor.cliFlavor ?? null,
+    cliBin: settings.aiCliBin || null,
   });
 
   const saveKey = () => {
@@ -2312,42 +2315,60 @@ function AiSettingsPanel() {
           }))}
         />
       </SettingRow>
-      <SettingRow
-        label={t("Base URL")}
-        description={t("Preset default — always editable, so a vendor moving its endpoint never blocks you.")}
-      >
-        <input
-          className="settings__input"
-          value={settings.aiBaseUrl}
-          onChange={(e) => settings.setAiBaseUrl(e.currentTarget.value)}
-          placeholder={vendor.baseUrl || "https://…/v1"}
-          style={{ fontFamily: "var(--mono)" }}
-        />
-      </SettingRow>
-      <SettingRow
-        label={t("API key")}
-        description={
-          keySaved
-            ? t("Stored in the OS keyring. Enter a new value to replace, or save empty to remove.")
-            : vendor.needsKey
-              ? t("Stored in the OS keyring (never in config files). Each vendor keeps its own slot.")
-              : t("This endpoint usually needs no key — leave empty.")
-        }
-      >
-        <div style={{ display: "flex", gap: "var(--sp-2)" }}>
+      {isCli && (
+        <SettingRow
+          label={t("CLI binary")}
+          description={t("Drives your installed, logged-in CLI as the backend — no API key, it reuses your own subscription login. Leave blank to find it on PATH. Runs tool-less (M1): it answers and suggests commands; Pier-X keeps its own gated tools.")}
+        >
           <input
             className="settings__input"
-            type="password"
-            value={keyDraft}
-            onChange={(e) => setKeyDraft(e.currentTarget.value)}
-            placeholder={keySaved ? "••••••••" : (vendor.keyHint ?? t("(not set)"))}
-            autoComplete="off"
+            value={settings.aiCliBin}
+            onChange={(e) => settings.setAiCliBin(e.currentTarget.value)}
+            placeholder={vendor.cliFlavor === "codex" ? "codex (or full path)" : "claude (or full path)"}
+            style={{ fontFamily: "var(--mono)" }}
           />
-          <button type="button" className="btn is-compact" onClick={saveKey}>
-            {t("Save")}
-          </button>
-        </div>
-      </SettingRow>
+        </SettingRow>
+      )}
+      {!isCli && (
+        <SettingRow
+          label={t("Base URL")}
+          description={t("Preset default — always editable, so a vendor moving its endpoint never blocks you.")}
+        >
+          <input
+            className="settings__input"
+            value={settings.aiBaseUrl}
+            onChange={(e) => settings.setAiBaseUrl(e.currentTarget.value)}
+            placeholder={vendor.baseUrl || "https://…/v1"}
+            style={{ fontFamily: "var(--mono)" }}
+          />
+        </SettingRow>
+      )}
+      {!isCli && (
+        <SettingRow
+          label={t("API key")}
+          description={
+            keySaved
+              ? t("Stored in the OS keyring. Enter a new value to replace, or save empty to remove.")
+              : vendor.needsKey
+                ? t("Stored in the OS keyring (never in config files). Each vendor keeps its own slot.")
+                : t("This endpoint usually needs no key — leave empty.")
+          }
+        >
+          <div style={{ display: "flex", gap: "var(--sp-2)" }}>
+            <input
+              className="settings__input"
+              type="password"
+              value={keyDraft}
+              onChange={(e) => setKeyDraft(e.currentTarget.value)}
+              placeholder={keySaved ? "••••••••" : (vendor.keyHint ?? t("(not set)"))}
+              autoComplete="off"
+            />
+            <button type="button" className="btn is-compact" onClick={saveKey}>
+              {t("Save")}
+            </button>
+          </div>
+        </SettingRow>
+      )}
       <SettingRow
         label={t("Model")}
         description={
@@ -2386,15 +2407,17 @@ function AiSettingsPanel() {
         label={t("Connection test")}
         description={
           testState ??
-          t("Sends a 1-token chat through the configured endpoint — verifies the URL, key and model id over the same path the panel uses.")
+          (isCli
+            ? t("Runs the CLI's --version to confirm it's installed and on PATH.")
+            : t("Sends a 1-token chat through the configured endpoint — verifies the URL, key and model id over the same path the panel uses."))
         }
       >
         <button
           type="button"
           className="btn is-compact"
           onClick={testConnection}
-          disabled={testing || !settings.aiModel.trim()}
-          title={!settings.aiModel.trim() ? t("Set a model id first") : undefined}
+          disabled={testing || (!isCli && !settings.aiModel.trim())}
+          title={!isCli && !settings.aiModel.trim() ? t("Set a model id first") : undefined}
         >
           {testing ? t("Testing…") : t("Test connection")}
         </button>
@@ -2410,7 +2433,7 @@ function AiSettingsPanel() {
             type="button"
             className="btn is-compact"
             onClick={settings.saveCurrentAsAiProfile}
-            disabled={!settings.aiModel.trim()}
+            disabled={!isCli && !settings.aiModel.trim()}
           >
             {t("Save current as configuration")}
           </button>

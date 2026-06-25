@@ -84,6 +84,9 @@ pub fn stream_chat(
             ProviderKind::Openai | ProviderKind::Ollama => {
                 stream_openai(&cfg, &system, &messages, &tools, &mut send, &worker_cancel)
             }
+            ProviderKind::Cli => {
+                super::cli::stream_cli(&cfg, &system, &messages, &tools, &mut send, &worker_cancel)
+            }
         };
         // The receiver is gone after a cancel — that's fine.
         let _ = tx.send(Ev::Done(Box::new(result)));
@@ -117,6 +120,9 @@ pub fn list_models(cfg: &ProviderConfig) -> Result<Vec<String>, AiError> {
     let url = match cfg.kind {
         ProviderKind::Anthropic => format!("{base}/v1/models"),
         ProviderKind::Openai | ProviderKind::Ollama => format!("{base}/models"),
+        // CLI backends have no /models endpoint — return the flavor's
+        // known model aliases (the settings UI also allows free-text).
+        ProviderKind::Cli => return Ok(super::cli::known_models(cfg)),
     };
     let mut req = agent().get(&url);
     match cfg.kind {
@@ -129,6 +135,8 @@ pub fn list_models(cfg: &ProviderConfig) -> Result<Vec<String>, AiError> {
                 req = req.set("authorization", &format!("Bearer {key}"));
             }
         }
+        // Unreachable: the CLI arm above returns before we get here.
+        ProviderKind::Cli => {}
     }
     let resp = req.call().map_err(map_ureq_error)?;
     let body: Value = resp
@@ -166,6 +174,11 @@ pub fn list_models(cfg: &ProviderConfig) -> Result<Vec<String>, AiError> {
 /// — it can succeed while `POST /chat/completions` is unreachable
 /// (regional blocks, partial proxies) or rejects the model id.
 pub fn test_connection(cfg: &ProviderConfig) -> Result<String, AiError> {
+    // CLI backends probe via `<bin> --version`, not an HTTP round-trip,
+    // and tolerate an empty model (the CLI picks its account default).
+    if let ProviderKind::Cli = cfg.kind {
+        return super::cli::test_connection(cfg);
+    }
     if cfg.model.trim().is_empty() {
         return Err(AiError::Protocol("no model configured".into()));
     }
@@ -201,6 +214,8 @@ pub fn test_connection(cfg: &ProviderConfig) -> Result<String, AiError> {
             }
             req.send_string(&body.to_string()).map_err(map_ureq_error)?;
         }
+        // Unreachable: the CLI arm above returns before we get here.
+        ProviderKind::Cli => {}
     }
     let ms = started.elapsed().as_millis();
     Ok(format!("ok · {} · {ms} ms", cfg.model))
@@ -665,6 +680,8 @@ mod tests {
             api_key: None,
             model: "m".into(),
             max_tokens: None,
+            cli_flavor: None,
+            cli_bin: None,
         };
         assert_eq!(mk(ProviderKind::Anthropic).effective_base_url(), "https://api.anthropic.com");
         assert_eq!(mk(ProviderKind::Openai).effective_base_url(), "https://api.openai.com/v1");

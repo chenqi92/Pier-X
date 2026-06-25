@@ -137,6 +137,22 @@ pub enum ProviderKind {
     /// Local Ollama. Speaks the OpenAI-compatible protocol against
     /// `http://localhost:11434/v1` by default; no API key.
     Ollama,
+    /// Local agent CLI driven as a subprocess (PRODUCT-SPEC §5.14.8):
+    /// reuses the user's logged-in CLI (Claude Code / Codex) — no API
+    /// key. Run tool-less (M1 model-backend mode); its stdout JSON
+    /// stream is adapted into a [`TurnOutcome`].
+    Cli,
+}
+
+/// Which agent CLI a [`ProviderKind::Cli`] config drives. Selects the
+/// argv template and the stdout-event parser (PRODUCT-SPEC §5.14.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CliFlavor {
+    /// Anthropic Claude Code (`claude -p --output-format stream-json`).
+    ClaudeCode,
+    /// OpenAI Codex (`codex exec --json`).
+    Codex,
 }
 
 /// Resolved provider settings for one chat turn.
@@ -160,6 +176,14 @@ pub struct ProviderConfig {
     /// explicit value; OpenAI-compatible endpoints accept it too).
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// `ProviderKind::Cli` only: which agent CLI to drive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_flavor: Option<CliFlavor>,
+    /// `ProviderKind::Cli` only: absolute path to the CLI binary (from
+    /// detection / the settings picker). Empty → resolve the flavor's
+    /// default name on PATH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_bin: Option<String>,
 }
 
 impl ProviderConfig {
@@ -174,6 +198,8 @@ impl ProviderConfig {
             ProviderKind::Anthropic => "https://api.anthropic.com".into(),
             ProviderKind::Openai => "https://api.openai.com/v1".into(),
             ProviderKind::Ollama => "http://localhost:11434/v1".into(),
+            // CLI backends are subprocess, not HTTP — no base URL.
+            ProviderKind::Cli => String::new(),
         }
     }
 

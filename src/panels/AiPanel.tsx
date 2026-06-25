@@ -32,6 +32,7 @@ import {
   type AiUiMessage,
 } from "../stores/useAiStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { aiVendorById } from "../lib/aiVendors";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
 import { useI18n } from "../i18n/useI18n";
@@ -218,7 +219,8 @@ export default function AiPanel({ tab, isActive }: Props) {
     }
   };
 
-  const configured = settings.aiModel.trim().length > 0;
+  const configured =
+    settings.aiModel.trim().length > 0 || settings.aiProviderKind === "cli";
   const messages = conv?.messages ?? [];
   const running = conv?.running ?? false;
 
@@ -289,6 +291,8 @@ export default function AiPanel({ tab, isActive }: Props) {
         model: settings.aiModel,
         maxTokens: settings.aiMaxTokens > 0 ? settings.aiMaxTokens : null,
         secretId: settings.aiVendorId,
+        cliFlavor: aiVendorById(settings.aiVendorId).cliFlavor ?? null,
+        cliBin: settings.aiCliBin || null,
       },
       userText: text,
       context,

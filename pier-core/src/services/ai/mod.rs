@@ -21,6 +21,7 @@
 //! crate the webhook fan-out already uses) so this module adds
 //! zero new heavyweight dependencies.
 
+pub mod cli;
 pub mod provider;
 pub mod redact;
 pub mod risk;

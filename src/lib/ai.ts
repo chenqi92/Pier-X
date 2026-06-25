@@ -6,7 +6,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-export type AiProviderKind = "anthropic" | "openai" | "ollama";
+export type AiProviderKind = "anthropic" | "openai" | "ollama" | "cli";
 
 export type AiRiskLevel = "l0" | "l1" | "l2" | "l3";
 
@@ -24,6 +24,12 @@ export type AiProviderSettings = {
   /** Vendor preset id — selects the keyring slot `pier-x.ai.<id>`
    *  so each vendor keeps its own API key. */
   secretId?: string | null;
+  /** `kind === "cli"` only: which agent CLI to drive
+   *  ("claude-code" / "codex"); see PRODUCT-SPEC §5.14.8. */
+  cliFlavor?: string | null;
+  /** `kind === "cli"` only: path to the CLI binary. Empty = resolve
+   *  on PATH. No API key — the CLI uses its own login. */
+  cliBin?: string | null;
 };
 
 export type AiSshCoords = {

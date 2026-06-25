@@ -2369,7 +2369,9 @@ function AiSettingsPanel() {
           description={
             settings.aiCliMode === "m2a"
               ? t("Native agent: the CLI runs its OWN tools on THIS machine and self-governs — Pier-X's per-action approval does NOT apply. Local tabs only (not over SSH). Opt-in.")
-              : t("Model backend (recommended): the CLI only answers; Pier-X keeps its own per-action approval for execution.")
+              : settings.aiCliMode === "m2b"
+                ? t("Gated agent: the CLI runs its own tools on THIS machine, but Pier-X approves each one (L0–L3 cards, red-line blocks). Local tabs only (not over SSH). Opt-in.")
+                : t("Model backend (recommended): the CLI only answers; Pier-X keeps its own per-action approval for execution.")
           }
         >
           <Select
@@ -2379,6 +2381,7 @@ function AiSettingsPanel() {
             items={[
               { value: "m1", label: t("Model backend (gated)") },
               { value: "m2a", label: t("Native agent (local, self-governs)") },
+              { value: "m2b", label: t("Gated agent (local, Pier-X approves)") },
             ]}
           />
         </SettingRow>

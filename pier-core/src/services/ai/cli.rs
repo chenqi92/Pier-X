@@ -89,11 +89,13 @@ fn clip(s: &str, max: usize) -> String {
     }
 }
 
-/// Argv for one turn. `native` = M2a (CLI runs its own tools); else M1
-/// (tool-less text completion).
-fn build_args(flavor: CliFlavor, cfg: &ProviderConfig, native: bool) -> Vec<String> {
+/// Argv for one turn, by `cfg.cli_mode`: M1 tool-less text, M2a native
+/// agent (CLI self-governs), M2b gated agent (permission/MCP flags come
+/// from `cfg.cli_extra_args`). Extra args are appended verbatim.
+fn build_args(flavor: CliFlavor, cfg: &ProviderConfig) -> Vec<String> {
     let model = cfg.model.trim();
-    match flavor {
+    let mode = cfg.cli_mode;
+    let mut a = match flavor {
         CliFlavor::ClaudeCode => {
             let mut a = vec![
                 "-p".to_string(),
@@ -102,16 +104,23 @@ fn build_args(flavor: CliFlavor, cfg: &ProviderConfig, native: bool) -> Vec<Stri
                 "--verbose".to_string(),
                 "--no-session-persistence".to_string(),
             ];
-            if native {
-                // M2a: let Claude run its OWN tools, auto-accepting edits;
-                // Claude's permission model governs (§5.14.8).
-                a.push("--permission-mode".to_string());
-                a.push("acceptEdits".to_string());
-            } else {
-                // M1: `--tools ""` disables ALL native tools => pure text
-                // (verified 2026-06-25: the init event reports `tools:[]`).
-                a.push("--tools".to_string());
-                a.push(String::new());
+            match mode {
+                CliMode::ModelBackend => {
+                    // `--tools ""` disables ALL native tools => pure text
+                    // (verified 2026-06-25: init event reports `tools:[]`).
+                    a.push("--tools".to_string());
+                    a.push(String::new());
+                }
+                CliMode::NativeAgent => {
+                    // M2a: Claude runs its OWN tools, auto-accepting edits;
+                    // Claude's own permission model governs.
+                    a.push("--permission-mode".to_string());
+                    a.push("acceptEdits".to_string());
+                }
+                CliMode::GatedAgent => {
+                    // M2b: --permission-mode default + the MCP gate flags
+                    // are supplied via cli_extra_args by the shell layer.
+                }
             }
             if !model.is_empty() {
                 a.push("--model".to_string());
@@ -122,16 +131,15 @@ fn build_args(flavor: CliFlavor, cfg: &ProviderConfig, native: bool) -> Vec<Stri
         CliFlavor::Codex => {
             // NOTE: codex `exec --json` event schema is NOT verified on a
             // live run (CLI version drift blocked it, see §5.14.8); the
-            // parser below is best-effort. The prompt is read from stdin
-            // (`-`).
+            // parser below is best-effort. Prompt read from stdin (`-`).
+            // Codex has no MCP permission tool wired here, so M2b ~ M2a.
             let mut a = vec!["exec".to_string(), "--json".to_string(), "--sandbox".to_string()];
-            if native {
-                // M2a: Codex's workspace-write sandbox governs writes.
+            if mode == CliMode::ModelBackend {
+                a.push("read-only".to_string());
+            } else {
                 a.push("workspace-write".to_string());
                 a.push("--ask-for-approval".to_string());
                 a.push("never".to_string());
-            } else {
-                a.push("read-only".to_string());
             }
             a.push("--skip-git-repo-check".to_string());
             a.push("--color".to_string());
@@ -143,7 +151,9 @@ fn build_args(flavor: CliFlavor, cfg: &ProviderConfig, native: bool) -> Vec<Stri
             a.push("-".to_string());
             a
         }
-    }
+    };
+    a.extend(cfg.cli_extra_args.iter().cloned());
+    a
 }
 
 /// Flatten system + history into one prompt string fed on stdin.
@@ -370,12 +380,12 @@ pub fn stream_cli(
     // M1 keeps Pier-X's own risk-gated tools, so `_tools` is not
     // forwarded; M2a lets the CLI use its own tools (rendered read-only).
     let flavor = flavor_of(cfg);
-    let native = cfg.cli_mode == CliMode::NativeAgent;
+    let native = cfg.cli_mode != CliMode::ModelBackend;
     let bin = resolve_bin(cfg);
     let prompt = compose_prompt(system, messages);
 
     let mut cmd = cli_command(&bin);
-    cmd.args(build_args(flavor, cfg, native));
+    cmd.args(build_args(flavor, cfg));
     if native {
         if let Some(dir) = cfg
             .cli_cwd
@@ -732,6 +742,7 @@ mod tests {
             cli_bin: None,
             cli_mode: mode,
             cli_cwd: None,
+            cli_extra_args: Vec::new(),
         }
     }
 
@@ -802,16 +813,25 @@ mod tests {
     }
 
     #[test]
-    fn m1_args_disable_tools_m2a_does_not() {
-        let m1 = build_args(CliFlavor::ClaudeCode, &cli_cfg(CliFlavor::ClaudeCode, CliMode::ModelBackend), false);
+    fn m1_tools_off_m2a_accept_m2b_extra_args() {
+        let m1 = build_args(CliFlavor::ClaudeCode, &cli_cfg(CliFlavor::ClaudeCode, CliMode::ModelBackend));
         let i = m1.iter().position(|a| a == "--tools").expect("M1 has --tools");
         assert_eq!(m1[i + 1], "");
         assert!(m1.iter().any(|a| a == "stream-json"));
         assert!(m1.windows(2).any(|w| w[0] == "--model" && w[1] == "sonnet"));
 
-        let m2a = build_args(CliFlavor::ClaudeCode, &cli_cfg(CliFlavor::ClaudeCode, CliMode::NativeAgent), true);
+        let m2a = build_args(CliFlavor::ClaudeCode, &cli_cfg(CliFlavor::ClaudeCode, CliMode::NativeAgent));
         assert!(!m2a.iter().any(|a| a == "--tools"));
         assert!(m2a.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "acceptEdits"));
+
+        // M2b: no acceptEdits/--tools; extra args (set by the shell layer)
+        // are appended verbatim.
+        let mut cfg = cli_cfg(CliFlavor::ClaudeCode, CliMode::GatedAgent);
+        cfg.cli_extra_args = vec!["--permission-prompt-tool".into(), "mcp__pierx__approve".into()];
+        let m2b = build_args(CliFlavor::ClaudeCode, &cfg);
+        assert!(!m2b.iter().any(|a| a == "--tools"));
+        assert!(!m2b.iter().any(|a| a == "acceptEdits"));
+        assert!(m2b.windows(2).any(|w| w[0] == "--permission-prompt-tool" && w[1] == "mcp__pierx__approve"));
     }
 
     #[test]

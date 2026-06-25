@@ -19773,6 +19773,11 @@ pub fn run() {
                 pending: Mutex::new(HashMap::new()),
             }));
 
+            // Start the in-process MCP permission server for the AI
+            // assistant's M2b "gated agent" CLI mode (§5.14.8). Idempotent;
+            // failure is non-fatal (M2b turns then report it).
+            ai::start_mcp_server(app.handle().clone());
+
             // Install the shared file logger before we do anything else —
             // the rest of this hook (and every subsequent command) can
             // then emit events that survive a crash. Truncates the file

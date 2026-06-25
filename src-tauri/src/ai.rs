@@ -231,6 +231,7 @@ fn build_provider_config(settings: &AiProviderSettings) -> ProviderConfig {
     });
     let cli_mode = match settings.cli_mode.as_deref() {
         Some("m2a") | Some("native-agent") => CliMode::NativeAgent,
+        Some("m2b") | Some("gated-agent") => CliMode::GatedAgent,
         _ => CliMode::ModelBackend,
     };
     ProviderConfig {
@@ -242,8 +243,10 @@ fn build_provider_config(settings: &AiProviderSettings) -> ProviderConfig {
         cli_flavor,
         cli_bin: settings.cli_bin.clone(),
         cli_mode,
-        // Set from the request context (the tab's local cwd) in ai_chat_send.
+        // Both filled from the request in ai_chat_send: cwd from context,
+        // extra args = M2b MCP gate flags.
         cli_cwd: None,
+        cli_extra_args: Vec::new(),
     }
 }
 
@@ -473,6 +476,260 @@ pub async fn ai_cli_detect(
     .map_err(|e| format!("ai_cli_detect join: {e}"))
 }
 
+// ── M2b gated-agent MCP permission server (§5.14.8) ────────────────
+// Claude (run with `--permission-mode default --permission-prompt-tool
+// mcp__pierx__approve`) calls our local-HTTP MCP `approve` tool before
+// EVERY tool use. We classify (L0–L3) and reuse the SAME approval-card
+// flow as the built-in tools, then answer allow/deny. Local tab only —
+// Claude's tools run on this machine, so M2b is refused over SSH.
+
+static MCP_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+
+fn mcp_port() -> Option<u16> {
+    MCP_PORT.get().copied()
+}
+
+/// Start the in-process MCP permission server (called once at app setup).
+pub fn start_mcp_server(app: AppHandle) {
+    if MCP_PORT.get().is_some() {
+        return;
+    }
+    let server = match tiny_http::Server::http("127.0.0.1:0") {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("pier-x: MCP permission server failed to start: {e}");
+            return;
+        }
+    };
+    let port = match server.server_addr().to_ip() {
+        Some(a) => a.port(),
+        None => return,
+    };
+    let _ = MCP_PORT.set(port);
+    std::thread::spawn(move || loop {
+        match server.recv() {
+            Ok(request) => {
+                let app = app.clone();
+                std::thread::spawn(move || mcp_handle(app, request));
+            }
+            Err(_) => break,
+        }
+    });
+}
+
+fn mcp_respond_json(request: tiny_http::Request, v: &Value) {
+    let body = v.to_string();
+    let header =
+        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
+    let _ = request.respond(tiny_http::Response::from_string(body).with_header(header));
+}
+
+fn mcp_handle(app: AppHandle, mut request: tiny_http::Request) {
+    if request.method() != &tiny_http::Method::Post {
+        let _ = request.respond(tiny_http::Response::empty(405));
+        return;
+    }
+    // URL is /mcp/<conversation-id>.
+    let conv_id = request
+        .url()
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    let mut body = String::new();
+    if request.as_reader().read_to_string(&mut body).is_err() {
+        let _ = request.respond(tiny_http::Response::empty(400));
+        return;
+    }
+    let msg: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            let _ = request.respond(tiny_http::Response::empty(400));
+            return;
+        }
+    };
+    let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+    let id = msg.get("id").cloned();
+    // Notifications carry no id and expect no response body.
+    if id.is_none() {
+        let _ = request.respond(tiny_http::Response::empty(202));
+        return;
+    }
+    let result: Value = match method {
+        "initialize" => json!({
+            "protocolVersion": msg.pointer("/params/protocolVersion").and_then(Value::as_str).unwrap_or("2025-06-18"),
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": "pierx", "version": "0.1.0" }
+        }),
+        "tools/list" => json!({
+            "tools": [ {
+                "name": "approve",
+                "description": "Pier-X risk-gated approval for a tool use. Returns {behavior: allow|deny}.",
+                "inputSchema": { "type": "object", "properties": { "tool_name": { "type": "string" }, "input": { "type": "object" } }, "additionalProperties": true }
+            } ]
+        }),
+        "tools/call" => {
+            let name = msg.pointer("/params/name").and_then(Value::as_str).unwrap_or("");
+            let decision = if name == "approve" {
+                let args = msg.pointer("/params/arguments").cloned().unwrap_or_else(|| json!({}));
+                let tool_name = args.get("tool_name").and_then(Value::as_str).unwrap_or("");
+                let input = args.get("input").cloned().unwrap_or_else(|| json!({}));
+                let tool_use_id = args.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
+                let runtime = app.state::<AiRuntime>();
+                let (allow, message) =
+                    mcp_approve_decision(&app, runtime.inner(), &conv_id, tool_name, &input, tool_use_id);
+                if allow {
+                    json!({ "behavior": "allow" })
+                } else {
+                    json!({ "behavior": "deny", "message": message })
+                }
+            } else {
+                json!({ "behavior": "deny", "message": "unknown tool" })
+            };
+            json!({ "content": [ { "type": "text", "text": decision.to_string() } ] })
+        }
+        _ => {
+            mcp_respond_json(
+                request,
+                &json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "method not found" } }),
+            );
+            return;
+        }
+    };
+    mcp_respond_json(request, &json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+}
+
+/// Map a Claude tool name + input to a Pier-X risk assessment.
+fn classify_claude_tool(tool_name: &str, input: &Value) -> (String, String, RiskAssessment) {
+    match tool_name {
+        "Bash" | "PowerShell" => {
+            let cmd = input.get("command").and_then(Value::as_str).unwrap_or("").to_string();
+            let risk = classify_command(&cmd);
+            (format!("{tool_name}: {cmd}"), cmd, risk)
+        }
+        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => {
+            let path = input
+                .get("file_path")
+                .or_else(|| input.get("notebook_path"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let risk = classify_write_path(&path);
+            (format!("{tool_name} {path}"), format!("{tool_name} {path}"), risk)
+        }
+        "Read" | "Glob" | "Grep" | "LS" | "WebFetch" | "WebSearch" | "TodoWrite" | "NotebookRead" => {
+            (tool_name.to_string(), tool_name.to_string(), RiskAssessment::new(RiskLevel::L0))
+        }
+        other => {
+            // Unknown (incl. Task, which can spawn sub-agents) -> fail-closed L2.
+            (other.to_string(), other.to_string(), RiskAssessment::new(RiskLevel::L2))
+        }
+    }
+}
+
+/// Classify + (auto-run / approval-card) a Claude tool use, reusing the
+/// same conv.pending + ai_tool_decision flow as the built-in tools.
+/// Returns (allow, message). Executes nothing — Claude runs the tool.
+fn mcp_approve_decision(
+    app: &AppHandle,
+    runtime: &AiRuntime,
+    conversation_id: &str,
+    tool_name: &str,
+    input: &Value,
+    tool_use_id: &str,
+) -> (bool, String) {
+    let conv = runtime.conv(conversation_id);
+    let target_host = "local"; // M2b-local: Claude runs on the local machine.
+    let (summary, command_text, risk) = classify_claude_tool(tool_name, input);
+    let call_id = if tool_use_id.is_empty() {
+        format!("mcp-{tool_name}")
+    } else {
+        tool_use_id.to_string()
+    };
+
+    let base_payload = json!({
+        "callId": call_id,
+        "name": tool_name,
+        "summary": summary,
+        "host": target_host,
+        "risk": risk,
+    });
+
+    // L3: never runs through the AI channel.
+    if risk.level == RiskLevel::L3 {
+        let mut p = base_payload.clone();
+        p["status"] = json!("blocked");
+        emit_event(app, conversation_id, "toolCall", p);
+        return (
+            false,
+            format!("BLOCKED by Pier-X red-line policy ({})", risk.reasons.join("; ")),
+        );
+    }
+
+    // Auto-run: L0, or L1 with a session grant / persisted allowlist hit.
+    let auto_reason: Option<&str> = match risk.level {
+        RiskLevel::L0 => Some("auto"),
+        RiskLevel::L1 => {
+            let session_hit = conv.session_allows.lock().unwrap().iter().any(|(h, p)| {
+                h == target_host && !p.is_empty() && command_text.trim_start().starts_with(p.as_str())
+            });
+            if session_hit {
+                Some("session")
+            } else if !command_text.is_empty() && whitelist_matches(target_host, &command_text) {
+                Some("whitelisted")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    if let Some(reason) = auto_reason {
+        let mut p = base_payload.clone();
+        p["status"] = json!("running");
+        p["auto"] = json!(reason);
+        emit_event(app, conversation_id, "toolCall", p);
+        return (true, reason.to_string());
+    }
+
+    // Park and wait for the human decision (same channel as built-ins).
+    let (tx, rx) = sync_channel::<DecisionMsg>(1);
+    conv.pending.lock().unwrap().insert(
+        call_id.clone(),
+        PendingTool {
+            tx,
+            host: target_host.to_string(),
+            command: command_text.clone(),
+            level: risk.level,
+        },
+    );
+    let mut p = base_payload.clone();
+    p["status"] = json!("awaiting");
+    p["alwaysPrefix"] = json!(command_prefix(&command_text));
+    emit_event(app, conversation_id, "toolCall", p);
+
+    let msg = rx.recv_timeout(DECISION_TIMEOUT).unwrap_or(DecisionMsg {
+        decision: Decision::Deny,
+        deny_reason: Some("approval timed out".into()),
+    });
+    conv.pending.lock().unwrap().remove(&call_id);
+
+    match msg.decision {
+        Decision::Deny => (
+            false,
+            msg.deny_reason.unwrap_or_else(|| "denied by user".into()),
+        ),
+        _ => {
+            let mut p = base_payload.clone();
+            p["status"] = json!("running");
+            emit_event(app, conversation_id, "toolCall", p);
+            (true, "allowed".into())
+        }
+    }
+}
+
 #[tauri::command]
 pub fn ai_whitelist_list() -> Vec<AiWhitelistEntry> {
     whitelist_load()
@@ -663,8 +920,43 @@ pub fn ai_chat_send(
 
         let context = req.context.clone().unwrap_or_default();
         let mut cfg = build_provider_config(&req.provider);
-        // M2a runs the CLI in the tab's local working directory.
+        // M2a / M2b run the CLI in the tab's local working directory.
         cfg.cli_cwd = context.cwd.clone();
+        // M2b gated agent: wire Claude to ask our in-proc MCP `approve`
+        // tool before every tool use (§5.14.8). Each approval rides the
+        // existing L0–L3 classifier + approval-card flow.
+        if cfg.kind == ProviderKind::Cli && cfg.cli_mode == CliMode::GatedAgent {
+            match mcp_port() {
+                Some(port) => {
+                    let url = format!("http://127.0.0.1:{port}/mcp/{conversation_id}");
+                    let mcp_json =
+                        json!({ "mcpServers": { "pierx": { "type": "http", "url": url } } });
+                    let path = std::env::temp_dir().join(format!("pierx-mcp-{conversation_id}.json"));
+                    if fs::write(&path, mcp_json.to_string()).is_ok() {
+                        cfg.cli_extra_args = vec![
+                            "--permission-mode".into(),
+                            "default".into(),
+                            "--mcp-config".into(),
+                            path.to_string_lossy().to_string(),
+                            "--strict-mcp-config".into(),
+                            "--permission-prompt-tool".into(),
+                            "mcp__pierx__approve".into(),
+                        ];
+                    }
+                }
+                None => {
+                    emit_event(
+                        &app,
+                        &conversation_id,
+                        "failed",
+                        json!({ "message": "M2b 门控代理需要本地 MCP 审批服务，但它未启动。请重启应用，或在设置里改用其它 CLI 模式。" }),
+                    );
+                    conv_for_thread.running.store(false, Ordering::SeqCst);
+                    *conv_for_thread.cancel.lock().unwrap() = None;
+                    return;
+                }
+            }
+        }
 
         run_turn(
             app,
@@ -700,13 +992,16 @@ fn run_turn(
     // M2a native-agent runs a LOCAL subprocess; it cannot operate a
     // remote SSH host (§5.14.8). Refuse rather than silently run the CLI
     // against the wrong machine.
-    if cfg.kind == ProviderKind::Cli && cfg.cli_mode == CliMode::NativeAgent && ssh.is_some() {
+    if cfg.kind == ProviderKind::Cli
+        && matches!(cfg.cli_mode, CliMode::NativeAgent | CliMode::GatedAgent)
+        && ssh.is_some()
+    {
         emit_event(
             &app,
             &conversation_id,
             "failed",
             json!({
-                "message": "本地 CLI 原生自治模式（M2a）仅支持本地 tab：本地子进程无法操作远端 SSH 主机。请切到本地 tab，或在设置里改用 M1 模型后端模式。"
+                "message": "本地 CLI 自治 / 门控模式（M2a / M2b）仅支持本地 tab：本地子进程无法操作远端 SSH 主机。请切到本地 tab，或在设置里改用 M1 模型后端模式。"
             }),
         );
         return;

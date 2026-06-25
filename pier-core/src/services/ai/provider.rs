@@ -684,6 +684,7 @@ mod tests {
             cli_bin: None,
             cli_mode: crate::services::ai::types::CliMode::ModelBackend,
             cli_cwd: None,
+            cli_extra_args: Vec::new(),
         };
         assert_eq!(mk(ProviderKind::Anthropic).effective_base_url(), "https://api.anthropic.com");
         assert_eq!(mk(ProviderKind::Openai).effective_base_url(), "https://api.openai.com/v1");

@@ -49,6 +49,11 @@ tokio-util = { version = "0.7", default-features = false }
 # worker threads forever.
 tokio = { version = "1", features = ["sync", "time", "net", "io-util"] }
 tokio-tungstenite = "0.29"
+# In-process MCP permission server for the AI assistant's "gated agent"
+# (M2b) CLI mode: Claude calls our local-HTTP `approve` tool before every
+# tool use and we answer allow/deny through the existing L0–L3 approval
+# flow (PRODUCT-SPEC §5.14.8). Small, sync, std-only HTTP server.
+tiny_http = "0.12"
 pier-core = { path = "../pier-core" }
 
 [features]

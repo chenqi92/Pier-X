@@ -166,6 +166,10 @@ pub enum CliMode {
     /// Pier-X renders the transcript read-only and does NOT gate. Opt-in,
     /// local tab only.
     NativeAgent,
+    /// M2b: the CLI runs its own tools locally, but each one is gated
+    /// through Pier-X's L0–L3 classifier + approval cards via an MCP
+    /// permission tool. Opt-in, local tab only.
+    GatedAgent,
 }
 
 /// Resolved provider settings for one chat turn.
@@ -201,10 +205,15 @@ pub struct ProviderConfig {
     /// native-agent (PRODUCT-SPEC §5.14.8).
     #[serde(default)]
     pub cli_mode: CliMode,
-    /// `ProviderKind::Cli` M2a only: working directory the CLI runs in
-    /// (the tab's local cwd). Empty → the process default.
+    /// `ProviderKind::Cli` M2a/M2b only: working directory the CLI runs
+    /// in (the tab's local cwd). Empty → the process default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cli_cwd: Option<String>,
+    /// `ProviderKind::Cli` only: extra argv appended verbatim. M2b uses
+    /// it for the `--mcp-config` / `--permission-prompt-tool` flags built
+    /// by the shell layer. Empty for M1 / M2a.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cli_extra_args: Vec<String>,
 }
 
 impl ProviderConfig {

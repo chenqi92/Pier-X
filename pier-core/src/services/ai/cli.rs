@@ -2,12 +2,21 @@
 //!
 //! Drives the user's already-installed, already-logged-in agent CLI
 //! (Claude Code / Codex) as a subprocess, reusing their subscription
-//! login — no API key, no proxy. This is the **M1 "model backend"**
-//! mode: the CLI runs with its OWN tools DISABLED and only produces
-//! text, so Pier-X's risk-gated tool loop (`src-tauri/src/ai.rs`) is
-//! untouched. The CLI's stdout JSON stream is adapted into a
-//! [`TurnOutcome`], matching the shape `stream_chat` expects from the
-//! HTTP providers.
+//! login — no API key, no proxy. Two modes:
+//!
+//!   * **M1 model backend** ([`CliMode::ModelBackend`], default): the
+//!     CLI runs with its OWN tools DISABLED and only produces text, so
+//!     Pier-X's risk-gated tool loop (`src-tauri/src/ai.rs`) is
+//!     untouched. Maps to "ask / explain / suggest, insert-don't-run".
+//!   * **M2a native agent** ([`CliMode::NativeAgent`]): the CLI runs
+//!     its OWN loop + tools in the tab's LOCAL working dir and
+//!     self-governs (its own sandbox / permission model). Pier-X
+//!     renders the transcript read-only and executes nothing. Opt-in,
+//!     local tab only (the SSH refusal lives in `ai.rs`).
+//!
+//! Either way the CLI's stdout JSON stream is adapted into a
+//! [`TurnOutcome`] with EMPTY tool_calls, so `run_turn` never tries to
+//! execute anything itself.
 //!
 //! Cancellation: a watcher thread kills the child when the
 //! `CancellationToken` fires — abandoning the worker is not enough, the
@@ -23,7 +32,8 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use super::types::{
-    AiError, ChatMessage, ChatRole, CliFlavor, ProviderConfig, StopKind, ToolSpec, TurnOutcome,
+    AiError, ChatMessage, ChatRole, CliFlavor, CliMode, ProviderConfig, StopKind, ToolSpec,
+    TurnOutcome,
 };
 
 fn flavor_of(cfg: &ProviderConfig) -> CliFlavor {
@@ -46,23 +56,41 @@ fn resolve_bin(cfg: &ProviderConfig) -> String {
         .unwrap_or_else(|| default_bin(flavor_of(cfg)).to_string())
 }
 
-/// Argv for a single tool-less completion turn (M1).
-fn build_args(flavor: CliFlavor, cfg: &ProviderConfig) -> Vec<String> {
+/// Truncate to `max` chars (char-safe — JSON args may be multibyte).
+fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// Argv for one turn. `native` = M2a (CLI runs its own tools); else M1
+/// (tool-less text completion).
+fn build_args(flavor: CliFlavor, cfg: &ProviderConfig, native: bool) -> Vec<String> {
     let model = cfg.model.trim();
     match flavor {
         CliFlavor::ClaudeCode => {
-            // `--tools ""` disables ALL native tools => pure text (verified
-            // 2026-06-25: the init event reports `tools:[]`). The prompt is
-            // fed on stdin; `--no-session-persistence` keeps it stateless.
             let mut a = vec![
                 "-p".to_string(),
-                "--tools".to_string(),
-                String::new(),
                 "--output-format".to_string(),
                 "stream-json".to_string(),
                 "--verbose".to_string(),
                 "--no-session-persistence".to_string(),
             ];
+            if native {
+                // M2a: let Claude run its OWN tools, auto-accepting edits;
+                // Claude's permission model governs (§5.14.8).
+                a.push("--permission-mode".to_string());
+                a.push("acceptEdits".to_string());
+            } else {
+                // M1: `--tools ""` disables ALL native tools => pure text
+                // (verified 2026-06-25: the init event reports `tools:[]`).
+                a.push("--tools".to_string());
+                a.push(String::new());
+            }
             if !model.is_empty() {
                 a.push("--model".to_string());
                 a.push(model.to_string());
@@ -72,17 +100,20 @@ fn build_args(flavor: CliFlavor, cfg: &ProviderConfig) -> Vec<String> {
         CliFlavor::Codex => {
             // NOTE: codex `exec --json` event schema is NOT verified on a
             // live run (CLI version drift blocked it, see §5.14.8); the
-            // parser below is best-effort. `read-only` keeps it side-effect
-            // free; `-` reads the prompt from stdin.
-            let mut a = vec![
-                "exec".to_string(),
-                "--json".to_string(),
-                "--sandbox".to_string(),
-                "read-only".to_string(),
-                "--skip-git-repo-check".to_string(),
-                "--color".to_string(),
-                "never".to_string(),
-            ];
+            // parser below is best-effort. The prompt is read from stdin
+            // (`-`).
+            let mut a = vec!["exec".to_string(), "--json".to_string(), "--sandbox".to_string()];
+            if native {
+                // M2a: Codex's workspace-write sandbox governs writes.
+                a.push("workspace-write".to_string());
+                a.push("--ask-for-approval".to_string());
+                a.push("never".to_string());
+            } else {
+                a.push("read-only".to_string());
+            }
+            a.push("--skip-git-repo-check".to_string());
+            a.push("--color".to_string());
+            a.push("never".to_string());
             if !model.is_empty() {
                 a.push("-m".to_string());
                 a.push(model.to_string());
@@ -118,7 +149,8 @@ fn compose_prompt(system: &str, messages: &[ChatMessage]) -> String {
                     out.push_str("\n\n");
                 }
             }
-            // M1 is tool-less: there are no tool-result turns to forward.
+            // M1 is tool-less; M2a folds tool steps into the assistant
+            // transcript, so there are no separate tool turns to forward.
             ChatRole::Tool => {}
         }
     }
@@ -133,7 +165,24 @@ struct CliAcc {
     error: Option<String>,
 }
 
-fn parse_claude_line(line: &str, on_delta: &mut dyn FnMut(&str), acc: &mut CliAcc) {
+fn tool_result_text(block: &Value) -> String {
+    match block.get("content") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => String::new(),
+    }
+}
+
+fn parse_claude_line(
+    line: &str,
+    on_delta: &mut dyn FnMut(&str),
+    acc: &mut CliAcc,
+    render_tools: bool,
+) {
     let v: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(_) => return, // tolerate non-JSON warning lines
@@ -142,12 +191,39 @@ fn parse_claude_line(line: &str, on_delta: &mut dyn FnMut(&str), acc: &mut CliAc
         "assistant" => {
             if let Some(content) = v.pointer("/message/content").and_then(Value::as_array) {
                 for block in content {
-                    if block.get("type").and_then(Value::as_str) == Some("text") {
-                        if let Some(t) = block.get("text").and_then(Value::as_str) {
-                            if !t.is_empty() {
-                                acc.text.push_str(t);
-                                on_delta(t);
+                    match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                        "text" => {
+                            if let Some(t) = block.get("text").and_then(Value::as_str) {
+                                if !t.is_empty() {
+                                    acc.text.push_str(t);
+                                    on_delta(t);
+                                }
                             }
+                        }
+                        // M2a: surface the CLI's own tool steps read-only.
+                        "tool_use" if render_tools => {
+                            let name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
+                            let input =
+                                clip(&block.get("input").map(|i| i.to_string()).unwrap_or_default(), 200);
+                            let l = format!("\n\n🔧 **{name}** `{input}`\n");
+                            acc.text.push_str(&l);
+                            on_delta(&l);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // M2a: tool results come back on a `user` event.
+        "user" if render_tools => {
+            if let Some(content) = v.pointer("/message/content").and_then(Value::as_array) {
+                for block in content {
+                    if block.get("type").and_then(Value::as_str) == Some("tool_result") {
+                        let text = clip(tool_result_text(block).trim(), 240);
+                        if !text.is_empty() {
+                            let l = format!("\n↳ {text}\n");
+                            acc.text.push_str(&l);
+                            on_delta(&l);
                         }
                     }
                 }
@@ -192,14 +268,17 @@ fn parse_claude_line(line: &str, on_delta: &mut dyn FnMut(&str), acc: &mut CliAc
     }
 }
 
-fn parse_codex_line(line: &str, on_delta: &mut dyn FnMut(&str), acc: &mut CliAcc) {
+fn parse_codex_line(
+    line: &str,
+    on_delta: &mut dyn FnMut(&str),
+    acc: &mut CliAcc,
+    render_tools: bool,
+) {
     let v: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(_) => return,
     };
     match v.get("type").and_then(Value::as_str).unwrap_or("") {
-        // Best-effort: assistant text arrives as a message item. Only emit
-        // on item.completed to avoid duplicating partial updates.
         "item.completed" => {
             let item = v.get("item");
             let itype = item
@@ -216,6 +295,19 @@ fn parse_codex_line(line: &str, on_delta: &mut dyn FnMut(&str), acc: &mut CliAcc
                         acc.text.push_str(t);
                         on_delta(t);
                     }
+                }
+            } else if render_tools
+                && (itype.contains("command") || itype.contains("exec") || itype.contains("shell"))
+            {
+                // M2a best-effort: surface the executed command.
+                if let Some(c) = item.and_then(|i| {
+                    i.get("command")
+                        .or_else(|| i.get("text"))
+                        .and_then(Value::as_str)
+                }) {
+                    let l = format!("\n\n🔧 {}\n", clip(c, 200));
+                    acc.text.push_str(&l);
+                    on_delta(&l);
                 }
             }
         }
@@ -242,7 +334,9 @@ fn parse_codex_line(line: &str, on_delta: &mut dyn FnMut(&str), acc: &mut CliAcc
     }
 }
 
-/// Run one tool-less completion turn via the agent CLI.
+/// Run one turn via the agent CLI. M1 (tool-less) or M2a (native agent)
+/// per `cfg.cli_mode`. Returns text + EMPTY tool_calls — the CLI does
+/// its own work (M2a) or only chats (M1); Pier-X never executes here.
 pub fn stream_cli(
     cfg: &ProviderConfig,
     system: &str,
@@ -251,14 +345,25 @@ pub fn stream_cli(
     on_delta: &mut dyn FnMut(&str),
     cancel: &CancellationToken,
 ) -> Result<TurnOutcome, AiError> {
-    // M1: Pier-X keeps its OWN risk-gated tools; the CLI runs tool-less,
-    // so `_tools` is intentionally not forwarded.
+    // M1 keeps Pier-X's own risk-gated tools, so `_tools` is not
+    // forwarded; M2a lets the CLI use its own tools (rendered read-only).
     let flavor = flavor_of(cfg);
+    let native = cfg.cli_mode == CliMode::NativeAgent;
     let bin = resolve_bin(cfg);
     let prompt = compose_prompt(system, messages);
 
     let mut cmd = Command::new(&bin);
-    cmd.args(build_args(flavor, cfg));
+    cmd.args(build_args(flavor, cfg, native));
+    if native {
+        if let Some(dir) = cfg
+            .cli_cwd
+            .as_deref()
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+        {
+            cmd.current_dir(dir);
+        }
+    }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -328,8 +433,8 @@ pub fn stream_cli(
             continue;
         }
         match flavor {
-            CliFlavor::ClaudeCode => parse_claude_line(&line, on_delta, &mut acc),
-            CliFlavor::Codex => parse_codex_line(&line, on_delta, &mut acc),
+            CliFlavor::ClaudeCode => parse_claude_line(&line, on_delta, &mut acc, native),
+            CliFlavor::Codex => parse_codex_line(&line, on_delta, &mut acc, native),
         }
     }
 
@@ -413,20 +518,35 @@ pub fn test_connection(cfg: &ProviderConfig) -> Result<String, AiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::ai::types::ProviderKind;
 
-    fn collect(lines: &[&str], flavor: CliFlavor) -> (String, CliAcc) {
+    fn collect(lines: &[&str], flavor: CliFlavor, render_tools: bool) -> (String, CliAcc) {
         let mut acc = CliAcc::default();
         let mut out = String::new();
         {
             let mut on_delta = |s: &str| out.push_str(s);
             for l in lines {
                 match flavor {
-                    CliFlavor::ClaudeCode => parse_claude_line(l, &mut on_delta, &mut acc),
-                    CliFlavor::Codex => parse_codex_line(l, &mut on_delta, &mut acc),
+                    CliFlavor::ClaudeCode => parse_claude_line(l, &mut on_delta, &mut acc, render_tools),
+                    CliFlavor::Codex => parse_codex_line(l, &mut on_delta, &mut acc, render_tools),
                 }
             }
         }
         (out, acc)
+    }
+
+    fn cli_cfg(flavor: CliFlavor, mode: CliMode) -> ProviderConfig {
+        ProviderConfig {
+            kind: ProviderKind::Cli,
+            base_url: String::new(),
+            api_key: None,
+            model: "sonnet".into(),
+            max_tokens: None,
+            cli_flavor: Some(flavor),
+            cli_bin: None,
+            cli_mode: mode,
+            cli_cwd: None,
+        }
     }
 
     #[test]
@@ -436,7 +556,7 @@ mod tests {
             r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"x"},{"type":"text","text":"PIERX_OK"}]}}"#,
             r#"{"type":"result","subtype":"success","is_error":false,"result":"PIERX_OK","usage":{"input_tokens":3,"output_tokens":8}}"#,
         ];
-        let (streamed, acc) = collect(&lines, CliFlavor::ClaudeCode);
+        let (streamed, acc) = collect(&lines, CliFlavor::ClaudeCode, false);
         assert_eq!(streamed, "PIERX_OK");
         assert_eq!(acc.text, "PIERX_OK");
         assert_eq!(acc.input_tokens, Some(3));
@@ -448,7 +568,7 @@ mod tests {
     fn claude_falls_back_to_result_text() {
         let lines =
             [r#"{"type":"result","subtype":"success","result":"hi","usage":{"output_tokens":1}}"#];
-        let (streamed, acc) = collect(&lines, CliFlavor::ClaudeCode);
+        let (streamed, acc) = collect(&lines, CliFlavor::ClaudeCode, false);
         assert_eq!(streamed, "hi");
         assert_eq!(acc.text, "hi");
     }
@@ -456,7 +576,7 @@ mod tests {
     #[test]
     fn claude_error_result_sets_error() {
         let lines = [r#"{"type":"result","subtype":"error","is_error":true,"result":"boom"}"#];
-        let (_streamed, acc) = collect(&lines, CliFlavor::ClaudeCode);
+        let (_streamed, acc) = collect(&lines, CliFlavor::ClaudeCode, false);
         assert_eq!(acc.error.as_deref(), Some("boom"));
     }
 
@@ -466,7 +586,7 @@ mod tests {
             "Warning: no stdin data received in 3s, proceeding without it.",
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}"#,
         ];
-        let (streamed, acc) = collect(&lines, CliFlavor::ClaudeCode);
+        let (streamed, acc) = collect(&lines, CliFlavor::ClaudeCode, false);
         assert_eq!(streamed, "ok");
         assert_eq!(acc.text, "ok");
     }
@@ -478,12 +598,12 @@ mod tests {
             r#"{"type":"item.completed","item":{"type":"agent_message","text":"hello"}}"#,
             r#"{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens":4}}"#,
         ];
-        let (streamed, acc) = collect(&ok, CliFlavor::Codex);
+        let (streamed, acc) = collect(&ok, CliFlavor::Codex, false);
         assert_eq!(streamed, "hello");
         assert_eq!(acc.output_tokens, Some(4));
 
         let err = [r#"{"type":"turn.failed","error":{"message":"nope"}}"#];
-        let (_s, acc2) = collect(&err, CliFlavor::Codex);
+        let (_s, acc2) = collect(&err, CliFlavor::Codex, false);
         assert_eq!(acc2.error.as_deref(), Some("nope"));
     }
 
@@ -496,22 +616,33 @@ mod tests {
     }
 
     #[test]
-    fn claude_args_disable_tools() {
-        let cfg = ProviderConfig {
-            kind: super::super::types::ProviderKind::Cli,
-            base_url: String::new(),
-            api_key: None,
-            model: "sonnet".into(),
-            max_tokens: None,
-            cli_flavor: Some(CliFlavor::ClaudeCode),
-            cli_bin: None,
-        };
-        let args = build_args(CliFlavor::ClaudeCode, &cfg);
-        // `--tools ""` (a flag immediately followed by an empty arg) is the
-        // tool-less switch — its presence is the M1 safety guarantee.
-        let i = args.iter().position(|a| a == "--tools").expect("has --tools");
-        assert_eq!(args[i + 1], "");
-        assert!(args.iter().any(|a| a == "stream-json"));
-        assert!(args.windows(2).any(|w| w[0] == "--model" && w[1] == "sonnet"));
+    fn m1_args_disable_tools_m2a_does_not() {
+        let m1 = build_args(CliFlavor::ClaudeCode, &cli_cfg(CliFlavor::ClaudeCode, CliMode::ModelBackend), false);
+        let i = m1.iter().position(|a| a == "--tools").expect("M1 has --tools");
+        assert_eq!(m1[i + 1], "");
+        assert!(m1.iter().any(|a| a == "stream-json"));
+        assert!(m1.windows(2).any(|w| w[0] == "--model" && w[1] == "sonnet"));
+
+        let m2a = build_args(CliFlavor::ClaudeCode, &cli_cfg(CliFlavor::ClaudeCode, CliMode::NativeAgent), true);
+        assert!(!m2a.iter().any(|a| a == "--tools"));
+        assert!(m2a.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "acceptEdits"));
+    }
+
+    #[test]
+    fn m2a_renders_tool_steps_m1_hides_them() {
+        let lines = [
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Read","input":{"file_path":"a.txt"}}]}}"#,
+            r#"{"type":"user","message":{"content":[{"tool_use_id":"t","type":"tool_result","content":"alpha bravo"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}"#,
+        ];
+        let (m2a, _) = collect(&lines, CliFlavor::ClaudeCode, true);
+        assert!(m2a.contains("Read"));
+        assert!(m2a.contains("alpha bravo"));
+        assert!(m2a.contains("done"));
+
+        let (m1, _) = collect(&lines, CliFlavor::ClaudeCode, false);
+        assert!(!m1.contains("Read"));
+        assert!(!m1.contains("alpha bravo"));
+        assert!(m1.contains("done"));
     }
 }

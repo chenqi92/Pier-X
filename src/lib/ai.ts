@@ -30,6 +30,9 @@ export type AiProviderSettings = {
   /** `kind === "cli"` only: path to the CLI binary. Empty = resolve
    *  on PATH. No API key — the CLI uses its own login. */
   cliBin?: string | null;
+  /** `kind === "cli"` only: "m1" model-backend (default) or "m2a"
+   *  native-agent (§5.14.8). */
+  cliMode?: string | null;
 };
 
 export type AiSshCoords = {

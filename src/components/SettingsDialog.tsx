@@ -2253,6 +2253,7 @@ function AiSettingsPanel() {
     secretId: vendorId,
     cliFlavor: vendor.cliFlavor ?? null,
     cliBin: settings.aiCliBin || null,
+    cliMode: settings.aiCliMode,
   });
 
   const saveKey = () => {
@@ -2326,6 +2327,26 @@ function AiSettingsPanel() {
             onChange={(e) => settings.setAiCliBin(e.currentTarget.value)}
             placeholder={vendor.cliFlavor === "codex" ? "codex (or full path)" : "claude (or full path)"}
             style={{ fontFamily: "var(--mono)" }}
+          />
+        </SettingRow>
+      )}
+      {isCli && (
+        <SettingRow
+          label={t("CLI mode")}
+          description={
+            settings.aiCliMode === "m2a"
+              ? t("Native agent: the CLI runs its OWN tools on THIS machine and self-governs — Pier-X's per-action approval does NOT apply. Local tabs only (not over SSH). Opt-in.")
+              : t("Model backend (recommended): the CLI only answers; Pier-X keeps its own per-action approval for execution.")
+          }
+        >
+          <Select
+            className="settings__select"
+            value={settings.aiCliMode}
+            onChange={settings.setAiCliMode}
+            items={[
+              { value: "m1", label: t("Model backend (gated)") },
+              { value: "m2a", label: t("Native agent (local, self-governs)") },
+            ]}
           />
         </SettingRow>
       )}

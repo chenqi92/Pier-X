@@ -293,6 +293,7 @@ export default function AiPanel({ tab, isActive }: Props) {
         secretId: settings.aiVendorId,
         cliFlavor: aiVendorById(settings.aiVendorId).cliFlavor ?? null,
         cliBin: settings.aiCliBin || null,
+        cliMode: settings.aiCliMode,
       },
       userText: text,
       context,

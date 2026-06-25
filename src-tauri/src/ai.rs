@@ -32,8 +32,8 @@ use tokio_util::sync::CancellationToken;
 
 use pier_core::services::ai::{
     classify_command, classify_list_path, classify_read_path, classify_write_path, provider,
-    redact, ChatMessage, CliFlavor, ProviderConfig, ProviderKind, RiskAssessment, RiskLevel,
-    StopKind,
+    redact, ChatMessage, CliFlavor, CliMode, ProviderConfig, ProviderKind, RiskAssessment,
+    RiskLevel, StopKind,
     ToolCall, ToolSpec,
 };
 
@@ -125,6 +125,10 @@ pub struct AiProviderSettings {
     /// settings picker / detection). Empty → resolve on PATH.
     #[serde(default)]
     pub cli_bin: Option<String>,
+    /// `kind == "cli"` only: "m1" model-backend (default) or "m2a"
+    /// native-agent; see PRODUCT-SPEC §5.14.8.
+    #[serde(default)]
+    pub cli_mode: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -225,6 +229,10 @@ fn build_provider_config(settings: &AiProviderSettings) -> ProviderConfig {
         "codex" => Some(CliFlavor::Codex),
         _ => None,
     });
+    let cli_mode = match settings.cli_mode.as_deref() {
+        Some("m2a") | Some("native-agent") => CliMode::NativeAgent,
+        _ => CliMode::ModelBackend,
+    };
     ProviderConfig {
         kind,
         base_url: settings.base_url.clone(),
@@ -233,6 +241,9 @@ fn build_provider_config(settings: &AiProviderSettings) -> ProviderConfig {
         max_tokens: settings.max_tokens,
         cli_flavor,
         cli_bin: settings.cli_bin.clone(),
+        cli_mode,
+        // Set from the request context (the tab's local cwd) in ai_chat_send.
+        cli_cwd: None,
     }
 }
 
@@ -585,7 +596,9 @@ pub fn ai_chat_send(
     if req.user_text.trim().is_empty() && req.attachments.is_empty() {
         return Err("empty message".into());
     }
-    if req.provider.model.trim().is_empty() {
+    // CLI backends may run on the account's default model (§5.14.8), so
+    // an empty model is valid for them; other kinds still require one.
+    if req.provider.model.trim().is_empty() && req.provider.kind != "cli" {
         return Err("no model configured".into());
     }
     let conv = state.conv(&req.conversation_id);
@@ -632,8 +645,10 @@ pub fn ai_chat_send(
             emit_event(&app, &conversation_id, "scrub", json!({ "hits": all_hits }));
         }
 
-        let cfg = build_provider_config(&req.provider);
         let context = req.context.clone().unwrap_or_default();
+        let mut cfg = build_provider_config(&req.provider);
+        // M2a runs the CLI in the tab's local working directory.
+        cfg.cli_cwd = context.cwd.clone();
 
         run_turn(
             app,
@@ -666,6 +681,20 @@ fn run_turn(
     ask_read_only: bool,
     cancel: CancellationToken,
 ) {
+    // M2a native-agent runs a LOCAL subprocess; it cannot operate a
+    // remote SSH host (§5.14.8). Refuse rather than silently run the CLI
+    // against the wrong machine.
+    if cfg.kind == ProviderKind::Cli && cfg.cli_mode == CliMode::NativeAgent && ssh.is_some() {
+        emit_event(
+            &app,
+            &conversation_id,
+            "failed",
+            json!({
+                "message": "本地 CLI 原生自治模式（M2a）仅支持本地 tab：本地子进程无法操作远端 SSH 主机。请切到本地 tab，或在设置里改用 M1 模型后端模式。"
+            }),
+        );
+        return;
+    }
     let system = system_prompt(&context, &ssh);
     let tools = tool_specs();
     let target_host = ssh

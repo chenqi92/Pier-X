@@ -155,6 +155,19 @@ pub enum CliFlavor {
     Codex,
 }
 
+/// How a [`ProviderKind::Cli`] backend runs (PRODUCT-SPEC §5.14.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CliMode {
+    /// M1: tool-less text completion. Pier-X keeps its own gated tools.
+    #[default]
+    ModelBackend,
+    /// M2a: the CLI runs its OWN loop + tools locally and self-governs;
+    /// Pier-X renders the transcript read-only and does NOT gate. Opt-in,
+    /// local tab only.
+    NativeAgent,
+}
+
 /// Resolved provider settings for one chat turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,6 +197,14 @@ pub struct ProviderConfig {
     /// default name on PATH.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cli_bin: Option<String>,
+    /// `ProviderKind::Cli` only: M1 model-backend (default) vs M2a
+    /// native-agent (PRODUCT-SPEC §5.14.8).
+    #[serde(default)]
+    pub cli_mode: CliMode,
+    /// `ProviderKind::Cli` M2a only: working directory the CLI runs in
+    /// (the tab's local cwd). Empty → the process default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_cwd: Option<String>,
 }
 
 impl ProviderConfig {

@@ -20,6 +20,8 @@ export type AiProfile = {
   maxTokens: number;
   /** `cli` backends only: path to the agent CLI binary (§5.14.8). */
   cliBin?: string;
+  /** `cli` backends only: "m1" model-backend or "m2a" native-agent. */
+  cliMode?: string;
 };
 
 function aiProfileName(vendorId: string, model: string): string {
@@ -103,6 +105,9 @@ type SettingsState = {
   /** `cli` backends only: path to the agent CLI binary. Empty =
    *  resolve the flavor's default name on PATH (§5.14.8). */
   aiCliBin: string;
+  /** `cli` backends only: "m1" model-backend (default) or "m2a"
+   *  native-agent — the CLI self-governs locally (§5.14.8). */
+  aiCliMode: string;
   /** Model id. Empty = AI assistant unconfigured (panel shows guide). */
   aiModel: string;
   /** Per-turn output cap. 0 = backend default (4096). */
@@ -157,6 +162,7 @@ type SettingsState = {
   setAiProviderKind: (kind: AiProviderKind) => void;
   setAiBaseUrl: (url: string) => void;
   setAiCliBin: (path: string) => void;
+  setAiCliMode: (mode: string) => void;
   setAiModel: (model: string) => void;
   setAiMaxTokens: (n: number) => void;
   setAiAutoContext: (on: boolean) => void;
@@ -222,6 +228,7 @@ type PersistedSettings = Partial<{
   aiProviderKind: AiProviderKind;
   aiBaseUrl: string;
   aiCliBin: string;
+  aiCliMode: string;
   aiModel: string;
   aiMaxTokens: number;
   aiAutoContext: boolean;
@@ -271,6 +278,7 @@ const DEFAULTS = {
   aiProviderKind: "openai" as AiProviderKind,
   aiBaseUrl: "",
   aiCliBin: "",
+  aiCliMode: "m1",
   aiModel: "",
   aiMaxTokens: 0,
   aiAutoContext: true,
@@ -387,6 +395,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     aiProviderKind: stored.aiProviderKind ?? DEFAULTS.aiProviderKind,
     aiBaseUrl: stored.aiBaseUrl ?? DEFAULTS.aiBaseUrl,
     aiCliBin: stored.aiCliBin ?? DEFAULTS.aiCliBin,
+    aiCliMode: stored.aiCliMode ?? DEFAULTS.aiCliMode,
     aiModel: stored.aiModel ?? DEFAULTS.aiModel,
     aiMaxTokens: stored.aiMaxTokens ?? DEFAULTS.aiMaxTokens,
     aiAutoContext: stored.aiAutoContext ?? DEFAULTS.aiAutoContext,
@@ -410,6 +419,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       model: initial.aiModel,
       maxTokens: initial.aiMaxTokens,
       cliBin: initial.aiCliBin,
+      cliMode: initial.aiCliMode,
     };
     initial.aiProfiles = [migrated];
     initial.aiActiveProfileId = migrated.id;
@@ -450,6 +460,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       aiProviderKind: s.aiProviderKind,
       aiBaseUrl: s.aiBaseUrl,
       aiCliBin: s.aiCliBin,
+      aiCliMode: s.aiCliMode,
       aiModel: s.aiModel,
       aiMaxTokens: s.aiMaxTokens,
       aiAutoContext: s.aiAutoContext,
@@ -466,7 +477,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
    *  "edit settings" and "edit the active profile" stay one action.
    *  Renames the profile when the model changes. */
   const syncActiveAiProfile = (
-    patch: Partial<Pick<AiProfile, "baseUrl" | "model" | "maxTokens" | "cliBin">>,
+    patch: Partial<Pick<AiProfile, "baseUrl" | "model" | "maxTokens" | "cliBin" | "cliMode">>,
   ) => {
     const s = get();
     if (!s.aiActiveProfileId) return;
@@ -606,6 +617,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       syncActiveAiProfile({ cliBin: trimmed });
       persist();
     },
+    setAiCliMode: (aiCliMode) => {
+      set({ aiCliMode });
+      syncActiveAiProfile({ cliMode: aiCliMode });
+      persist();
+    },
     setAiModel: (aiModel) => {
       const trimmed = aiModel.trim();
       set({ aiModel: trimmed });
@@ -652,7 +668,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           aiActiveProfileId: existing.id,
           aiProfiles: s.aiProfiles.map((p) =>
             p.id === existing.id
-              ? { ...p, maxTokens: s.aiMaxTokens, kind: s.aiProviderKind, cliBin: s.aiCliBin }
+              ? {
+                  ...p,
+                  maxTokens: s.aiMaxTokens,
+                  kind: s.aiProviderKind,
+                  cliBin: s.aiCliBin,
+                  cliMode: s.aiCliMode,
+                }
               : p,
           ),
         });
@@ -668,6 +690,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         model: s.aiModel,
         maxTokens: s.aiMaxTokens,
         cliBin: s.aiCliBin,
+        cliMode: s.aiCliMode,
       };
       set({ aiProfiles: [...s.aiProfiles, profile], aiActiveProfileId: profile.id });
       persist();
@@ -682,6 +705,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         aiProviderKind: profile.kind,
         aiBaseUrl: profile.baseUrl,
         aiCliBin: profile.cliBin ?? "",
+        aiCliMode: profile.cliMode ?? "m1",
         aiModel: profile.model,
         aiMaxTokens: profile.maxTokens,
       });

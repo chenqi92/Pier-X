@@ -91,6 +91,15 @@ pub struct PostgresConfig {
     /// connections are unchanged.
     #[serde(default)]
     pub tls_mode: super::db_tls::TlsMode,
+    /// TLS server name to validate the certificate against, when it
+    /// differs from [`host`](Self::host). Set when connecting through a
+    /// loopback indirection (SSH tunnel / egress forwarder): `host` is
+    /// then `127.0.0.1` while this carries the real DB hostname, so
+    /// `verify-full` checks the right name (via libpq-style `hostaddr`).
+    /// `None`/empty → validate against `host`. Ignored when `tls_mode`
+    /// is `Off`.
+    #[serde(default)]
+    pub tls_server_name: Option<String>,
 }
 
 /// One user-defined enum type in the active schema. Used by the
@@ -288,7 +297,30 @@ impl PostgresClient {
         // can't break the quoting or inject extra libpq keywords (e.g. a
         // `user` of `me sslmode=disable`).
         let mut pg_config = tokio_postgres::Config::new();
-        pg_config.host(&config.host);
+        // For the encrypting modes the caller may target a loopback tunnel
+        // (`host` = 127.0.0.1) while the cert must validate against the real
+        // DB host. tokio-postgres uses `host` as the TLS validation name and
+        // `hostaddr` (when set) as the actual TCP target — the libpq split we
+        // need so `verify-full` works through a tunnel. `Off` keeps the
+        // historical single-host wiring (byte-identical legacy path).
+        let tls_name = if config.tls_mode.is_off() {
+            None
+        } else {
+            config
+                .tls_server_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        };
+        match (tls_name, config.host.parse::<std::net::IpAddr>()) {
+            (Some(name), Ok(ip)) => {
+                pg_config.host(name);
+                pg_config.hostaddr(ip);
+            }
+            _ => {
+                pg_config.host(&config.host);
+            }
+        }
         pg_config.port(config.port);
         pg_config.user(&config.user);
         if !config.password.is_empty() {
@@ -1080,6 +1112,7 @@ mod tests {
             password: "".into(),
             database: None,
             tls_mode: Default::default(),
+            tls_server_name: None,
         }));
         assert!(matches!(r, Err(PostgresError::InvalidConfig(_))));
     }
@@ -1093,6 +1126,7 @@ mod tests {
             password: "".into(),
             database: None,
             tls_mode: Default::default(),
+            tls_server_name: None,
         }));
         assert!(matches!(r, Err(PostgresError::InvalidConfig(_))));
     }
@@ -1106,6 +1140,7 @@ mod tests {
             password: "".into(),
             database: None,
             tls_mode: Default::default(),
+            tls_server_name: None,
         }));
         assert!(matches!(r, Err(PostgresError::InvalidConfig(_))));
     }

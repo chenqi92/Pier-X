@@ -1176,6 +1176,10 @@ export const postgresBrowse = (params: {
   table?: string | null;
   /** Direct-connection TLS posture. Omit / `off` = cleartext. */
   tlsMode?: DbTlsMode;
+  /** TLS validation host name when the target is a loopback tunnel /
+   *  forwarder, so verify-full checks the real DB host rather than
+   *  127.0.0.1. Omit on a direct dial (the host is already the DB). */
+  tlsServerName?: string;
 }) => invoke<PostgresBrowserState>("postgres_browse", params);
 
 export const postgresExecute = (params: {
@@ -1191,6 +1195,10 @@ export const postgresExecute = (params: {
   readOnly?: boolean;
   /** Direct-connection TLS posture. Omit / `off` = cleartext. */
   tlsMode?: DbTlsMode;
+  /** TLS validation host name when the target is a loopback tunnel /
+   *  forwarder, so verify-full checks the real DB host rather than
+   *  127.0.0.1. Omit on a direct dial (the host is already the DB). */
+  tlsServerName?: string;
 }) =>
   invoke<QueryExecutionResult>("postgres_execute", {
     ...params,
@@ -1221,6 +1229,10 @@ export const mssqlExecute = (params: {
   readOnly?: boolean;
   /** Direct-connection TLS posture. Omit / `off` = cleartext. */
   tlsMode?: DbTlsMode;
+  /** TLS validation host name when the target is a loopback tunnel /
+   *  forwarder, so verify-full checks the real DB host rather than
+   *  127.0.0.1. Omit on a direct dial (the host is already the DB). */
+  tlsServerName?: string;
 }) =>
   invoke<QueryExecutionResult>("mssql_execute", {
     ...params,
@@ -1236,6 +1248,10 @@ export const mssqlOverview = (params: {
   database?: string | null;
   /** Direct-connection TLS posture. Omit / `off` = cleartext. */
   tlsMode?: DbTlsMode;
+  /** TLS validation host name when the target is a loopback tunnel /
+   *  forwarder, so verify-full checks the real DB host rather than
+   *  127.0.0.1. Omit on a direct dial (the host is already the DB). */
+  tlsServerName?: string;
 }) => invoke<SqlServerOverview>("mssql_overview", params);
 
 export type SqlServerColumnView = {
@@ -1258,6 +1274,10 @@ export const mssqlColumns = (params: {
   table: string;
   /** Direct-connection TLS posture. Omit / `off` = cleartext. */
   tlsMode?: DbTlsMode;
+  /** TLS validation host name when the target is a loopback tunnel /
+   *  forwarder, so verify-full checks the real DB host rather than
+   *  127.0.0.1. Omit on a direct dial (the host is already the DB). */
+  tlsServerName?: string;
 }) => invoke<SqlServerColumnView[]>("mssql_columns", params);
 
 // ── InfluxDB (InfluxQL over HTTP) ───────────────────────────────────
@@ -1389,6 +1409,10 @@ export const postgresListActivity = (params: {
   database?: string | null;
   /** Direct-connection TLS posture. Omit / `off` = cleartext. */
   tlsMode?: DbTlsMode;
+  /** TLS validation host name when the target is a loopback tunnel /
+   *  forwarder, so verify-full checks the real DB host rather than
+   *  127.0.0.1. Omit on a direct dial (the host is already the DB). */
+  tlsServerName?: string;
 }) => invoke<PgActivityRow[]>("postgres_list_activity", params);
 
 /** `pg_cancel_backend(pid)` — abort the running query on `pid`. */
@@ -1401,6 +1425,10 @@ export const postgresCancelQuery = (params: {
   pid: number;
   /** Direct-connection TLS posture. Omit / `off` = cleartext. */
   tlsMode?: DbTlsMode;
+  /** TLS validation host name when the target is a loopback tunnel /
+   *  forwarder, so verify-full checks the real DB host rather than
+   *  127.0.0.1. Omit on a direct dial (the host is already the DB). */
+  tlsServerName?: string;
 }) => invoke<boolean>("postgres_cancel_query", params);
 
 /** `pg_terminate_backend(pid)` — drop the entire backend connection. */
@@ -1413,6 +1441,10 @@ export const postgresTerminateBackend = (params: {
   pid: number;
   /** Direct-connection TLS posture. Omit / `off` = cleartext. */
   tlsMode?: DbTlsMode;
+  /** TLS validation host name when the target is a loopback tunnel /
+   *  forwarder, so verify-full checks the real DB host rather than
+   *  127.0.0.1. Omit on a direct dial (the host is already the DB). */
+  tlsServerName?: string;
 }) => invoke<boolean>("postgres_terminate_backend", params);
 
 // ── Docker ──────────────────────────────────────────────────────

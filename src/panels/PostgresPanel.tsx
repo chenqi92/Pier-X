@@ -276,6 +276,7 @@ function PostgresPanelBody({ tab }: Props) {
         host: target.host,
         port: target.port,
         tlsMode: target.tlsMode,
+        tlsServerName: target.tlsServerName,
         user: connectionUser.trim(),
         password: pw,
         database: (nextDb ?? connectionDatabase).trim() || null,
@@ -379,6 +380,7 @@ function PostgresPanelBody({ tab }: Props) {
           host: target.host,
           port: target.port,
           tlsMode: target.tlsMode,
+          tlsServerName: target.tlsServerName,
           user: tab.pgUser.trim(),
           password: tab.pgPassword,
           database: tab.pgDatabase.trim() || null,
@@ -467,6 +469,7 @@ function PostgresPanelBody({ tab }: Props) {
         host: target.host,
         port: target.port,
         tlsMode: target.tlsMode,
+        tlsServerName: target.tlsServerName,
         user: tab.pgUser.trim(),
         password: tab.pgPassword,
         database: tab.pgDatabase.trim() || null,
@@ -502,6 +505,7 @@ function PostgresPanelBody({ tab }: Props) {
         host: target.host,
         port: target.port,
         tlsMode: target.tlsMode,
+        tlsServerName: target.tlsServerName,
         user: tab.pgUser.trim(),
         password: tab.pgPassword,
         database: tab.pgDatabase.trim() || null,
@@ -728,6 +732,7 @@ function PostgresPanelBody({ tab }: Props) {
           host: target.host,
           port: target.port,
           tlsMode: target.tlsMode,
+          tlsServerName: target.tlsServerName,
           user: tab.pgUser.trim(),
           password: tab.pgPassword,
           database: tab.pgDatabase.trim() || null,
@@ -764,6 +769,7 @@ function PostgresPanelBody({ tab }: Props) {
           host: target.host,
           port: target.port,
           tlsMode: target.tlsMode,
+          tlsServerName: target.tlsServerName,
           user: tab.pgUser.trim(),
           password: tab.pgPassword,
           database: tab.pgDatabase.trim() || null,
@@ -796,6 +802,7 @@ function PostgresPanelBody({ tab }: Props) {
       host: target.host,
       port: target.port,
       tlsMode: target.tlsMode,
+      tlsServerName: target.tlsServerName,
       user: tab.pgUser.trim(),
       password: tab.pgPassword,
       database: tab.pgDatabase.trim() || null,
@@ -1057,8 +1064,9 @@ function PostgresPanelBody({ tab }: Props) {
                   database: tab.pgDatabase.trim() || null,
                   schema: null,
                   table: null,
-                  // Loopback when tunneled; only dial TLS straight to host.
-                  tlsMode: sshTarget ? "off" : tab.pgTlsMode,
+                  tlsMode: tab.pgTlsMode,
+                  // Tunnel socket is loopback; validate against the real host.
+                  tlsServerName: sshTarget ? tab.pgHost.trim() || undefined : undefined,
                 });
                 return { ok: true, via };
               } finally {
@@ -1410,6 +1418,7 @@ function PostgresPanelBody({ tab }: Props) {
                 host: target.host,
                 port: target.port,
                 tlsMode: target.tlsMode,
+                tlsServerName: target.tlsServerName,
                 user: tab.pgUser.trim(),
                 password: tab.pgPassword,
                 database: tab.pgDatabase.trim() || null,
@@ -1458,6 +1467,7 @@ function PostgresPanelBody({ tab }: Props) {
                       host: target.host,
                       port: target.port,
                       tlsMode: target.tlsMode,
+                      tlsServerName: target.tlsServerName,
                       user: tab.pgUser.trim(),
                       password: tab.pgPassword,
                       database: tab.pgDatabase.trim() || null,
@@ -1503,9 +1513,10 @@ function PostgresPanelBody({ tab }: Props) {
           user: tab.pgUser,
           password: tab.pgPassword,
           database: tab.pgDatabase || null,
-          // Tunnel terminates on loopback (already encrypted); TLS only
-          // applies on the straight-to-host path.
-          tlsMode: tab.pgTunnelPort ? "off" : tab.pgTlsMode,
+          tlsMode: tab.pgTlsMode,
+          // When tunneled the socket is loopback — validate the cert
+          // against the real DB host rather than 127.0.0.1.
+          tlsServerName: tab.pgTunnelPort ? tab.pgHost : undefined,
         }}
       />
       {elev.dialog}

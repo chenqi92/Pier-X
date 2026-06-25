@@ -197,14 +197,13 @@ export default function DbAddCredentialDialog({
   // Only Postgres / SQL Server have a TLS backend; other kinds connect
   // cleartext (over the encouraged SSH tunnel).
   const supportsTls = kind === "postgres" || kind === "sqlserver";
-  // With an SSH context the connection rides a loopback tunnel that's
-  // already encrypted, so the "plaintext" warning only fires when the
-  // dialog will dial the host directly.
-  const hasSshContext = tab ? effectiveSshTarget(tab) !== null : false;
+  // An SSH tunnel only encrypts the desktop→SSH-host hop; with `off` the
+  // SSH-host→DB hop is still plaintext. So warn whenever the DB host is
+  // non-loopback and TLS is off — loopback (DB on the SSH host itself)
+  // is safe and stays quiet.
   const showCleartextWarning =
     supportsTls &&
     tlsMode === "off" &&
-    !hasSshContext &&
     host.trim() !== "" &&
     !isLoopbackHost(host);
   // Redis's "database" field is a numeric DB index — a typo must fail
@@ -286,8 +285,9 @@ export default function DbAddCredentialDialog({
             database: database.trim() || null,
             schema: null,
             table: null,
-            // TLS only on the direct probe; the tunnel hop is loopback.
-            tlsMode: via === "ssh-tunnel" ? "off" : tlsMode,
+            tlsMode,
+            // Tunnel hop is loopback; validate the cert against the real host.
+            tlsServerName: via === "ssh-tunnel" ? remoteHost : undefined,
           });
         } else {
           // Redis: PING via redisBrowse with a tiny pattern. The
@@ -498,7 +498,7 @@ export default function DbAddCredentialDialog({
             )}
             {showCleartextWarning && (
               <div className="status-note status-note--warn">
-                {t("Connecting to {host} in cleartext — the password and query data cross the network unencrypted. Pick Require / Verify-full, or connect through an SSH tunnel.", { host: host.trim() })}
+                {t("TLS is off — traffic to {host} (including the password) isn't encrypted to the database. An SSH tunnel only protects the hop to the SSH host; pick Require or Verify-full to encrypt the rest.", { host: host.trim() })}
               </div>
             )}
             {canPersist && (

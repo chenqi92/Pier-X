@@ -149,15 +149,15 @@ export type DbCredentialFlow = {
   tunnelError: string;
   setTunnelError: (msg: string) => void;
   /** Opens (or returns the cached) tunnel. Falls back to direct on local tabs.
-   *  `tlsMode` is the TLS posture the connection should use: the
-   *  credential's mode only on the *direct* path, forced to `"off"`
-   *  whenever the target is a loopback tunnel / egress forwarder
-   *  (already encrypted, and TLS to 127.0.0.1 would just break
-   *  verify-full's hostname check). */
+   *  `tlsMode` is the credential's TLS posture. TLS is end-to-end to the
+   *  real DB — an SSH tunnel / egress forwarder just carries the bytes —
+   *  so it applies on every path. When the target is a loopback
+   *  indirection, `tlsServerName` carries the real DB host so verify-full
+   *  validates the right name instead of 127.0.0.1. */
   ensureConnectionTarget: (
     forceRebuild?: boolean,
     draft?: DbConnectionDraft,
-  ) => Promise<{ host: string; port: number; tlsMode: DbTlsMode }>;
+  ) => Promise<{ host: string; port: number; tlsMode: DbTlsMode; tlsServerName?: string }>;
   rebuildTunnel: () => Promise<void>;
   closeTunnel: () => Promise<void>;
 
@@ -325,7 +325,15 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   async function ensureConnectionTarget(
     forceRebuild = false,
     draft?: DbConnectionDraft,
-  ): Promise<{ host: string; port: number; tlsMode: DbTlsMode }> {
+  ): Promise<{ host: string; port: number; tlsMode: DbTlsMode; tlsServerName?: string }> {
+    // Credential's TLS posture. A draft carries its own choice (tab state
+    // hasn't caught up yet); otherwise read the active credential's mode.
+    // Kinds without a TLS backend (mysql/redis/…) have no `readTlsMode`,
+    // so this stays "off" for them.
+    const credTls = draft?.tlsMode ?? adapter.readTlsMode?.(tab) ?? "off";
+    const remoteHost = draft?.host ?? tabHost.trim();
+    const remotePort = draft?.port ?? tabPort;
+
     // Credential-level egress wins over the parent SSH tunnel: when a
     // saved credential carries an `egressId`, the backend lazily spins
     // up a forwarder bound to 127.0.0.1 and we connect to that loopback
@@ -338,8 +346,9 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
         const ep = await cmd.dbEgressEndpoint(savedIndex, activeCredId);
         if (ep.viaForwarder) {
           setTunnelError("");
-          // Forwarder is a loopback hop — already encrypted, so TLS off.
-          return { host: ep.host, port: ep.port, tlsMode: "off" };
+          // Forwarder is a loopback hop; TLS still negotiates end-to-end
+          // with the real DB through it, so validate against the real host.
+          return { host: ep.host, port: ep.port, tlsMode: credTls, tlsServerName: remoteHost || undefined };
         }
       } catch {
         // Stale cred id (just deleted, etc.) — fall through to the
@@ -347,21 +356,16 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
         // error instead of dead-ending here.
       }
     }
-    const remoteHost = draft?.host ?? tabHost.trim();
-    const remotePort = draft?.port ?? tabPort;
     if (!hasSsh) {
-      // The only path where TLS is meaningful: a straight dial to the
-      // remote host. A draft carries its own choice (tab state hasn't
-      // caught up yet); otherwise read the active credential's mode.
-      const tlsMode = draft?.tlsMode ?? adapter.readTlsMode?.(tab) ?? "off";
-      return { host: remoteHost, port: remotePort, tlsMode };
+      // Straight dial — the target host is already the real DB host, so
+      // no separate validation name is needed.
+      return { host: remoteHost, port: remotePort, tlsMode: credTls };
     }
     if (!sshReady) {
       throw new Error(t("SSH credentials are not ready yet."));
     }
     // Remote-CLI kinds (Oracle / Dameng) don't tunnel — the vendor CLI
-    // runs on the SSH host and dials the DB itself, so the "target" is
-    // the DB address as seen from that host. No rustls path here.
+    // runs on the SSH host and dials the DB itself. No rustls path here.
     if (!tunnelSlot) {
       return { host: remoteHost, port: remotePort, tlsMode: "off" };
     }
@@ -374,8 +378,9 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
       force: forceRebuild || !!draft,
     });
     setTunnelError("");
-    // Tunnel terminates on 127.0.0.1 — encrypted by SSH already.
-    return { host: info.localHost, port: info.localPort, tlsMode: "off" };
+    // Tunnel terminates on 127.0.0.1; TLS (if any) negotiates end-to-end
+    // with the real DB through it — validate against the real host.
+    return { host: info.localHost, port: info.localPort, tlsMode: credTls, tlsServerName: remoteHost || undefined };
   }
 
   async function rebuildTunnel() {

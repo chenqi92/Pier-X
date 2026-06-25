@@ -7131,9 +7131,20 @@ async fn postgres_browse(
     schema: Option<String>,
     table: Option<String>,
     tls_mode: Option<String>,
+    tls_server_name: Option<String>,
 ) -> Result<PostgresBrowserState, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        postgres_browse_blocking(host, port, user, password, database, schema, table, tls_mode)
+        postgres_browse_blocking(
+            host,
+            port,
+            user,
+            password,
+            database,
+            schema,
+            table,
+            tls_mode,
+            tls_server_name,
+        )
     })
     .await
     .map_err(|e| format!("postgres_browse join: {e}"))?
@@ -7148,6 +7159,7 @@ fn postgres_browse_blocking(
     schema: Option<String>,
     table: Option<String>,
     tls_mode: Option<String>,
+    tls_server_name: Option<String>,
 ) -> Result<PostgresBrowserState, String> {
     let resolved_host = host.trim();
     let resolved_user = user.trim();
@@ -7164,6 +7176,7 @@ fn postgres_browse_blocking(
         tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
             tls_mode.as_deref().unwrap_or_default(),
         ),
+        tls_server_name,
     })
     .map_err(|e| e.to_string())?;
 
@@ -7579,6 +7592,7 @@ async fn postgres_execute(
     sql: String,
     read_only: bool,
     tls_mode: Option<String>,
+    tls_server_name: Option<String>,
 ) -> Result<QueryExecutionResult, String> {
     if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
         return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
@@ -7593,6 +7607,7 @@ async fn postgres_execute(
             tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
                 tls_mode.as_deref().unwrap_or_default(),
             ),
+            tls_server_name,
         })
         .map_err(|e| e.to_string())?;
 
@@ -7651,6 +7666,7 @@ async fn mssql_execute(
     sql: String,
     read_only: bool,
     tls_mode: Option<String>,
+    tls_server_name: Option<String>,
 ) -> Result<QueryExecutionResult, String> {
     if read_only && !pier_core::sql_guard::is_read_only_sql(&sql) {
         return Err(pier_core::sql_guard::READ_ONLY_REJECT_MSG.into());
@@ -7665,6 +7681,7 @@ async fn mssql_execute(
             tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
                 tls_mode.as_deref().unwrap_or_default(),
             ),
+            tls_server_name,
         })
         .map_err(|e| e.to_string())?;
 
@@ -7684,6 +7701,7 @@ async fn mssql_overview(
     password: String,
     database: Option<String>,
     tls_mode: Option<String>,
+    tls_server_name: Option<String>,
 ) -> Result<SqlServerOverview, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut client = SqlServerClient::connect_blocking(SqlServerConfig {
@@ -7695,6 +7713,7 @@ async fn mssql_overview(
             tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
                 tls_mode.as_deref().unwrap_or_default(),
             ),
+            tls_server_name,
         })
         .map_err(|e| e.to_string())?;
 
@@ -7735,6 +7754,7 @@ async fn mssql_columns(
     schema: String,
     table: String,
     tls_mode: Option<String>,
+    tls_server_name: Option<String>,
 ) -> Result<Vec<SqlServerColumnView>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut client = SqlServerClient::connect_blocking(SqlServerConfig {
@@ -7746,6 +7766,7 @@ async fn mssql_columns(
             tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
                 tls_mode.as_deref().unwrap_or_default(),
             ),
+            tls_server_name,
         })
         .map_err(|e| e.to_string())?;
 
@@ -8028,6 +8049,7 @@ async fn postgres_list_activity(
     password: String,
     database: Option<String>,
     tls_mode: Option<String>,
+    tls_server_name: Option<String>,
 ) -> Result<Vec<PgActivityRow>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = PostgresClient::connect_blocking(PostgresConfig {
@@ -8039,6 +8061,7 @@ async fn postgres_list_activity(
             tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
                 tls_mode.as_deref().unwrap_or_default(),
             ),
+            tls_server_name,
         })
         .map_err(|e| e.to_string())?;
         client.list_activity_blocking().map_err(|e| e.to_string())
@@ -8060,6 +8083,7 @@ async fn postgres_cancel_query(
     database: Option<String>,
     pid: i32,
     tls_mode: Option<String>,
+    tls_server_name: Option<String>,
 ) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = PostgresClient::connect_blocking(PostgresConfig {
@@ -8071,6 +8095,7 @@ async fn postgres_cancel_query(
             tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
                 tls_mode.as_deref().unwrap_or_default(),
             ),
+            tls_server_name,
         })
         .map_err(|e| e.to_string())?;
         client.cancel_query_blocking(pid).map_err(|e| e.to_string())
@@ -8090,6 +8115,7 @@ async fn postgres_terminate_backend(
     database: Option<String>,
     pid: i32,
     tls_mode: Option<String>,
+    tls_server_name: Option<String>,
 ) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = PostgresClient::connect_blocking(PostgresConfig {
@@ -8101,6 +8127,7 @@ async fn postgres_terminate_backend(
             tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
                 tls_mode.as_deref().unwrap_or_default(),
             ),
+            tls_server_name,
         })
         .map_err(|e| e.to_string())?;
         client
@@ -8132,6 +8159,7 @@ async fn db_test_connection(
     password: String,
     database: Option<String>,
     tls_mode: Option<String>,
+    tls_server_name: Option<String>,
 ) -> Result<DbTestConnectionResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let host_trim = host.trim();
@@ -8181,6 +8209,7 @@ async fn db_test_connection(
                     tls_mode: pier_core::services::db_tls::TlsMode::from_wire(
                         tls_mode.as_deref().unwrap_or_default(),
                     ),
+                    tls_server_name,
                 })
                 .map_err(|e| e.to_string())?;
                 let version = client

@@ -21,8 +21,11 @@ type Props = {
     password: string;
     database?: string | null;
     /** TLS posture, forwarded to the activity / cancel / terminate
-     *  connections. `off` on the tunneled (loopback) path. */
+     *  connections. */
     tlsMode?: DbTlsMode;
+    /** TLS validation host when the target is a loopback tunnel, so
+     *  verify-full checks the real DB host instead of 127.0.0.1. */
+    tlsServerName?: string;
   };
 };
 

@@ -3031,8 +3031,8 @@ export const zhExtra: Record<string, string> = {
   "Off — cleartext (SSH tunnel)": "关闭 —— 明文（走 SSH 隧道）",
   "Require — encrypt, trust any cert": "Require —— 加密，信任任意证书",
   "Verify-full — encrypt + verify cert": "Verify-full —— 加密并校验证书",
-  "Connecting to {host} in cleartext — the password and query data cross the network unencrypted. Pick Require / Verify-full, or connect through an SSH tunnel.":
-    "正在以明文连接 {host} —— 密码与查询数据将以未加密方式穿过网络。请选择 Require / Verify-full，或改走 SSH 隧道。",
+  "TLS is off — traffic to {host} (including the password) isn't encrypted to the database. An SSH tunnel only protects the hop to the SSH host; pick Require or Verify-full to encrypt the rest.":
+    "TLS 已关闭 —— 到 {host} 的流量（含密码）未加密直达数据库。SSH 隧道只保护到跳板机这一段；请选择 Require 或 Verify-full 加密其余链路。",
 
   // DB direct-connection TLS handshake failures (localizeMessage)
   "PostgreSQL TLS handshake failed: {detail}": "PostgreSQL TLS 握手失败：{detail}",

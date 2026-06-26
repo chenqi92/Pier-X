@@ -124,6 +124,7 @@ function SqlServerBody({ tab }: { tab: TabState }) {
         password: pw,
         database: database.trim() || null,
         tlsMode: target.tlsMode,
+        tlsServerName: target.tlsServerName,
       });
       setOverview(ov);
       if (ov.currentDatabase && ov.currentDatabase !== tab.mssqlDatabase) {
@@ -166,6 +167,7 @@ function SqlServerBody({ tab }: { tab: TabState }) {
           database: tab.mssqlDatabase.trim() || null,
           sql: q,
           tlsMode: target.tlsMode,
+          tlsServerName: target.tlsServerName,
         }),
       );
     } catch (e) {
@@ -190,6 +192,7 @@ function SqlServerBody({ tab }: { tab: TabState }) {
         password: tab.mssqlPassword,
         database: tab.mssqlDatabase.trim() || null,
         tlsMode: target.tlsMode,
+        tlsServerName: target.tlsServerName,
       };
       const [cols, rows] = await Promise.all([
         cmd.mssqlColumns({ ...base, schema, table: name }),

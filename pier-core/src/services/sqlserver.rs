@@ -75,6 +75,15 @@ pub struct SqlServerConfig {
     /// connections keep encryption disabled exactly as before.
     #[serde(default)]
     pub tls_mode: super::db_tls::TlsMode,
+    /// TLS server name to validate the certificate against, when it
+    /// differs from [`host`](Self::host). Set when connecting through a
+    /// loopback indirection (SSH tunnel / egress forwarder): `host` is
+    /// then `127.0.0.1` (the TCP target) while this carries the real DB
+    /// hostname tiberius validates the cert against, so `verify-full`
+    /// works through a tunnel. `None`/empty → validate against `host`.
+    /// Ignored when `tls_mode` is `Off`.
+    #[serde(default)]
+    pub tls_server_name: Option<String>,
 }
 
 /// Full query result. Same shape as [`super::postgres::QueryResult`].
@@ -154,7 +163,21 @@ impl SqlServerClient {
         }
 
         let mut cfg = Config::new();
-        cfg.host(&config.host);
+        // tiberius uses `cfg.host` as the TLS validation name, but the TCP
+        // target is the stream we hand it below — so when connecting through
+        // a loopback tunnel we set the host to the real DB name (for
+        // verify-full) while still dialing `config.host` (127.0.0.1). `Off`
+        // keeps the host as-is (byte-identical legacy path).
+        let tls_name = if config.tls_mode.is_off() {
+            None
+        } else {
+            config
+                .tls_server_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        };
+        cfg.host(tls_name.unwrap_or(config.host.as_str()));
         cfg.port(config.port);
         cfg.authentication(AuthMethod::sql_server(&config.user, &config.password));
         if let Some(db) = config.database.as_ref().filter(|d| !d.is_empty()) {
@@ -179,8 +202,11 @@ impl SqlServerClient {
             }
         }
 
-        let addr = cfg.get_addr();
-        let tcp = TcpStream::connect(addr)
+        // Always dial the configured target (loopback when tunneled),
+        // independent of the TLS validation name set on `cfg` above —
+        // `cfg.get_addr()` would otherwise resolve the TLS name and bypass
+        // the tunnel.
+        let tcp = TcpStream::connect((config.host.as_str(), config.port))
             .await
             .map_err(|e| SqlServerError::Io(e.to_string()))?;
         tcp.set_nodelay(true).ok();

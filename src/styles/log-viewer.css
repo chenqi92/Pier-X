@@ -234,7 +234,7 @@
   border: 1px solid var(--line-2);
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: var(--size-micro);
   font-weight: 600;
   letter-spacing: 0.04em;
   padding: 0 var(--sp-2) 0 5px;
@@ -252,7 +252,7 @@
   background: currentColor;
 }
 .lg-chip-n {
-  font-size: 9px;
+  font-size: var(--size-micro);
   color: var(--muted);
   padding-left: 2px;
 }
@@ -304,7 +304,7 @@
   padding: var(--sp-1) 0;
   background: var(--bg);
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--size-small);
   line-height: 1.6;
 }
 .lg-line {
@@ -367,7 +367,7 @@
 }
 .lg-lvl {
   font-weight: 700;
-  font-size: 9.5px;
+  font-size: var(--size-micro);
   letter-spacing: 0.04em;
   padding: 1px var(--sp-1);
   border-radius: 3px;
@@ -392,7 +392,7 @@
 }
 .lg-msg {
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: var(--size-small);
 }
 .lg-body.wrap .lg-msg {
   white-space: pre-wrap;

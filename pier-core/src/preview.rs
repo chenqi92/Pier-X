@@ -75,8 +75,7 @@ pub fn detect_prefix(prefix: &[u8]) -> PrefixDetection {
             label: "binary".to_string(),
         };
     }
-    let mut detector =
-        chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
+    let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
     detector.feed(prefix, true);
     let encoding = detector.guess(None, chardetng::Utf8Detection::Allow);
     PrefixDetection {
@@ -251,7 +250,14 @@ where
     F: FnMut(TextStreamChunk) + Send,
 {
     crate::ssh::runtime::shared().block_on(stream_remote_text(
-        client, path, start, max_bytes, chunk_bytes, total_size, on_chunk, cancel,
+        client,
+        path,
+        start,
+        max_bytes,
+        chunk_bytes,
+        total_size,
+        on_chunk,
+        cancel,
     ))
 }
 

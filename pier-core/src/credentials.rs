@@ -176,7 +176,6 @@ pub fn elevation_credential_id(user: &str, host: &str, port: u16) -> String {
     format!("pier-x.elev.{user}@{host}:{port}")
 }
 
-
 #[cfg(test)]
 mod tests {
     // Note: keyring tests are intentionally not run in CI because they

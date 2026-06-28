@@ -290,8 +290,7 @@ pub fn load() -> Result<WebhookConfig, String> {
     if !path.exists() {
         return Ok(WebhookConfig::default());
     }
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     serde_json::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.display()))
 }
 
@@ -304,11 +303,9 @@ pub fn save(cfg: &WebhookConfig) -> Result<(), String> {
         return Err("webhook config path is not set".to_string());
     };
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    let body =
-        serde_json::to_string_pretty(cfg).map_err(|e| format!("serialise webhooks: {e}"))?;
+    let body = serde_json::to_string_pretty(cfg).map_err(|e| format!("serialise webhooks: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, body).map_err(|e| format!("write {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("rename to {}: {e}", path.display()))?;
@@ -343,12 +340,7 @@ pub fn fire_event_blocking(
         if entry.disabled {
             continue;
         }
-        if !entry.events.is_empty()
-            && !entry
-                .events
-                .iter()
-                .any(|k| k.as_str() == payload.event)
-        {
+        if !entry.events.is_empty() && !entry.events.iter().any(|k| k.as_str() == payload.event) {
             continue;
         }
         let body = render_body(payload, &entry.body_template);
@@ -448,8 +440,7 @@ pub fn append_failure(record: &WebhookFailureRecord) -> Result<(), String> {
         None => return Err("webhook config path is not set".to_string()),
     };
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
 
     // Read existing lines (cheap — file is bounded). Adding +1 to
@@ -465,15 +456,14 @@ pub fn append_failure(record: &WebhookFailureRecord) -> Result<(), String> {
     } else {
         Vec::new()
     };
-    let new_line = serde_json::to_string(record)
-        .map_err(|e| format!("serialise failure record: {e}"))?;
+    let new_line =
+        serde_json::to_string(record).map_err(|e| format!("serialise failure record: {e}"))?;
     let kept = trim_failure_log(existing, new_line, FAILURE_LOG_MAX_ENTRIES);
     let mut body = kept.join("\n");
     body.push('\n');
     let tmp = path.with_extension("jsonl.tmp");
     std::fs::write(&tmp, body).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| format!("rename to {}: {e}", path.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename to {}: {e}", path.display()))?;
     Ok(())
 }
 
@@ -482,11 +472,7 @@ pub fn append_failure(record: &WebhookFailureRecord) -> Result<(), String> {
 /// [`append_failure`] so the cap behaviour can be tested without
 /// touching the filesystem (which would race other tests sharing
 /// the global `CONFIG_PATH` OnceLock).
-fn trim_failure_log(
-    mut existing: Vec<String>,
-    new_line: String,
-    max: usize,
-) -> Vec<String> {
+fn trim_failure_log(mut existing: Vec<String>, new_line: String, max: usize) -> Vec<String> {
     existing.push(new_line);
     if existing.len() > max {
         let drop = existing.len() - max;
@@ -507,8 +493,8 @@ pub fn list_failures() -> Result<Vec<WebhookFailureRecord>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let mut out: Vec<WebhookFailureRecord> = raw
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -529,8 +515,8 @@ pub fn dismiss_failure(id: &str) -> Result<bool, String> {
     if !path.exists() {
         return Ok(false);
     }
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let mut hit = false;
     let kept: Vec<&str> = raw
         .lines()
@@ -558,8 +544,7 @@ pub fn dismiss_failure(id: &str) -> Result<bool, String> {
     };
     let tmp = path.with_extension("jsonl.tmp");
     std::fs::write(&tmp, body).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| format!("rename to {}: {e}", path.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename to {}: {e}", path.display()))?;
     Ok(hit)
 }
 
@@ -573,8 +558,7 @@ pub fn clear_failures() -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }
-    std::fs::remove_file(&path)
-        .map_err(|e| format!("remove {}: {e}", path.display()))?;
+    std::fs::remove_file(&path).map_err(|e| format!("remove {}: {e}", path.display()))?;
     Ok(())
 }
 
@@ -932,7 +916,11 @@ mod tests {
 
     #[test]
     fn invalid_url_surfaces_zero_status_with_error() {
-        let report = fire_one_blocking("ftp://example.invalid/no", &sample_payload("test"), Duration::from_millis(50));
+        let report = fire_one_blocking(
+            "ftp://example.invalid/no",
+            &sample_payload("test"),
+            Duration::from_millis(50),
+        );
         assert_eq!(report.status_code, 0);
         assert!(report.error.contains("http://"));
     }
@@ -994,10 +982,7 @@ mod tests {
 
     #[test]
     fn discord_template_substitutes_text() {
-        let body = render_body(
-            &sample_payload("install"),
-            "{\"content\":\"{{text}}\"}",
-        );
+        let body = render_body(&sample_payload("install"), "{\"content\":\"{{text}}\"}");
         assert_eq!(body, "{\"content\":\"Pier-X · test\"}");
     }
 
@@ -1010,8 +995,7 @@ mod tests {
         payload.text = String::from(r#"hello "world""#);
         let body = render_body(&payload, "{\"content\":\"{{text}}\"}");
         // Result should be valid JSON we can re-parse.
-        let parsed: serde_json::Value =
-            serde_json::from_str(&body).expect("re-parse");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("re-parse");
         assert_eq!(parsed["content"], r#"hello "world""#);
     }
 
@@ -1025,14 +1009,8 @@ mod tests {
 
     #[test]
     fn template_supports_both_snake_and_camel_placeholders() {
-        let body_snake = render_body(
-            &sample_payload("install"),
-            "{\"id\":\"{{package_id}}\"}",
-        );
-        let body_camel = render_body(
-            &sample_payload("install"),
-            "{\"id\":\"{{packageId}}\"}",
-        );
+        let body_snake = render_body(&sample_payload("install"), "{\"id\":\"{{package_id}}\"}");
+        let body_camel = render_body(&sample_payload("install"), "{\"id\":\"{{packageId}}\"}");
         assert_eq!(body_snake, body_camel);
         assert!(body_snake.contains("redis"));
     }
@@ -1041,21 +1019,15 @@ mod tests {
     fn template_substitutes_output_tail() {
         let mut payload = sample_payload("install");
         payload.output_tail = "Reading package lists...\nE: Unable to locate".to_string();
-        let body = render_body(
-            &payload,
-            "{\"content\":\"```\\n{{outputTail}}\\n```\"}",
-        );
+        let body = render_body(&payload, "{\"content\":\"```\\n{{outputTail}}\\n```\"}");
         // JSON-escape should turn the newline into \n (literal
         // backslash + n in the JSON string), so re-parsing back
         // round-trips the original text.
-        let parsed: serde_json::Value =
-            serde_json::from_str(&body).expect("re-parse");
-        assert!(
-            parsed["content"]
-                .as_str()
-                .unwrap_or("")
-                .contains("Unable to locate")
-        );
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("re-parse");
+        assert!(parsed["content"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Unable to locate"));
     }
 
     #[test]
@@ -1073,10 +1045,7 @@ mod tests {
         // Future-proof: a typo or a placeholder we don't support
         // shouldn't silently disappear — leave it as-is so the
         // operator notices when their webhook server complains.
-        let body = render_body(
-            &sample_payload("install"),
-            "{\"unknown\":\"{{nope}}\"}",
-        );
+        let body = render_body(&sample_payload("install"), "{\"unknown\":\"{{nope}}\"}");
         assert!(body.contains("{{nope}}"));
     }
 

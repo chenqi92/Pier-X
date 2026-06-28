@@ -237,7 +237,10 @@ async fn detect_redis(session: &SshSession) -> Option<DetectedService> {
 }
 
 async fn detect_postgresql(session: &SshSession) -> Option<DetectedService> {
-    let (code, _) = session.exec_with_sudo("which psql 2>/dev/null").await.ok()?;
+    let (code, _) = session
+        .exec_with_sudo("which psql 2>/dev/null")
+        .await
+        .ok()?;
     if code != 0 {
         // Containerized Postgres publishing 5432.
         return if port_listening(session, 5432).await {
@@ -347,7 +350,9 @@ async fn detect_nanolink(session: &SshSession) -> Option<DetectedService> {
     // a containerized server with no host binary).
     let server_live = port_listening(session, 8080).await
         && session
-            .exec_with_sudo("curl -fsS -m 3 http://localhost:8080/api/health >/dev/null 2>&1 && echo yes")
+            .exec_with_sudo(
+                "curl -fsS -m 3 http://localhost:8080/api/health >/dev/null 2>&1 && echo yes",
+            )
             .await
             .map(|(_, o)| o.contains("yes"))
             .unwrap_or(false);

@@ -128,7 +128,9 @@ pub fn list_models(cfg: &ProviderConfig) -> Result<Vec<String>, AiError> {
     match cfg.kind {
         ProviderKind::Anthropic => {
             let key = cfg.api_key.as_deref().ok_or(AiError::MissingKey)?;
-            req = req.set("x-api-key", key).set("anthropic-version", "2023-06-01");
+            req = req
+                .set("x-api-key", key)
+                .set("anthropic-version", "2023-06-01");
         }
         ProviderKind::Openai | ProviderKind::Ollama => {
             if let Some(key) = cfg.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
@@ -236,7 +238,10 @@ fn map_ureq_error(err: ureq::Error) -> AiError {
                 }
             }
             body.truncate(500);
-            AiError::Api { status, message: body }
+            AiError::Api {
+                status,
+                message: body,
+            }
         }
         ureq::Error::Transport(t) => AiError::Http(t.to_string()),
     }
@@ -355,10 +360,18 @@ fn stream_openai(
             Err(_) => continue, // tolerate keep-alive noise from compat servers
         };
         if let Some(usage) = chunk.get("usage").filter(|u| !u.is_null()) {
-            input_tokens = usage.get("prompt_tokens").and_then(Value::as_u64).or(input_tokens);
-            output_tokens = usage.get("completion_tokens").and_then(Value::as_u64).or(output_tokens);
+            input_tokens = usage
+                .get("prompt_tokens")
+                .and_then(Value::as_u64)
+                .or(input_tokens);
+            output_tokens = usage
+                .get("completion_tokens")
+                .and_then(Value::as_u64)
+                .or(output_tokens);
         }
-        let Some(choice) = chunk.pointer("/choices/0") else { continue };
+        let Some(choice) = chunk.pointer("/choices/0") else {
+            continue;
+        };
         if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
             stop = match reason {
                 "stop" => StopKind::EndTurn,
@@ -367,7 +380,9 @@ fn stream_openai(
                 _ => StopKind::Other,
             };
         }
-        let Some(delta) = choice.get("delta") else { continue };
+        let Some(delta) = choice.get("delta") else {
+            continue;
+        };
         if let Some(content) = delta.get("content").and_then(Value::as_str) {
             if !content.is_empty() {
                 text.push_str(content);
@@ -399,7 +414,11 @@ fn stream_openai(
         .enumerate()
         .filter(|(_, (_, name, _))| !name.is_empty())
         .map(|(i, (id, name, args))| ToolCall {
-            id: if id.is_empty() { format!("call_{i}") } else { id },
+            id: if id.is_empty() {
+                format!("call_{i}")
+            } else {
+                id
+            },
             name,
             arguments: if args.is_empty() { "{}".into() } else { args },
         })
@@ -408,7 +427,13 @@ fn stream_openai(
         stop = StopKind::ToolUse;
     }
 
-    Ok(TurnOutcome { text, tool_calls, input_tokens, output_tokens, stop })
+    Ok(TurnOutcome {
+        text,
+        tool_calls,
+        input_tokens,
+        output_tokens,
+        stop,
+    })
 }
 
 // ── Anthropic ──────────────────────────────────────────────────────
@@ -457,9 +482,7 @@ fn anthropic_messages(messages: &[ChatMessage]) -> Vec<Value> {
                     .last_mut()
                     .filter(|last| {
                         last.get("role").and_then(Value::as_str) == Some("user")
-                            && last
-                                .pointer("/content/0/type")
-                                .and_then(Value::as_str)
+                            && last.pointer("/content/0/type").and_then(Value::as_str)
                                 == Some("tool_result")
                     })
                     .map(|last| {
@@ -563,13 +586,21 @@ fn stream_anthropic(
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    tool_calls.push(ToolCall { id, name, arguments: String::new() });
+                    tool_calls.push(ToolCall {
+                        id,
+                        name,
+                        arguments: String::new(),
+                    });
                     open_tool_blocks.push((index, tool_calls.len() - 1));
                 }
             }
             "content_block_delta" => {
                 let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                match event.pointer("/delta/type").and_then(Value::as_str).unwrap_or("") {
+                match event
+                    .pointer("/delta/type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                {
                     "text_delta" => {
                         if let Some(t) = event.pointer("/delta/text").and_then(Value::as_str) {
                             text.push_str(t);
@@ -626,7 +657,13 @@ fn stream_anthropic(
         stop = StopKind::ToolUse;
     }
 
-    Ok(TurnOutcome { text, tool_calls, input_tokens, output_tokens, stop })
+    Ok(TurnOutcome {
+        text,
+        tool_calls,
+        input_tokens,
+        output_tokens,
+        stop,
+    })
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
@@ -641,13 +678,20 @@ mod tests {
             ChatMessage::user("list files"),
             ChatMessage::assistant(
                 "",
-                vec![ToolCall { id: "call_1".into(), name: "run_command".into(), arguments: "{\"command\":\"ls\"}".into() }],
+                vec![ToolCall {
+                    id: "call_1".into(),
+                    name: "run_command".into(),
+                    arguments: "{\"command\":\"ls\"}".into(),
+                }],
             ),
             ChatMessage::tool_result("call_1", "a.txt\nb.txt"),
         ];
         let mapped = openai_messages("sys", &msgs);
         assert_eq!(mapped[0]["role"], "system");
-        assert_eq!(mapped[2]["tool_calls"][0]["function"]["name"], "run_command");
+        assert_eq!(
+            mapped[2]["tool_calls"][0]["function"]["name"],
+            "run_command"
+        );
         assert_eq!(mapped[3]["role"], "tool");
         assert_eq!(mapped[3]["tool_call_id"], "call_1");
     }
@@ -659,8 +703,16 @@ mod tests {
             ChatMessage::assistant(
                 "",
                 vec![
-                    ToolCall { id: "a".into(), name: "x".into(), arguments: "{}".into() },
-                    ToolCall { id: "b".into(), name: "y".into(), arguments: "{}".into() },
+                    ToolCall {
+                        id: "a".into(),
+                        name: "x".into(),
+                        arguments: "{}".into(),
+                    },
+                    ToolCall {
+                        id: "b".into(),
+                        name: "y".into(),
+                        arguments: "{}".into(),
+                    },
                 ],
             ),
             ChatMessage::tool_result("a", "ra"),
@@ -686,8 +738,17 @@ mod tests {
             cli_cwd: None,
             cli_extra_args: Vec::new(),
         };
-        assert_eq!(mk(ProviderKind::Anthropic).effective_base_url(), "https://api.anthropic.com");
-        assert_eq!(mk(ProviderKind::Openai).effective_base_url(), "https://api.openai.com/v1");
-        assert_eq!(mk(ProviderKind::Ollama).effective_base_url(), "http://localhost:11434/v1");
+        assert_eq!(
+            mk(ProviderKind::Anthropic).effective_base_url(),
+            "https://api.anthropic.com"
+        );
+        assert_eq!(
+            mk(ProviderKind::Openai).effective_base_url(),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            mk(ProviderKind::Ollama).effective_base_url(),
+            "http://localhost:11434/v1"
+        );
     }
 }

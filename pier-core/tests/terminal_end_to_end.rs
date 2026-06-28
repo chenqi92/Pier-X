@@ -4,8 +4,8 @@
 //!
 //! This is the smallest test that exercises the whole M2a surface —
 //! PTY + emulator together — without touching any UI code. If this
-//! passes, the Rust side of M2 is functional and M2b can start wiring
-//! it into Qt with confidence.
+//! passes, the Rust side of M2 is functional and the Tauri shell can
+//! wire it into the terminal UI with confidence.
 
 #![cfg(unix)]
 

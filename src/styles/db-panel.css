@@ -242,7 +242,7 @@
 
 /* env tag: prod / stage / dev / local */
 .db-env-tag {
-  font-size: 8.5px;
+  font-size: var(--size-micro);
   padding: 1px var(--sp-1);
   border-radius: var(--radius-xs);
   letter-spacing: 0.08em;
@@ -643,7 +643,7 @@
   font-family: var(--mono);
 }
 .dbt-pill {
-  font-size: 8.5px;
+  font-size: var(--size-micro);
   color: var(--accent);
   padding: 0 var(--sp-1);
   border-radius: var(--radius-xs);

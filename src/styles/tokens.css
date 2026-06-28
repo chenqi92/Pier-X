@@ -54,6 +54,7 @@
   --warn: #ffb547;
   --warn-dim: #3e2c14;
   --info: #7aa2f7;
+  --status-ink: #0a1420;
 
   /* ── Git diff / syntax ───────────────────────────────────── */
   --add: #3dd68c;
@@ -175,6 +176,7 @@
   --pos-dim: #cdeedb;
   --neg-dim: #f9d3d5;
   --warn-dim: #f7e4bf;
+  --status-ink: #0a1420;
 
   /* ── Code syntax accents (light-theme overrides) ────────── */
   --syntax-func: #7a4bd4;

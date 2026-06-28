@@ -144,14 +144,18 @@ pub struct ServerAgent {
 // ─────────────────────────────────────────────────────────
 
 /// Probe a host for NanoLink and classify its role.
+#[allow(clippy::field_reassign_with_default)]
 pub async fn status(session: &SshSession) -> Result<NanoLinkStatus> {
     let mut s = NanoLinkStatus::default();
 
     // ── Agent presence ───────────────────────────────────
-    s.has_agent = run(session, "command -v nanolink-agent >/dev/null 2>&1 && echo yes")
-        .await
-        .1
-        .contains("yes");
+    s.has_agent = run(
+        session,
+        "command -v nanolink-agent >/dev/null 2>&1 && echo yes",
+    )
+    .await
+    .1
+    .contains("yes");
     s.agent_config_path = run(
         session,
         "for p in /etc/nanolink/nanolink.yaml /etc/nanolink.yaml /etc/nanolink/nanolink.toml \
@@ -173,10 +177,13 @@ pub async fn status(session: &SshSession) -> Result<NanoLinkStatus> {
     }
 
     // ── Server presence ──────────────────────────────────
-    s.has_server = run(session, "command -v nanolink-server >/dev/null 2>&1 && echo yes")
-        .await
-        .1
-        .contains("yes");
+    s.has_server = run(
+        session,
+        "command -v nanolink-server >/dev/null 2>&1 && echo yes",
+    )
+    .await
+    .1
+    .contains("yes");
     let unit_server = unit_active(session, "nanolink-server").await;
     if unit_server {
         s.has_server = true;
@@ -358,10 +365,7 @@ pub async fn agent_service_action(session: &SshSession, action: &str) -> Result<
 }
 
 /// Blocking twin of [`agent_service_action`].
-pub fn agent_service_action_blocking(
-    session: &SshSession,
-    action: &str,
-) -> Result<CommandReport> {
+pub fn agent_service_action_blocking(session: &SshSession, action: &str) -> Result<CommandReport> {
     crate::ssh::runtime::shared().block_on(agent_service_action(session, action))
 }
 
@@ -405,8 +409,9 @@ pub fn agent_add_server_blocking(
     permission: u8,
     no_tls: bool,
 ) -> Result<CommandReport> {
-    crate::ssh::runtime::shared()
-        .block_on(agent_add_server(session, host, port, token, permission, no_tls))
+    crate::ssh::runtime::shared().block_on(agent_add_server(
+        session, host, port, token, permission, no_tls,
+    ))
 }
 
 /// Remove a server upstream (`nanolink-agent server remove`). Needs sudo.
@@ -487,15 +492,12 @@ pub fn server_login_blocking(
 
 /// Fetch the cluster summary (`/api/summary`). `jwt` may be empty when
 /// the server has auth disabled.
-pub async fn server_summary(
-    session: &SshSession,
-    port: u16,
-    jwt: &str,
-) -> Result<ServerSummary> {
+pub async fn server_summary(session: &SshSession, port: u16, jwt: &str) -> Result<ServerSummary> {
     let v = server_get_json(session, port, "/api/summary", jwt).await?;
     // Some builds wrap the payload under `data`.
     let v = v.get("data").cloned().unwrap_or(v);
-    serde_json::from_value(v).map_err(|e| SshError::InvalidConfig(format!("解析 summary 失败: {e}")))
+    serde_json::from_value(v)
+        .map_err(|e| SshError::InvalidConfig(format!("解析 summary 失败: {e}")))
 }
 
 /// Blocking twin of [`server_summary`].
@@ -509,11 +511,7 @@ pub fn server_summary_blocking(
 
 /// Fetch the agent list (`/api/agents`). Tolerates either a bare array
 /// or an envelope (`{agents:[…]}` / `{data:[…]}`).
-pub async fn server_agents(
-    session: &SshSession,
-    port: u16,
-    jwt: &str,
-) -> Result<Vec<ServerAgent>> {
+pub async fn server_agents(session: &SshSession, port: u16, jwt: &str) -> Result<Vec<ServerAgent>> {
     let v = server_get_json(session, port, "/api/agents", jwt).await?;
     let arr = if v.is_array() {
         v
@@ -589,8 +587,15 @@ pub async fn server_generate_config(
         "hostname": hostname,
     })
     .to_string();
-    let (code, out) =
-        server_curl(session, "POST", port, "/api/config/generate", jwt, Some(&body)).await?;
+    let (code, out) = server_curl(
+        session,
+        "POST",
+        port,
+        "/api/config/generate",
+        jwt,
+        Some(&body),
+    )
+    .await?;
     if code == 200 {
         serde_json::from_str(&out)
             .map_err(|e| SshError::InvalidConfig(format!("解析配置生成响应失败: {e}")))
@@ -660,8 +665,9 @@ pub fn server_send_command_blocking(
     cmd_type: &str,
     target: &str,
 ) -> Result<CommandDispatch> {
-    crate::ssh::runtime::shared()
-        .block_on(server_send_command(session, port, jwt, agent_id, cmd_type, target))
+    crate::ssh::runtime::shared().block_on(server_send_command(
+        session, port, jwt, agent_id, cmd_type, target,
+    ))
 }
 
 /// One poll of a dispatched command's result
@@ -710,8 +716,9 @@ pub fn server_command_result_blocking(
     agent_id: &str,
     command_id: &str,
 ) -> Result<CommandResult> {
-    crate::ssh::runtime::shared()
-        .block_on(server_command_result(session, port, jwt, agent_id, command_id))
+    crate::ssh::runtime::shared().block_on(server_command_result(
+        session, port, jwt, agent_id, command_id,
+    ))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -859,9 +866,8 @@ fn curl_error(code: u16, body: &str) -> String {
 /// URL metacharacters (spaces, `/`, quotes, `?`, `#`, …).
 fn guard_id(s: &str) -> Result<()> {
     let ok = !s.is_empty()
-        && s.bytes().all(|b| {
-            b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_' || b == b':'
-        });
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_' || b == b':');
     if ok {
         Ok(())
     } else {
@@ -895,7 +901,11 @@ fn find_session_cookie(raw: &str) -> Option<String> {
     const KEY: &str = "nanolink_session=";
     for line in raw.lines() {
         if let Some(idx) = line.find(KEY) {
-            let val = line[idx + KEY.len()..].split(';').next().unwrap_or("").trim();
+            let val = line[idx + KEY.len()..]
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim();
             if !val.is_empty() {
                 return Some(val.to_string());
             }
@@ -1039,7 +1049,10 @@ mod tests {
             find_token(r#"{"data":{"token":"abc.def"}}"#).as_deref(),
             Some("abc.def")
         );
-        assert_eq!(find_token(r#"{"accessToken":"zzz"}"#).as_deref(), Some("zzz"));
+        assert_eq!(
+            find_token(r#"{"accessToken":"zzz"}"#).as_deref(),
+            Some("zzz")
+        );
         assert_eq!(find_token(r#"{"nope":1}"#), None);
     }
 

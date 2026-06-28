@@ -72,8 +72,7 @@ fn persist(file: &PinFile) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let bytes = serde_json::to_vec_pretty(file)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    let bytes = serde_json::to_vec_pretty(file).map_err(|e| io::Error::other(e.to_string()))?;
     // Write to a temp sibling then rename so a crash can't truncate the pins.
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, &bytes)?;

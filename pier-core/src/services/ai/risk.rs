@@ -39,22 +39,33 @@ pub fn classify_command(raw: &str) -> RiskAssessment {
     // Whole-line scans that don't survive tokenisation.
     if looks_like_fork_bomb(trimmed) {
         out.level = RiskLevel::L3;
-        out.reasons.push("fork bomb / inline function definition".into());
+        out.reasons
+            .push("fork bomb / inline function definition".into());
         return out;
     }
 
     let split = split_compound(trimmed);
 
     if split.has_substitution {
-        raise(&mut out, RiskLevel::L2, "command substitution — cannot be statically inspected");
+        raise(
+            &mut out,
+            RiskLevel::L2,
+            "command substitution — cannot be statically inspected",
+        );
     }
 
     // `curl … | sh` style pipelines (L3 red line #7).
     for window in split.segments.windows(2) {
         let (left, right) = (&window[0], &window[1]);
-        if right.preceded_by_pipe && is_downloader(&left.tokens) && is_shell_interpreter(&right.tokens)
+        if right.preceded_by_pipe
+            && is_downloader(&left.tokens)
+            && is_shell_interpreter(&right.tokens)
         {
-            raise(&mut out, RiskLevel::L3, "piping a downloaded script straight into a shell");
+            raise(
+                &mut out,
+                RiskLevel::L3,
+                "piping a downloaded script straight into a shell",
+            );
         }
     }
 
@@ -75,14 +86,21 @@ pub fn classify_command(raw: &str) -> RiskAssessment {
             if lower.iter().any(|t| t == "-f" || t == "--flush") {
                 saw_flush = true;
             }
-            if lower.windows(3).any(|w| w[0] == "-p" && w[1] == "input" && w[2] == "drop") {
+            if lower
+                .windows(3)
+                .any(|w| w[0] == "-p" && w[1] == "input" && w[2] == "drop")
+            {
                 saw_input_drop = true;
             }
         }
     }
 
     if saw_flush && saw_input_drop {
-        raise(&mut out, RiskLevel::L3, "firewall flush combined with default-drop locks out the host");
+        raise(
+            &mut out,
+            RiskLevel::L3,
+            "firewall flush combined with default-drop locks out the host",
+        );
     }
 
     out.reasons.dedup();
@@ -213,7 +231,15 @@ fn sensitive_path_reason(path: &str) -> Option<&'static str> {
     }
     // Private-key / certificate material by extension.
     const KEY_EXTS: &[&str] = &[
-        ".pem", ".key", ".pfx", ".p12", ".keystore", ".jks", ".ppk", ".asc", ".gpg",
+        ".pem",
+        ".key",
+        ".pfx",
+        ".p12",
+        ".keystore",
+        ".jks",
+        ".ppk",
+        ".asc",
+        ".gpg",
     ];
     if KEY_EXTS.iter().any(|e| base.ends_with(e)) {
         return Some("private key / certificate material");
@@ -343,7 +369,10 @@ fn split_compound(input: &str) -> SplitResult {
     }
     push_segment(&mut segments, &mut current, &mut preceded_by_pipe, false);
 
-    SplitResult { segments, has_substitution }
+    SplitResult {
+        segments,
+        has_substitution,
+    }
 }
 
 fn push_segment(
@@ -432,7 +461,8 @@ fn classify_segment(tokens: &[String], depth: usize) -> RiskAssessment {
     let mut out = RiskAssessment::new(RiskLevel::L0);
     if depth > MAX_RECURSION {
         out.level = RiskLevel::L2;
-        out.reasons.push("nested command too deep to inspect".into());
+        out.reasons
+            .push("nested command too deep to inspect".into());
         return out;
     }
 
@@ -518,14 +548,18 @@ fn is_redirect_word(t: &str) -> bool {
 }
 
 fn is_env_assignment(token: &str) -> bool {
-    let Some(eq) = token.find('=') else { return false };
+    let Some(eq) = token.find('=') else {
+        return false;
+    };
     if eq == 0 {
         return false;
     }
     token[..eq]
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && token[..1].chars().all(|c| c.is_ascii_alphabetic() || c == '_')
+        && token[..1]
+            .chars()
+            .all(|c| c.is_ascii_alphabetic() || c == '_')
 }
 
 // ── Path predicates ────────────────────────────────────────────────
@@ -547,7 +581,12 @@ fn normalize_path_token(t: &str) -> String {
 fn is_root_critical_target(target: &str) -> bool {
     let t = normalize_path_token(target);
     let lower = t.to_ascii_lowercase();
-    if lower == "~" || lower == "~/" || lower == "$home" || lower == "${home}" || lower == "%userprofile%" {
+    if lower == "~"
+        || lower == "~/"
+        || lower == "$home"
+        || lower == "${home}"
+        || lower == "%userprofile%"
+    {
         return true;
     }
     if lower == "c:" || lower == "c:\\" || lower == "c:/" || lower == "c:\\*" || lower == "c:/*" {
@@ -560,10 +599,14 @@ fn is_root_critical_target(target: &str) -> bool {
 
 fn is_block_device(target: &str) -> bool {
     let t = target.trim();
-    let Some(dev) = t.strip_prefix("/dev/") else { return false };
-    ["sd", "hd", "vd", "xvd", "nvme", "mmcblk", "disk", "loop", "dm-", "md"]
-        .iter()
-        .any(|p| dev.starts_with(p))
+    let Some(dev) = t.strip_prefix("/dev/") else {
+        return false;
+    };
+    [
+        "sd", "hd", "vd", "xvd", "nvme", "mmcblk", "disk", "loop", "dm-", "md",
+    ]
+    .iter()
+    .any(|p| dev.starts_with(p))
 }
 
 fn is_critical_system_file(target: &str) -> bool {
@@ -592,25 +635,41 @@ fn apply_redirect_rules(tokens: &[String], out: &mut RiskAssessment) {
     let mut i = 0;
     while i < tokens.len() {
         let t = &tokens[i];
-        let target: Option<String> = if t == ">" || t == ">>" || t == "1>" || t == "2>" || t == "&>" {
+        let target: Option<String> = if t == ">" || t == ">>" || t == "1>" || t == "2>" || t == "&>"
+        {
             tokens.get(i + 1).cloned()
         } else if let Some(rest) = t
             .strip_prefix(">>")
             .or_else(|| t.strip_prefix("&>"))
             .or_else(|| t.strip_prefix('>'))
         {
-            if rest.is_empty() { None } else { Some(rest.to_string()) }
+            if rest.is_empty() {
+                None
+            } else {
+                Some(rest.to_string())
+            }
         } else {
             None
         };
         if let Some(target) = target {
             if is_block_device(&target) {
-                raise(out, RiskLevel::L3, "redirect writes directly to a block device");
+                raise(
+                    out,
+                    RiskLevel::L3,
+                    "redirect writes directly to a block device",
+                );
             } else if is_critical_system_file(&target) {
-                raise(out, RiskLevel::L3, "redirect truncates a critical system file");
+                raise(
+                    out,
+                    RiskLevel::L3,
+                    "redirect truncates a critical system file",
+                );
             } else if is_audit_log(&target) {
                 raise(out, RiskLevel::L3, "redirect erases an audit log");
-            } else if target != "/dev/null" && !target.starts_with("/dev/std") && target != "/dev/stderr" {
+            } else if target != "/dev/null"
+                && !target.starts_with("/dev/std")
+                && target != "/dev/stderr"
+            {
                 raise(out, RiskLevel::L1, "writes output to a file");
             }
         }
@@ -621,7 +680,9 @@ fn apply_redirect_rules(tokens: &[String], out: &mut RiskAssessment) {
 // ── Helper predicates for pipelines ────────────────────────────────
 
 fn is_downloader(tokens: &[String]) -> bool {
-    head_of(tokens).map(|h| h == "curl" || h == "wget").unwrap_or(false)
+    head_of(tokens)
+        .map(|h| h == "curl" || h == "wget")
+        .unwrap_or(false)
 }
 
 fn is_shell_interpreter(tokens: &[String]) -> bool {
@@ -697,15 +758,30 @@ fn classify_head(
     match head {
         // ── L3 territory ───────────────────────────────────────────
         "rm" => {
-            let recursive = has_flag(args, 'r', "--recursive") || has_flag(args, 'R', "--recursive");
+            let recursive =
+                has_flag(args, 'r', "--recursive") || has_flag(args, 'R', "--recursive");
             let no_preserve = lower_args.iter().any(|a| a == "--no-preserve-root");
-            let critical = non_flag_args(args).iter().any(|t| is_root_critical_target(t));
-            if no_preserve || (critical && recursive) || (critical && lower_args.iter().any(|a| a == "/*")) {
-                (RiskLevel::L3, Some("recursive delete of a root-level path".into()))
+            let critical = non_flag_args(args)
+                .iter()
+                .any(|t| is_root_critical_target(t));
+            if no_preserve
+                || (critical && recursive)
+                || (critical && lower_args.iter().any(|a| a == "/*"))
+            {
+                (
+                    RiskLevel::L3,
+                    Some("recursive delete of a root-level path".into()),
+                )
             } else if critical {
-                (RiskLevel::L3, Some("delete targets a root-level path".into()))
+                (
+                    RiskLevel::L3,
+                    Some("delete targets a root-level path".into()),
+                )
             } else {
-                (RiskLevel::L2, Some("file deletion is not recoverable".into()))
+                (
+                    RiskLevel::L2,
+                    Some("file deletion is not recoverable".into()),
+                )
             }
         }
         "shred" => {
@@ -713,7 +789,10 @@ fn classify_head(
                 .iter()
                 .any(|t| is_root_critical_target(t) || is_block_device(t) || is_audit_log(t));
             if critical {
-                (RiskLevel::L3, Some("shred targets a critical path or device".into()))
+                (
+                    RiskLevel::L3,
+                    Some("shred targets a critical path or device".into()),
+                )
             } else {
                 (RiskLevel::L2, Some("shred destroys file contents".into()))
             }
@@ -722,19 +801,33 @@ fn classify_head(
             for a in args {
                 if let Some(target) = a.strip_prefix("of=") {
                     if is_block_device(target) {
-                        return (RiskLevel::L3, Some("dd writes directly to a block device".into()));
+                        return (
+                            RiskLevel::L3,
+                            Some("dd writes directly to a block device".into()),
+                        );
                     }
                     if is_critical_system_file(target) {
-                        return (RiskLevel::L3, Some("dd overwrites a critical system file".into()));
+                        return (
+                            RiskLevel::L3,
+                            Some("dd overwrites a critical system file".into()),
+                        );
                     }
                 }
             }
             (RiskLevel::L2, Some("dd performs raw writes".into()))
         }
-        h if h.starts_with("mkfs") => (RiskLevel::L3, Some("mkfs destroys the target filesystem".into())),
-        "wipefs" => (RiskLevel::L3, Some("wipefs erases filesystem signatures".into())),
+        h if h.starts_with("mkfs") => (
+            RiskLevel::L3,
+            Some("mkfs destroys the target filesystem".into()),
+        ),
+        "wipefs" => (
+            RiskLevel::L3,
+            Some("wipefs erases filesystem signatures".into()),
+        ),
         "fdisk" | "sfdisk" | "gdisk" | "cfdisk" | "parted" | "diskpart" => {
-            let read_only = lower_args.iter().any(|a| a == "-l" || a == "--list" || a == "print")
+            let read_only = lower_args
+                .iter()
+                .any(|a| a == "-l" || a == "--list" || a == "print")
                 && head != "diskpart";
             if read_only {
                 (RiskLevel::L0, None)
@@ -748,14 +841,23 @@ fn classify_head(
                 .iter()
                 .any(|t| is_critical_system_file(t) || is_audit_log(t));
             if critical {
-                (RiskLevel::L3, Some("truncates a critical system file".into()))
+                (
+                    RiskLevel::L3,
+                    Some("truncates a critical system file".into()),
+                )
             } else {
                 (RiskLevel::L1, Some("truncates a file".into()))
             }
         }
         "history" => {
-            if lower_args.iter().any(|a| a == "-c" || a == "-cw" || a == "-wc") {
-                (RiskLevel::L3, Some("erases shell history (audit trail)".into()))
+            if lower_args
+                .iter()
+                .any(|a| a == "-c" || a == "-cw" || a == "-wc")
+            {
+                (
+                    RiskLevel::L3,
+                    Some("erases shell history (audit trail)".into()),
+                )
             } else {
                 (RiskLevel::L0, None)
             }
@@ -769,10 +871,17 @@ fn classify_head(
 
         // ── Filesystem writes ──────────────────────────────────────
         "chmod" | "chown" | "chgrp" => {
-            let recursive = has_flag(args, 'R', "--recursive") || has_flag(args, 'r', "--recursive");
-            let critical = non_flag_args(args).iter().skip(1).any(|t| is_root_critical_target(t));
+            let recursive =
+                has_flag(args, 'R', "--recursive") || has_flag(args, 'r', "--recursive");
+            let critical = non_flag_args(args)
+                .iter()
+                .skip(1)
+                .any(|t| is_root_critical_target(t));
             if recursive && critical {
-                (RiskLevel::L3, Some("recursive permission change on a root-level path".into()))
+                (
+                    RiskLevel::L3,
+                    Some("recursive permission change on a root-level path".into()),
+                )
             } else if recursive {
                 (RiskLevel::L2, Some("recursive permission change".into()))
             } else {
@@ -781,9 +890,14 @@ fn classify_head(
         }
         "cp" | "install" => (RiskLevel::L1, Some("copies files".into())),
         "mv" | "rename" => {
-            let critical = non_flag_args(args).iter().any(|t| is_critical_system_file(t));
+            let critical = non_flag_args(args)
+                .iter()
+                .any(|t| is_critical_system_file(t));
             if critical {
-                (RiskLevel::L2, Some("moves over a critical system file".into()))
+                (
+                    RiskLevel::L2,
+                    Some("moves over a critical system file".into()),
+                )
             } else {
                 (RiskLevel::L1, Some("moves files".into()))
             }
@@ -800,9 +914,14 @@ fn classify_head(
             }
         }
         "rsync" | "scp" => {
-            let remote = args.iter().any(|a| !a.starts_with('-') && a.contains(':') && !a.starts_with("/"));
+            let remote = args
+                .iter()
+                .any(|a| !a.starts_with('-') && a.contains(':') && !a.starts_with("/"));
             if remote {
-                (RiskLevel::L2, Some("transfers files to/from another host".into()))
+                (
+                    RiskLevel::L2,
+                    Some("transfers files to/from another host".into()),
+                )
             } else {
                 (RiskLevel::L1, Some("copies files".into()))
             }
@@ -815,7 +934,10 @@ fn classify_head(
             if listing {
                 (RiskLevel::L0, None)
             } else {
-                (RiskLevel::L1, Some("archive create/extract writes files".into()))
+                (
+                    RiskLevel::L1,
+                    Some("archive create/extract writes files".into()),
+                )
             }
         }
         "unzip" | "gzip" | "gunzip" | "zip" | "xz" | "unxz" | "zstd" | "bzip2" => {
@@ -825,8 +947,14 @@ fn classify_head(
         // ── Network egress ─────────────────────────────────────────
         "curl" | "wget" => (RiskLevel::L2, Some("network download / data egress".into())),
         "nc" | "ncat" | "netcat" | "socat" => (RiskLevel::L2, Some("raw network channel".into())),
-        "ssh" => (RiskLevel::L2, Some("opens a session on another host".into())),
-        "sftp" => (RiskLevel::L2, Some("transfers files to/from another host".into())),
+        "ssh" => (
+            RiskLevel::L2,
+            Some("opens a session on another host".into()),
+        ),
+        "sftp" => (
+            RiskLevel::L2,
+            Some("transfers files to/from another host".into()),
+        ),
 
         // ── Power / kernel ─────────────────────────────────────────
         "shutdown" | "reboot" | "halt" | "poweroff" => {
@@ -854,12 +982,18 @@ fn classify_head(
         "iptables" | "ip6tables" | "nft" | "ufw" | "firewall-cmd" => {
             let read_only = match head {
                 "iptables" | "ip6tables" => {
-                    lower_args.iter().any(|a| a == "-l" || a == "--list" || a == "-s" || a == "--list-rules")
-                        && !lower_args.iter().any(|a| a == "-f" || a == "--flush" || a == "-p")
+                    lower_args
+                        .iter()
+                        .any(|a| a == "-l" || a == "--list" || a == "-s" || a == "--list-rules")
+                        && !lower_args
+                            .iter()
+                            .any(|a| a == "-f" || a == "--flush" || a == "-p")
                 }
                 "nft" => lower_args.first().map(|a| a == "list").unwrap_or(false),
                 "ufw" => lower_args.first().map(|a| a == "status").unwrap_or(false),
-                "firewall-cmd" => lower_args.iter().all(|a| a.starts_with("--list") || a.starts_with("--get") || a == "--state"),
+                "firewall-cmd" => lower_args
+                    .iter()
+                    .all(|a| a.starts_with("--list") || a.starts_with("--get") || a == "--state"),
                 _ => false,
             };
             if read_only {
@@ -877,14 +1011,23 @@ fn classify_head(
             if action == "status" {
                 (RiskLevel::L0, None)
             } else if unit.contains("ssh") {
-                (RiskLevel::L2, Some("touches the SSH service (lock-out risk)".into()))
+                (
+                    RiskLevel::L2,
+                    Some("touches the SSH service (lock-out risk)".into()),
+                )
             } else {
                 (RiskLevel::L1, Some("service state change".into()))
             }
         }
         "journalctl" => {
-            if lower_args.iter().any(|a| a.starts_with("--vacuum") || a == "--rotate" || a == "--flush") {
-                (RiskLevel::L2, Some("journal maintenance discards logs".into()))
+            if lower_args
+                .iter()
+                .any(|a| a.starts_with("--vacuum") || a == "--rotate" || a == "--flush")
+            {
+                (
+                    RiskLevel::L2,
+                    Some("journal maintenance discards logs".into()),
+                )
             } else {
                 (RiskLevel::L0, None)
             }
@@ -917,9 +1060,15 @@ fn classify_head(
         // ── Databases (CLI passthrough) ────────────────────────────
         "mysql" | "mariadb" | "psql" | "sqlite3" => classify_sql_cli(&lower_args),
         "redis-cli" => {
-            if lower_args.iter().any(|a| a == "flushall" || a == "flushdb" || a == "shutdown") {
+            if lower_args
+                .iter()
+                .any(|a| a == "flushall" || a == "flushdb" || a == "shutdown")
+            {
                 (RiskLevel::L2, Some("destructive Redis command".into()))
-            } else if lower_args.iter().any(|a| a == "set" || a == "del" || a == "expire" || a == "config") {
+            } else if lower_args
+                .iter()
+                .any(|a| a == "set" || a == "del" || a == "expire" || a == "config")
+            {
                 (RiskLevel::L1, Some("Redis write".into()))
             } else {
                 (RiskLevel::L0, None)
@@ -933,13 +1082,20 @@ fn classify_head(
         "pip" | "pip3" | "npm" | "pnpm" | "yarn" | "cargo" | "gem" => {
             let sub = lower_args.first().cloned().unwrap_or_default();
             match sub.as_str() {
-                "list" | "show" | "search" | "view" | "info" | "outdated" | "tree" | "ls" | "--version"
-                | "config" if head != "npm" || sub != "config" => (RiskLevel::L0, None),
+                "list" | "show" | "search" | "view" | "info" | "outdated" | "tree" | "ls"
+                | "--version" | "config"
+                    if head != "npm" || sub != "config" =>
+                {
+                    (RiskLevel::L0, None)
+                }
                 "install" | "add" | "i" | "update" | "upgrade" | "build" | "run" => {
                     (RiskLevel::L1, Some("package / build operation".into()))
                 }
                 "uninstall" | "remove" | "rm" => (RiskLevel::L1, Some("removes a package".into())),
-                _ => (RiskLevel::L2, Some("unrecognised subcommand (fail-closed)".into())),
+                _ => (
+                    RiskLevel::L2,
+                    Some("unrecognised subcommand (fail-closed)".into()),
+                ),
             }
         }
 
@@ -955,11 +1111,17 @@ fn classify_head(
                     raise_with(out, inner_assessment);
                     return (level, Some("shell -c wrapper".into()));
                 }
-                (RiskLevel::L2, Some("shell -c with no inspectable body".into()))
+                (
+                    RiskLevel::L2,
+                    Some("shell -c with no inspectable body".into()),
+                )
             } else if args.is_empty() {
                 (RiskLevel::L2, Some("opens an interactive shell".into()))
             } else {
-                (RiskLevel::L2, Some("runs a script file (contents unknown)".into()))
+                (
+                    RiskLevel::L2,
+                    Some("runs a script file (contents unknown)".into()),
+                )
             }
         }
         "eval" | "exec" | "source" | "." => (RiskLevel::L2, Some("dynamic execution".into())),
@@ -1015,9 +1177,10 @@ fn classify_head(
                 (RiskLevel::L0, None)
             }
         }
-        "env" | "printenv" => {
-            (RiskLevel::L1, Some("environment variables may contain secrets".into()))
-        }
+        "env" | "printenv" => (
+            RiskLevel::L1,
+            Some("environment variables may contain secrets".into()),
+        ),
 
         // ── Hardware / GPU telemetry ───────────────────────────────
         // `nvidia-smi` is overwhelmingly used read-only (query / list /
@@ -1026,16 +1189,49 @@ fn classify_head(
         // GPU reset, MIG) escalates; everything else is L0.
         "nvidia-smi" | "rocm-smi" => {
             const MUTATING: &[&str] = &[
-                "-pl", "--power-limit", "-pm", "--persistence-mode", "-e", "--ecc-config",
-                "-r", "--gpu-reset", "-ac", "--applications-clocks", "-rac",
-                "--reset-applications-clocks", "-lgc", "--lock-gpu-clocks", "-rgc",
-                "--reset-gpu-clocks", "-lmc", "--lock-memory-clocks", "-rmc",
-                "--reset-memory-clocks", "-acp", "-cc", "--compute-mode", "-am",
-                "--accounting-mode", "-caa", "--clear-accounted-apps", "-mig",
-                "--multi-instance-gpu", "-dm", "--driver-model", "-fdm",
-                "--gpu-reset-ecc", "--auto-boost-default", "--auto-boost-permission",
-                "--setclocks", "--resetclocks", "--setpoweroverdrive", "--setfan",
-                "--resetfans", "--setperflevel", "--setsclk", "--setmclk",
+                "-pl",
+                "--power-limit",
+                "-pm",
+                "--persistence-mode",
+                "-e",
+                "--ecc-config",
+                "-r",
+                "--gpu-reset",
+                "-ac",
+                "--applications-clocks",
+                "-rac",
+                "--reset-applications-clocks",
+                "-lgc",
+                "--lock-gpu-clocks",
+                "-rgc",
+                "--reset-gpu-clocks",
+                "-lmc",
+                "--lock-memory-clocks",
+                "-rmc",
+                "--reset-memory-clocks",
+                "-acp",
+                "-cc",
+                "--compute-mode",
+                "-am",
+                "--accounting-mode",
+                "-caa",
+                "--clear-accounted-apps",
+                "-mig",
+                "--multi-instance-gpu",
+                "-dm",
+                "--driver-model",
+                "-fdm",
+                "--gpu-reset-ecc",
+                "--auto-boost-default",
+                "--auto-boost-permission",
+                "--setclocks",
+                "--resetclocks",
+                "--setpoweroverdrive",
+                "--setfan",
+                "--resetfans",
+                "--setperflevel",
+                "--setsclk",
+                "--setmclk",
             ];
             if lower_args.iter().any(|a| MUTATING.contains(&a.as_str())) {
                 (RiskLevel::L2, Some("changes GPU state".into()))
@@ -1046,11 +1242,16 @@ fn classify_head(
 
         // ── Windows / PowerShell (local tabs) ──────────────────────
         "del" | "erase" | "rd" => {
-            let critical = non_flag_args(args).iter().any(|t| is_root_critical_target(t));
+            let critical = non_flag_args(args)
+                .iter()
+                .any(|t| is_root_critical_target(t));
             if critical {
                 (RiskLevel::L3, Some("deletes a drive-root path".into()))
             } else {
-                (RiskLevel::L2, Some("file deletion is not recoverable".into()))
+                (
+                    RiskLevel::L2,
+                    Some("file deletion is not recoverable".into()),
+                )
             }
         }
         "format" => (RiskLevel::L3, Some("formats a volume".into())),
@@ -1063,23 +1264,36 @@ fn classify_head(
         }
         "taskkill" => (RiskLevel::L1, Some("terminates processes".into())),
         "netsh" => (RiskLevel::L2, Some("network configuration change".into())),
-        h if h.starts_with("get-") || h.starts_with("test-") || h.starts_with("measure-")
-            || h.starts_with("select-") || h.starts_with("format-") || h.starts_with("out-string") =>
+        h if h.starts_with("get-")
+            || h.starts_with("test-")
+            || h.starts_with("measure-")
+            || h.starts_with("select-")
+            || h.starts_with("format-")
+            || h.starts_with("out-string") =>
         {
             (RiskLevel::L0, None)
         }
         h if h.starts_with("remove-") || h.starts_with("clear-") => {
             (RiskLevel::L2, Some("PowerShell destructive verb".into()))
         }
-        h if h.starts_with("format-volume") || h.starts_with("clear-disk") || h.starts_with("initialize-disk") => {
+        h if h.starts_with("format-volume")
+            || h.starts_with("clear-disk")
+            || h.starts_with("initialize-disk") =>
+        {
             (RiskLevel::L3, Some("disk-level destruction".into()))
         }
         h if h.starts_with("stop-computer") || h.starts_with("restart-computer") => {
             (RiskLevel::L2, Some("power-state change".into()))
         }
-        h if h.starts_with("set-") || h.starts_with("new-") || h.starts_with("copy-")
-            || h.starts_with("move-") || h.starts_with("rename-") || h.starts_with("start-")
-            || h.starts_with("stop-") || h.starts_with("restart-") || h.starts_with("add-") =>
+        h if h.starts_with("set-")
+            || h.starts_with("new-")
+            || h.starts_with("copy-")
+            || h.starts_with("move-")
+            || h.starts_with("rename-")
+            || h.starts_with("start-")
+            || h.starts_with("stop-")
+            || h.starts_with("restart-")
+            || h.starts_with("add-") =>
         {
             (RiskLevel::L1, Some("PowerShell write verb".into()))
         }
@@ -1106,19 +1320,17 @@ fn classify_head(
         }
 
         // ── Read-only allowlist ────────────────────────────────────
-        "ls" | "dir" | "pwd" | "whoami" | "id"
-        | "uname" | "hostname" | "date" | "uptime" | "df" | "du" | "free" | "ps" | "top"
-        | "htop" | "vmstat" | "iostat" | "mpstat" | "pidstat" | "sar" | "sensors" | "numastat"
-        | "lscpu" | "lsblk" | "lsmem" | "lsusb" | "lspci" | "findmnt"
-        | "stat" | "file" | "wc" | "which" | "whereis"
-        | "type" | "echo" | "printf" | "ss" | "netstat" | "ifconfig" | "ping" | "traceroute"
-        | "tracepath" | "dig" | "nslookup" | "host"
-        | "basename" | "dirname" | "realpath" | "readlink" | "md5sum" | "sha256sum" | "sha1sum"
-        | "cksum" | "cmp" | "nproc" | "arch" | "groups" | "last" | "w"
-        | "who" | "tasklist" | "systeminfo" | "ipconfig" | "ver" | "where" | "export" | "cd"
-        | "test" | "true" | "false" | "sleep" | "watch" | "man" | "tldr" | "tree"
-        | "numfmt" | "lsof" | "uptime.exe" | "getent"
-        | "timedatectl" | "loginctl" | "hostnamectl" => {
+        "ls" | "dir" | "pwd" | "whoami" | "id" | "uname" | "hostname" | "date" | "uptime"
+        | "df" | "du" | "free" | "ps" | "top" | "htop" | "vmstat" | "iostat" | "mpstat"
+        | "pidstat" | "sar" | "sensors" | "numastat" | "lscpu" | "lsblk" | "lsmem" | "lsusb"
+        | "lspci" | "findmnt" | "stat" | "file" | "wc" | "which" | "whereis" | "type" | "echo"
+        | "printf" | "ss" | "netstat" | "ifconfig" | "ping" | "traceroute" | "tracepath"
+        | "dig" | "nslookup" | "host" | "basename" | "dirname" | "realpath" | "readlink"
+        | "md5sum" | "sha256sum" | "sha1sum" | "cksum" | "cmp" | "nproc" | "arch" | "groups"
+        | "last" | "w" | "who" | "tasklist" | "systeminfo" | "ipconfig" | "ver" | "where"
+        | "export" | "cd" | "test" | "true" | "false" | "sleep" | "watch" | "man" | "tldr"
+        | "tree" | "numfmt" | "lsof" | "uptime.exe" | "getent" | "timedatectl" | "loginctl"
+        | "hostnamectl" => {
             let ip_like = false;
             let _ = ip_like;
             (RiskLevel::L0, None)
@@ -1126,9 +1338,18 @@ fn classify_head(
         "ip" => {
             let sub = lower_args.first().cloned().unwrap_or_default();
             let verb = lower_args.get(1).cloned().unwrap_or_default();
-            let mutating = matches!(verb.as_str(), "add" | "del" | "delete" | "set" | "flush" | "replace" | "change");
-            if mutating || matches!(sub.as_str(), "link" | "addr" | "address" | "route" | "rule" | "neigh")
-                && matches!(verb.as_str(), "add" | "del" | "delete" | "set" | "flush" | "replace" | "change")
+            let mutating = matches!(
+                verb.as_str(),
+                "add" | "del" | "delete" | "set" | "flush" | "replace" | "change"
+            );
+            if mutating
+                || matches!(
+                    sub.as_str(),
+                    "link" | "addr" | "address" | "route" | "rule" | "neigh"
+                ) && matches!(
+                    verb.as_str(),
+                    "add" | "del" | "delete" | "set" | "flush" | "replace" | "change"
+                )
             {
                 (RiskLevel::L2, Some("network configuration change".into()))
             } else {
@@ -1137,7 +1358,10 @@ fn classify_head(
         }
 
         // ── Fail-closed default ────────────────────────────────────
-        _ => (RiskLevel::L2, Some(format!("unrecognised command `{head}` (fail-closed)"))),
+        _ => (
+            RiskLevel::L2,
+            Some(format!("unrecognised command `{head}` (fail-closed)")),
+        ),
     }
 }
 
@@ -1145,16 +1369,30 @@ fn classify_inner(inner: &str, depth: usize) -> RiskAssessment {
     let split = split_compound(inner);
     let mut out = RiskAssessment::new(RiskLevel::L0);
     if split.has_substitution {
-        raise(&mut out, RiskLevel::L2, "command substitution — cannot be statically inspected");
+        raise(
+            &mut out,
+            RiskLevel::L2,
+            "command substitution — cannot be statically inspected",
+        );
     }
     if looks_like_fork_bomb(inner) {
-        raise(&mut out, RiskLevel::L3, "fork bomb / inline function definition");
+        raise(
+            &mut out,
+            RiskLevel::L3,
+            "fork bomb / inline function definition",
+        );
     }
     for window in split.segments.windows(2) {
         let (left, right) = (&window[0], &window[1]);
-        if right.preceded_by_pipe && is_downloader(&left.tokens) && is_shell_interpreter(&right.tokens)
+        if right.preceded_by_pipe
+            && is_downloader(&left.tokens)
+            && is_shell_interpreter(&right.tokens)
         {
-            raise(&mut out, RiskLevel::L3, "piping a downloaded script straight into a shell");
+            raise(
+                &mut out,
+                RiskLevel::L3,
+                "piping a downloaded script straight into a shell",
+            );
         }
     }
     for seg in &split.segments {
@@ -1185,14 +1423,20 @@ fn classify_systemctl(lower_args: &[String]) -> (RiskLevel, Option<String>) {
         "daemon-reload" | "daemon-reexec" => (RiskLevel::L1, Some("systemd reload".into())),
         "start" | "restart" | "reload" | "try-restart" | "reload-or-restart" | "enable" => {
             if ssh_unit {
-                (RiskLevel::L2, Some("touches the SSH service (lock-out risk)".into()))
+                (
+                    RiskLevel::L2,
+                    Some("touches the SSH service (lock-out risk)".into()),
+                )
             } else {
                 (RiskLevel::L1, Some("service state change".into()))
             }
         }
         "stop" | "disable" | "mask" | "kill" => {
             if ssh_unit {
-                (RiskLevel::L2, Some("stops the SSH service (lock-out risk)".into()))
+                (
+                    RiskLevel::L2,
+                    Some("stops the SSH service (lock-out risk)".into()),
+                )
             } else if verb == "mask" {
                 (RiskLevel::L2, Some("masks a service".into()))
             } else {
@@ -1201,7 +1445,10 @@ fn classify_systemctl(lower_args: &[String]) -> (RiskLevel, Option<String>) {
         }
         "reboot" | "poweroff" | "halt" | "kexec" | "suspend" | "hibernate" | "set-default"
         | "isolate" => (RiskLevel::L2, Some("power / boot-target change".into())),
-        _ => (RiskLevel::L2, Some("unrecognised systemctl verb (fail-closed)".into())),
+        _ => (
+            RiskLevel::L2,
+            Some("unrecognised systemctl verb (fail-closed)".into()),
+        ),
     }
 }
 
@@ -1211,7 +1458,11 @@ fn classify_git(lower_args: &[String]) -> (RiskLevel, Option<String>) {
         .find(|a| !a.starts_with('-'))
         .cloned()
         .unwrap_or_default();
-    let rest: Vec<&String> = lower_args.iter().skip_while(|a| **a != sub).skip(1).collect();
+    let rest: Vec<&String> = lower_args
+        .iter()
+        .skip_while(|a| **a != sub)
+        .skip(1)
+        .collect();
     let has = |s: &str| rest.iter().any(|a| *a == s);
     match sub.as_str() {
         "status" | "log" | "diff" | "show" | "describe" | "rev-parse" | "ls-files" | "blame"
@@ -1260,8 +1511,16 @@ fn classify_git(lower_args: &[String]) -> (RiskLevel, Option<String>) {
             }
         }
         "push" => {
-            if has("--force") || has("-f") || has("--force-with-lease") || has("--delete") || has("--mirror") {
-                (RiskLevel::L2, Some("history-rewriting / deleting push".into()))
+            if has("--force")
+                || has("-f")
+                || has("--force-with-lease")
+                || has("--delete")
+                || has("--mirror")
+            {
+                (
+                    RiskLevel::L2,
+                    Some("history-rewriting / deleting push".into()),
+                )
             } else {
                 (RiskLevel::L1, Some("pushes to a remote".into()))
             }
@@ -1281,12 +1540,16 @@ fn classify_git(lower_args: &[String]) -> (RiskLevel, Option<String>) {
             }
         }
         "checkout" | "switch" | "restore" | "merge" | "rebase" | "cherry-pick" | "revert"
-        | "add" | "commit" | "pull" | "fetch" | "init" | "clone" | "mv" | "rm" | "apply"
-        | "am" | "worktree" | "submodule" => (RiskLevel::L1, Some("repository modification".into())),
-        "gc" | "prune" | "filter-branch" | "filter-repo" | "update-ref" => {
-            (RiskLevel::L2, Some("repository housekeeping discards objects".into()))
-        }
-        _ => (RiskLevel::L2, Some("unrecognised git subcommand (fail-closed)".into())),
+        | "add" | "commit" | "pull" | "fetch" | "init" | "clone" | "mv" | "rm" | "apply" | "am"
+        | "worktree" | "submodule" => (RiskLevel::L1, Some("repository modification".into())),
+        "gc" | "prune" | "filter-branch" | "filter-repo" | "update-ref" => (
+            RiskLevel::L2,
+            Some("repository housekeeping discards objects".into()),
+        ),
+        _ => (
+            RiskLevel::L2,
+            Some("unrecognised git subcommand (fail-closed)".into()),
+        ),
     }
 }
 
@@ -1313,9 +1576,16 @@ fn classify_docker(
                 .unwrap_or_default();
             match verb.as_str() {
                 "ls" | "list" | "inspect" | "df" | "" => (RiskLevel::L0, None),
-                "create" | "connect" | "disconnect" => (RiskLevel::L1, Some("docker resource change".into())),
-                "rm" | "remove" | "prune" => (RiskLevel::L2, Some("removes docker resources".into())),
-                _ => (RiskLevel::L2, Some("unrecognised docker verb (fail-closed)".into())),
+                "create" | "connect" | "disconnect" => {
+                    (RiskLevel::L1, Some("docker resource change".into()))
+                }
+                "rm" | "remove" | "prune" => {
+                    (RiskLevel::L2, Some("removes docker resources".into()))
+                }
+                _ => (
+                    RiskLevel::L2,
+                    Some("unrecognised docker verb (fail-closed)".into()),
+                ),
             }
         }
         "compose" => {
@@ -1339,14 +1609,29 @@ fn classify_docker(
         }
         "start" | "stop" | "restart" | "pause" | "unpause" | "pull" | "push" | "build" | "tag"
         | "create" | "cp" | "commit" | "load" | "save" | "import" | "export" | "update"
-        | "rename" | "wait" | "attach" | "kill" => (RiskLevel::L1, Some("container state change".into())),
+        | "rename" | "wait" | "attach" | "kill" => {
+            (RiskLevel::L1, Some("container state change".into()))
+        }
         "rm" | "rmi" | "prune" => (RiskLevel::L2, Some("removes containers / images".into())),
         "exec" | "run" => {
             // Skip flags (+ known value-taking flags), then the
             // container/image name; the remainder is the inner command.
             let value_flags = [
-                "-e", "--env", "-w", "--workdir", "-u", "--user", "--name", "-v", "--volume",
-                "-p", "--publish", "--network", "--entrypoint", "--label", "-l",
+                "-e",
+                "--env",
+                "-w",
+                "--workdir",
+                "-u",
+                "--user",
+                "--name",
+                "-v",
+                "--volume",
+                "-p",
+                "--publish",
+                "--network",
+                "--entrypoint",
+                "--label",
+                "-l",
             ];
             let mut i = 0;
             let rest: Vec<String> = {
@@ -1380,21 +1665,34 @@ fn classify_docker(
                 (level, Some("runs a command inside a container".into()))
             }
         }
-        _ => (RiskLevel::L2, Some("unrecognised docker subcommand (fail-closed)".into())),
+        _ => (
+            RiskLevel::L2,
+            Some("unrecognised docker subcommand (fail-closed)".into()),
+        ),
     }
 }
 
 fn classify_sql_cli(lower_args: &[String]) -> (RiskLevel, Option<String>) {
     let joined = lower_args.join(" ");
     let has_kw = |kw: &str| joined.contains(kw);
-    if has_kw("drop table") || has_kw("drop database") || has_kw("drop schema") || has_kw("truncate") {
-        return (RiskLevel::L2, Some("destructive SQL (DROP / TRUNCATE)".into()));
+    if has_kw("drop table")
+        || has_kw("drop database")
+        || has_kw("drop schema")
+        || has_kw("truncate")
+    {
+        return (
+            RiskLevel::L2,
+            Some("destructive SQL (DROP / TRUNCATE)".into()),
+        );
     }
     if has_kw("delete from") || has_kw("update ") {
         if has_kw(" where ") {
             return (RiskLevel::L1, Some("SQL write with WHERE".into()));
         }
-        return (RiskLevel::L2, Some("SQL DELETE/UPDATE without WHERE".into()));
+        return (
+            RiskLevel::L2,
+            Some("SQL DELETE/UPDATE without WHERE".into()),
+        );
     }
     if has_kw("alter ") || has_kw("grant ") || has_kw("revoke ") || has_kw("create user") {
         return (RiskLevel::L2, Some("schema / privilege SQL".into()));
@@ -1402,18 +1700,26 @@ fn classify_sql_cli(lower_args: &[String]) -> (RiskLevel, Option<String>) {
     if has_kw("insert ") || has_kw("create ") {
         return (RiskLevel::L1, Some("SQL write".into()));
     }
-    let inline = lower_args.iter().any(|a| a == "-e" || a == "--execute" || a == "-c" || a == "--command");
+    let inline = lower_args
+        .iter()
+        .any(|a| a == "-e" || a == "--execute" || a == "-c" || a == "--command");
     if inline {
         // Inline statement we didn't match above — read query.
         (RiskLevel::L0, None)
     } else {
-        (RiskLevel::L1, Some("opens an interactive DB session".into()))
+        (
+            RiskLevel::L1,
+            Some("opens an interactive DB session".into()),
+        )
     }
 }
 
 fn classify_package_manager(head: &str, lower_args: &[String]) -> (RiskLevel, Option<String>) {
     if head == "pacman" {
-        if lower_args.iter().any(|a| a.starts_with("-q") || a.starts_with("-s") && !a.starts_with("-sy")) {
+        if lower_args
+            .iter()
+            .any(|a| a.starts_with("-q") || a.starts_with("-s") && !a.starts_with("-sy"))
+        {
             return (RiskLevel::L0, None);
         }
         if lower_args.iter().any(|a| a.starts_with("-r")) {
@@ -1429,13 +1735,15 @@ fn classify_package_manager(head: &str, lower_args: &[String]) -> (RiskLevel, Op
     match sub.as_str() {
         "list" | "search" | "show" | "info" | "policy" | "madison" | "check" | "depends"
         | "rdepends" | "" => (RiskLevel::L0, None),
-        "install" | "upgrade" | "update" | "add" | "dist-upgrade" | "full-upgrade" | "reinstall" => {
-            (RiskLevel::L1, Some("installs / updates packages".into()))
-        }
+        "install" | "upgrade" | "update" | "add" | "dist-upgrade" | "full-upgrade"
+        | "reinstall" => (RiskLevel::L1, Some("installs / updates packages".into())),
         "remove" | "purge" | "autoremove" | "del" | "erase" | "rm" => {
             (RiskLevel::L2, Some("removes packages".into()))
         }
-        _ => (RiskLevel::L2, Some("unrecognised package operation (fail-closed)".into())),
+        _ => (
+            RiskLevel::L2,
+            Some("unrecognised package operation (fail-closed)".into()),
+        ),
     }
 }
 
@@ -1469,28 +1777,61 @@ mod tests {
     #[test]
     fn write_path_levels() {
         assert_eq!(classify_write_path("/tmp/notes.txt").level, RiskLevel::L1);
-        assert_eq!(classify_write_path("/etc/nginx/nginx.conf").level, RiskLevel::L1);
+        assert_eq!(
+            classify_write_path("/etc/nginx/nginx.conf").level,
+            RiskLevel::L1
+        );
         assert_eq!(classify_write_path("").level, RiskLevel::L2);
         assert_eq!(classify_write_path("/etc/passwd").level, RiskLevel::L3);
-        assert_eq!(classify_write_path("/etc/sudoers.d/extra").level, RiskLevel::L3);
-        assert_eq!(classify_write_path("/var/log/auth.log").level, RiskLevel::L3);
+        assert_eq!(
+            classify_write_path("/etc/sudoers.d/extra").level,
+            RiskLevel::L3
+        );
+        assert_eq!(
+            classify_write_path("/var/log/auth.log").level,
+            RiskLevel::L3
+        );
         assert_eq!(classify_write_path("/dev/sda").level, RiskLevel::L3);
     }
 
     #[test]
     fn read_path_sensitivity() {
         // Ordinary files auto-read (L0).
-        assert_eq!(classify_read_path("/var/www/app/main.rs").level, RiskLevel::L0);
-        assert_eq!(classify_read_path("/home/me/notes.txt").level, RiskLevel::L0);
+        assert_eq!(
+            classify_read_path("/var/www/app/main.rs").level,
+            RiskLevel::L0
+        );
+        assert_eq!(
+            classify_read_path("/home/me/notes.txt").level,
+            RiskLevel::L0
+        );
         // Secret stores require explicit approval on read (L2)…
         assert_eq!(classify_read_path("/home/me/.env").level, RiskLevel::L2);
-        assert_eq!(classify_read_path("/srv/app/.env.production").level, RiskLevel::L2);
-        assert_eq!(classify_read_path("/home/me/.ssh/id_ed25519").level, RiskLevel::L2);
-        assert_eq!(classify_read_path("/home/me/.ssh/config").level, RiskLevel::L2);
-        assert_eq!(classify_read_path("/home/me/.aws/credentials").level, RiskLevel::L2);
-        assert_eq!(classify_read_path("C:\\Users\\me\\.kube\\config").level, RiskLevel::L2);
+        assert_eq!(
+            classify_read_path("/srv/app/.env.production").level,
+            RiskLevel::L2
+        );
+        assert_eq!(
+            classify_read_path("/home/me/.ssh/id_ed25519").level,
+            RiskLevel::L2
+        );
+        assert_eq!(
+            classify_read_path("/home/me/.ssh/config").level,
+            RiskLevel::L2
+        );
+        assert_eq!(
+            classify_read_path("/home/me/.aws/credentials").level,
+            RiskLevel::L2
+        );
+        assert_eq!(
+            classify_read_path("C:\\Users\\me\\.kube\\config").level,
+            RiskLevel::L2
+        );
         assert_eq!(classify_read_path("/etc/shadow").level, RiskLevel::L2);
-        assert_eq!(classify_read_path("/opt/tls/server.pem").level, RiskLevel::L2);
+        assert_eq!(
+            classify_read_path("/opt/tls/server.pem").level,
+            RiskLevel::L2
+        );
         // …but listing a secret dir is only L1 (names, not contents) —
         // caught with or without a trailing slash — and a plain dir
         // (incl. a lookalike like `sshfoo`) stays L0.
@@ -1536,7 +1877,10 @@ mod tests {
     #[test]
     fn red_line_block_devices() {
         assert_eq!(level("dd if=/dev/zero of=/dev/sda"), RiskLevel::L3);
-        assert_eq!(level("dd if=image.iso of=/dev/nvme0n1 bs=4M"), RiskLevel::L3);
+        assert_eq!(
+            level("dd if=image.iso of=/dev/nvme0n1 bs=4M"),
+            RiskLevel::L3
+        );
         assert_eq!(level("mkfs.ext4 /dev/sdb1"), RiskLevel::L3);
         assert_eq!(level("mkfs -t xfs /dev/sdc"), RiskLevel::L3);
         assert_eq!(level("wipefs -a /dev/sda"), RiskLevel::L3);
@@ -1564,7 +1908,10 @@ mod tests {
     // Red line #5 — firewall self-lockout combo.
     #[test]
     fn red_line_firewall_lockout() {
-        assert_eq!(level("iptables -F && iptables -P INPUT DROP"), RiskLevel::L3);
+        assert_eq!(
+            level("iptables -F && iptables -P INPUT DROP"),
+            RiskLevel::L3
+        );
         assert_eq!(level("iptables -P INPUT DROP; iptables -F"), RiskLevel::L3);
         // Flush alone is dangerous-but-confirmable, not a red line.
         assert_eq!(level("iptables -F"), RiskLevel::L2);
@@ -1581,7 +1928,10 @@ mod tests {
     // Red line #7 — curl | sh.
     #[test]
     fn red_line_curl_pipe_sh() {
-        assert_eq!(level("curl -fsSL https://get.docker.com | sh"), RiskLevel::L3);
+        assert_eq!(
+            level("curl -fsSL https://get.docker.com | sh"),
+            RiskLevel::L3
+        );
         assert_eq!(level("wget -qO- https://x.sh | sudo bash"), RiskLevel::L3);
         // Download without execution stays L2.
         assert_eq!(level("curl -O https://example.com/file.tgz"), RiskLevel::L2);
@@ -1611,7 +1961,10 @@ mod tests {
         assert_eq!(level("sh -c 'ls -la'"), RiskLevel::L1.max(RiskLevel::L1));
         assert_eq!(level("docker exec web rm -rf /"), RiskLevel::L3);
         assert_eq!(level("docker exec web ls /app"), RiskLevel::L1);
-        assert_eq!(level("find /tmp -name '*.log' -exec rm {} \\;"), RiskLevel::L2);
+        assert_eq!(
+            level("find /tmp -name '*.log' -exec rm {} \\;"),
+            RiskLevel::L2
+        );
         assert_eq!(level("xargs rm -rf"), RiskLevel::L2);
     }
 
@@ -1621,7 +1974,10 @@ mod tests {
         assert_eq!(level("cd /tmp && rm -rf ./build"), RiskLevel::L2);
         assert_eq!(level("ls && df -h"), RiskLevel::L0);
         assert_eq!(level("apt update && apt install -y nginx"), RiskLevel::L1);
-        assert_eq!(level("git add . && git commit -m x && git push --force"), RiskLevel::L2);
+        assert_eq!(
+            level("git add . && git commit -m x && git push --force"),
+            RiskLevel::L2
+        );
     }
 
     // Quoted text must not trigger rules.
@@ -1629,7 +1985,10 @@ mod tests {
     fn quoted_text_is_inert() {
         assert_eq!(level("echo \"rm -rf /\""), RiskLevel::L0);
         assert_eq!(level("grep 'curl | sh' install.md"), RiskLevel::L0);
-        assert_eq!(level("echo 'iptables -F && iptables -P INPUT DROP'"), RiskLevel::L0);
+        assert_eq!(
+            level("echo 'iptables -F && iptables -P INPUT DROP'"),
+            RiskLevel::L0
+        );
     }
 
     // L0 read-only catalogue.
@@ -1707,8 +2066,14 @@ mod tests {
     // SQL with WHERE stays L1.
     #[test]
     fn sql_with_where_is_l1() {
-        assert_eq!(level("mysql -e 'DELETE FROM logs WHERE ts < NOW()'"), RiskLevel::L1);
-        assert_eq!(level("psql -c 'UPDATE users SET active = false WHERE id = 3'"), RiskLevel::L1);
+        assert_eq!(
+            level("mysql -e 'DELETE FROM logs WHERE ts < NOW()'"),
+            RiskLevel::L1
+        );
+        assert_eq!(
+            level("psql -c 'UPDATE users SET active = false WHERE id = 3'"),
+            RiskLevel::L1
+        );
     }
 
     // sudo flags root but does not change level.
@@ -1743,7 +2108,9 @@ mod tests {
     fn nvidia_smi_is_read_only() {
         assert_eq!(level("nvidia-smi"), RiskLevel::L0);
         assert_eq!(
-            level("nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu --format=csv,noheader"),
+            level(
+                "nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu --format=csv,noheader"
+            ),
             RiskLevel::L0
         );
         assert_eq!(level("nvidia-smi -L"), RiskLevel::L0);

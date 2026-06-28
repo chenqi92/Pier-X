@@ -316,13 +316,19 @@ mod tests {
 
     #[test]
     fn detects_elevation_auth_failure() {
-        assert!(is_elevation_auth_failure("sudo: 3 incorrect password attempts"));
+        assert!(is_elevation_auth_failure(
+            "sudo: 3 incorrect password attempts"
+        ));
         assert!(is_elevation_auth_failure("Sorry, try again."));
-        assert!(is_elevation_auth_failure("chenqi is not in the sudoers file."));
+        assert!(is_elevation_auth_failure(
+            "chenqi is not in the sudoers file."
+        ));
         assert!(is_elevation_auth_failure("sudo: a password is required"));
         // An inner command failing for an unrelated reason must NOT count
         // (otherwise we'd wrongly retry via su).
-        assert!(!is_elevation_auth_failure("find: '/x': No such file or directory"));
+        assert!(!is_elevation_auth_failure(
+            "find: '/x': No such file or directory"
+        ));
     }
 
     #[test]
@@ -353,9 +359,7 @@ mod tests {
 
     #[test]
     fn detects_systemctl_polkit() {
-        assert!(is_permission_denied(
-            "Interactive authentication required."
-        ));
+        assert!(is_permission_denied("Interactive authentication required."));
     }
 
     #[test]
@@ -366,9 +370,13 @@ mod tests {
 
     #[test]
     fn detects_requiretty_and_su_tty() {
-        assert!(is_permission_denied("sudo: sorry, you must have a tty to run sudo"));
+        assert!(is_permission_denied(
+            "sudo: sorry, you must have a tty to run sudo"
+        ));
         assert!(is_permission_denied("su: must be run from a terminal"));
-        assert!(is_permission_denied("a terminal is required to read the password"));
+        assert!(is_permission_denied(
+            "a terminal is required to read the password"
+        ));
     }
 
     #[test]
@@ -414,10 +422,7 @@ mod tests {
             Elevation::None
         );
         assert_eq!(Elevation::from_wire("su", Some("-i")), Elevation::None);
-        assert_eq!(
-            Elevation::become_user_via_sudo("root;id"),
-            Elevation::None
-        );
+        assert_eq!(Elevation::become_user_via_sudo("root;id"), Elevation::None);
         // Valid users still work.
         assert_eq!(
             Elevation::become_user_via_sudo("postgres"),

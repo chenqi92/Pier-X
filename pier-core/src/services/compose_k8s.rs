@@ -97,8 +97,8 @@ pub fn convert_with_options(
     namespace: Option<&str>,
     ingress: &IngressOptions,
 ) -> Result<String, String> {
-    let compose: ComposeFile = serde_yml::from_str(yaml)
-        .map_err(|e| format!("compose YAML parse failed: {e}"))?;
+    let compose: ComposeFile =
+        serde_yml::from_str(yaml).map_err(|e| format!("compose YAML parse failed: {e}"))?;
     let ns = namespace
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
@@ -139,8 +139,7 @@ pub fn convert_with_options(
 
     for name in &service_keys {
         let svc = &compose.services[*name];
-        let (dep_yaml, lifted) =
-            render_deployment(name, svc, ns.as_deref(), ingress, &compose)?;
+        let (dep_yaml, lifted) = render_deployment(name, svc, ns.as_deref(), ingress, &compose)?;
         deployment_docs.push(dep_yaml);
         for stub in lifted {
             configmap_stubs.push(stub);
@@ -431,8 +430,7 @@ fn render_deployment(
     // having to touch the manifest. Filtered to only networks
     // declared at the top level so a typo doesn't silently
     // bind to nothing.
-    let net_memberships: Vec<String> =
-        parse_service_networks(&svc.networks, &compose.networks);
+    let net_memberships: Vec<String> = parse_service_networks(&svc.networks, &compose.networks);
 
     s.push_str("apiVersion: apps/v1\n");
     s.push_str("kind: Deployment\n");
@@ -459,9 +457,7 @@ fn render_deployment(
     s.push_str("      labels:\n");
     s.push_str(&format!("        app: {name}\n"));
     for net in &net_memberships {
-        s.push_str(&format!(
-            "        pier-x.network/{net}: \"in\"\n"
-        ));
+        s.push_str(&format!("        pier-x.network/{net}: \"in\"\n"));
     }
     s.push_str("    spec:\n");
 
@@ -528,9 +524,9 @@ fn render_deployment(
         s.push_str(&probe);
     }
 
-    if let Some(resources) = render_resources(
-        svc.deploy.as_ref().and_then(|d| d.resources.as_ref()),
-    ) {
+    if let Some(resources) =
+        render_resources(svc.deploy.as_ref().and_then(|d| d.resources.as_ref()))
+    {
         s.push_str(&resources);
     }
 
@@ -581,10 +577,7 @@ fn render_deployment(
         }
         for r in secret_refs.iter().chain(config_refs.iter()) {
             s.push_str(&format!("            - name: {}\n", r.volume_name()));
-            s.push_str(&format!(
-                "              mountPath: {}\n",
-                r.mount_path()
-            ));
+            s.push_str(&format!("              mountPath: {}\n", r.mount_path()));
             // Secrets are read-only by convention; configs follow
             // the same heuristic since Compose never makes them
             // writable either.
@@ -691,9 +684,9 @@ fn bind_mount_configmap_name(service: &str, source: &str) -> String {
 /// because Compose and K8s differ on the singular form.
 fn render_resources(resources: Option<&ComposeResources>) -> Option<String> {
     let r = resources?;
-    let limits_cpu = r.limits.as_ref().and_then(|b| compose_cpu_string(b));
+    let limits_cpu = r.limits.as_ref().and_then(compose_cpu_string);
     let limits_mem = r.limits.as_ref().and_then(|b| b.memory.clone());
-    let req_cpu = r.reservations.as_ref().and_then(|b| compose_cpu_string(b));
+    let req_cpu = r.reservations.as_ref().and_then(compose_cpu_string);
     let req_mem = r.reservations.as_ref().and_then(|b| b.memory.clone());
 
     if limits_cpu.is_none() && limits_mem.is_none() && req_cpu.is_none() && req_mem.is_none() {
@@ -805,7 +798,11 @@ fn parse_healthcheck_test(value: Option<&serde_yml::Value>) -> Option<Vec<String
             if trimmed.is_empty() {
                 return None;
             }
-            Some(vec!["sh".to_string(), "-c".to_string(), trimmed.to_string()])
+            Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                trimmed.to_string(),
+            ])
         }
         serde_yml::Value::Sequence(items) => {
             let strs: Vec<String> = items
@@ -981,11 +978,7 @@ fn parse_mount_refs(
                     continue;
                 }
                 let target = target.unwrap_or_else(|| default_target(&id, kind));
-                out.push(MountRef {
-                    id,
-                    target,
-                    kind,
-                });
+                out.push(MountRef { id, target, kind });
             }
             _ => {}
         }
@@ -1007,11 +1000,7 @@ fn default_target(id: &str, kind: MountRefKind) -> String {
 /// expected path in a placeholder comment; `external:` and
 /// `environment:` forms get a NOTE because both require cluster-
 /// side wiring before apply.
-fn render_secret_stub(
-    name: &str,
-    body: &serde_yml::Value,
-    namespace: Option<&str>,
-) -> String {
+fn render_secret_stub(name: &str, body: &serde_yml::Value, namespace: Option<&str>) -> String {
     let ns_line = match namespace {
         Some(n) => format!("  namespace: {n}\n"),
         None => String::new(),
@@ -1091,23 +1080,15 @@ fn mount_stub_hints(body: &serde_yml::Value) -> (Option<String>, Option<String>)
         .get(serde_yml::Value::String("file".into()))
         .and_then(|v| v.as_str())
     {
-        return (
-            None,
-            Some(format!("Compose source file: {file}")),
-        );
+        return (None, Some(format!("Compose source file: {file}")));
     }
     if m.get(serde_yml::Value::String("external".into()))
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
     {
         return (
-            Some(
-                "Compose `external: true` — reference an existing cluster resource"
-                    .to_string(),
-            ),
-            Some(
-                "External resource — make sure it already exists in the cluster.".to_string(),
-            ),
+            Some("Compose `external: true` — reference an existing cluster resource".to_string()),
+            Some("External resource — make sure it already exists in the cluster.".to_string()),
         );
     }
     if let Some(env) = m
@@ -1334,8 +1315,7 @@ fn render_ingress(
 /// generated Ingress only covers things a browser can hit.
 fn first_http_port(svc: &ComposeService) -> Option<u16> {
     const HTTP_PORTS: &[u16] = &[
-        80, 443, 3000, 4000, 5000, 5601, 8000, 8008, 8080, 8081, 8443, 8888,
-        9000, 9090, 9091, 9100,
+        80, 443, 3000, 4000, 5000, 5601, 8000, 8008, 8080, 8081, 8443, 8888, 9000, 9090, 9091, 9100,
     ];
     parse_ports(&svc.ports)
         .into_iter()
@@ -1446,7 +1426,8 @@ fn parse_volumes(values: &[serde_yml::Value]) -> ParsedVolumes {
             // Mapping that didn't have the canonical fields —
             // surface it so the user knows we punted instead of
             // silently dropping.
-            out.warnings.push("long-form volume (unrecognised shape)".to_string());
+            out.warnings
+                .push("long-form volume (unrecognised shape)".to_string());
             continue;
         }
         let raw = match v {
@@ -1458,8 +1439,8 @@ fn parse_volumes(values: &[serde_yml::Value]) -> ParsedVolumes {
         };
         // Strip optional `:ro` / `:rw` suffix.
         let (body, ro) = match raw.rsplit_once(':') {
-            Some((head, tail)) if tail == "ro" => (head.to_string(), true),
-            Some((head, tail)) if tail == "rw" => (head.to_string(), false),
+            Some((head, "ro")) => (head.to_string(), true),
+            Some((head, "rw")) => (head.to_string(), false),
             _ => (raw.clone(), false),
         };
         // Compose volume short form: `<source>:<target>`. The source
@@ -1472,9 +1453,7 @@ fn parse_volumes(values: &[serde_yml::Value]) -> ParsedVolumes {
         }
         let source = parts[0].trim();
         let target = parts[1].trim();
-        let is_path = source.contains('/')
-            || source.starts_with('.')
-            || source.starts_with('~');
+        let is_path = source.contains('/') || source.starts_with('.') || source.starts_with('~');
         if is_path {
             // Anonymise the source path enough to keep ConfigMap
             // generation possible: callers see the verbatim source
@@ -1503,8 +1482,16 @@ fn parse_volumes(values: &[serde_yml::Value]) -> ParsedVolumes {
 /// each variant into the existing `ParsedVolumes` buckets so the
 /// rest of the renderer stays untouched.
 enum ParsedLongFormVolume {
-    Named { volume: String, mount_path: String, read_only: bool },
-    Bind { source: String, mount_path: String, read_only: bool },
+    Named {
+        volume: String,
+        mount_path: String,
+        read_only: bool,
+    },
+    Bind {
+        source: String,
+        mount_path: String,
+        read_only: bool,
+    },
     /// Long form with `type:` we don't translate (`tmpfs` /
     /// `npipe` / `cluster`). We surface a warning string the
     /// caller pushes onto `ParsedVolumes.warnings`.
@@ -1656,9 +1643,33 @@ fn command_to_array(value: &serde_yml::Value) -> Vec<String> {
 /// with `kubectl`, not for golf scoring.
 fn yaml_quote(s: &str) -> String {
     let needs_quote = s.is_empty()
-        || s.chars().any(|c| matches!(c, ':' | '#' | '"' | '\'' | '\n' | '{' | '}' | '[' | ']' | ',' | '&' | '*' | '|' | '>' | '!' | '%' | '@' | '`'))
+        || s.chars().any(|c| {
+            matches!(
+                c,
+                ':' | '#'
+                    | '"'
+                    | '\''
+                    | '\n'
+                    | '{'
+                    | '}'
+                    | '['
+                    | ']'
+                    | ','
+                    | '&'
+                    | '*'
+                    | '|'
+                    | '>'
+                    | '!'
+                    | '%'
+                    | '@'
+                    | '`'
+            )
+        })
         || s.parse::<f64>().is_ok()
-        || matches!(s.to_lowercase().as_str(), "true" | "false" | "yes" | "no" | "on" | "off" | "null" | "~");
+        || matches!(
+            s.to_lowercase().as_str(),
+            "true" | "false" | "yes" | "no" | "on" | "off" | "null" | "~"
+        );
     if needs_quote {
         format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
@@ -1708,11 +1719,7 @@ pub fn convert_with_summary(
     compose_yaml: &str,
     namespace: Option<&str>,
 ) -> Result<ComposeK8sExport, String> {
-    convert_with_summary_and_options(
-        compose_yaml,
-        namespace,
-        &IngressOptions::default(),
-    )
+    convert_with_summary_and_options(compose_yaml, namespace, &IngressOptions::default())
 }
 
 /// Variant of [`convert_with_summary`] that lets the caller pass
@@ -1930,10 +1937,7 @@ volumes:
         assert_eq!(summary.deployment_count, 2);
         assert_eq!(summary.service_count, 2);
         assert_eq!(summary.pvc_count, 1);
-        assert!(summary
-            .warnings
-            .iter()
-            .any(|w| w.contains("depends_on")));
+        assert!(summary.warnings.iter().any(|w| w.contains("depends_on")));
     }
 
     #[test]
@@ -2009,8 +2013,7 @@ volumes:
             tls_secret: String::new(),
             lift_bind_mounts: false,
         };
-        let out =
-            convert_with_options(POSTGRES_NON_HTTP_YAML, None, &opts).expect("convert");
+        let out = convert_with_options(POSTGRES_NON_HTTP_YAML, None, &opts).expect("convert");
         assert!(!out.contains("kind: Ingress"));
     }
 
@@ -2099,8 +2102,7 @@ volumes:
             tls_secret: String::new(),
             lift_bind_mounts: true,
         };
-        let summary =
-            convert_with_summary_and_options(NGINX_YAML, None, &opts).expect("convert");
+        let summary = convert_with_summary_and_options(NGINX_YAML, None, &opts).expect("convert");
         assert_eq!(summary.configmap_count, 1);
     }
 

@@ -6,7 +6,7 @@
 //! * `<Section args>` ... `</Section>` — recursive container
 //! * `# comment`             — to end of line
 //! * `"quoted args"`         — only double quotes; backslash escapes
-//!                             `\"` and `\\`
+//!   `\"` and `\\`
 //!
 //! The parser is line-based: we split the source into logical lines
 //! (after collapsing `\<newline>` continuation), tokenize each line
@@ -37,10 +37,7 @@ pub struct ApacheParseResult {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ApacheNode {
     Directive(ApacheDirective),
-    Comment {
-        text: String,
-        leading_blanks: u32,
-    },
+    Comment { text: String, leading_blanks: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -127,14 +124,9 @@ fn split_logical_lines(src: &str) -> Vec<Logical> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LineKind {
     /// `<Name args>` — opens a section.
-    SectionOpen {
-        name: String,
-        args: Vec<String>,
-    },
+    SectionOpen { name: String, args: Vec<String> },
     /// `</Name>` — closes a section.
-    SectionClose {
-        name: String,
-    },
+    SectionClose { name: String },
     /// `Name args [# inline comment]` — a leaf directive.
     Directive {
         name: String,
@@ -150,17 +142,14 @@ fn tokenize_line(line: &str) -> Result<LineKind, String> {
     }
 
     // Section close: `</Name>` (no args, may have trailing whitespace).
-    if line.starts_with("</") {
-        let body = &line[2..];
+    if let Some(body) = line.strip_prefix("</") {
         let close = body
             .find('>')
             .ok_or_else(|| format!("unterminated section close: {line}"))?;
         let name = body[..close].trim();
         let trailing = body[close + 1..].trim();
         if !trailing.is_empty() && !trailing.starts_with('#') {
-            return Err(format!(
-                "unexpected content after `</{name}>`: {trailing}"
-            ));
+            return Err(format!("unexpected content after `</{name}>`: {trailing}"));
         }
         return Ok(LineKind::SectionClose {
             name: name.to_string(),
@@ -174,8 +163,7 @@ fn tokenize_line(line: &str) -> Result<LineKind, String> {
         // Strip a trailing `# comment` first (so we don't eat a `>`
         // inside a comment).
         let (head, _trailing_comment) = strip_inline_comment(line);
-        if head.starts_with('<') {
-            let body = &head[1..];
+        if let Some(body) = head.strip_prefix('<') {
             let close_rel = body
                 .rfind('>')
                 .ok_or_else(|| format!("unterminated section open: {line}"))?;
@@ -392,11 +380,7 @@ fn parse_lines(
     out
 }
 
-fn drain_comments(
-    out: &mut Vec<ApacheNode>,
-    pending: &mut Vec<String>,
-    blanks_for_first: u32,
-) {
+fn drain_comments(out: &mut Vec<ApacheNode>, pending: &mut Vec<String>, blanks_for_first: u32) {
     let mut first = true;
     for c in pending.drain(..) {
         out.push(ApacheNode::Comment {
@@ -594,8 +578,7 @@ mod tests {
     fn if_section_with_gt_inside_quotes() {
         // Apache's `<If>` sections can have regex args that contain
         // `>`. The lexer uses the LAST `>` on the line.
-        let src =
-            "<If \"%{REQUEST_URI} =~ /\\>/\">\n    Require all denied\n</If>\n";
+        let src = "<If \"%{REQUEST_URI} =~ /\\>/\">\n    Require all denied\n</If>\n";
         let r = parse_ok(src);
         let outer = match &r.nodes[0] {
             ApacheNode::Directive(d) => d,

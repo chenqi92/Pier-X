@@ -293,8 +293,7 @@ fn parse_uptime(s: &str) -> (Option<String>, Option<String>) {
     let (pre, post) = match after_up.find("load average") {
         Some(i) => {
             // Trim trailing whitespace + comma off the head.
-            let head = after_up[..i]
-                .trim_end_matches(|c: char| c.is_whitespace() || c == ',');
+            let head = after_up[..i].trim_end_matches(|c: char| c.is_whitespace() || c == ',');
             // Skip "load average" and any colon/whitespace after.
             let tail = after_up[i + "load average".len()..]
                 .trim_start_matches(|c: char| c == ':' || c.is_whitespace());
@@ -308,9 +307,7 @@ fn parse_uptime(s: &str) -> (Option<String>, Option<String>) {
     // GNU's odd "X user" lines that lack the days+HH:MM segment)
     // there's nothing to chop and the whole thing is the uptime.
     let uptime = match pre.rsplit_once(',') {
-        Some((head, tail)) if tail.contains("user") => {
-            Some(head.trim().to_string())
-        }
+        Some((head, tail)) if tail.contains("user") => Some(head.trim().to_string()),
         _ => Some(pre.trim().to_string()),
     }
     .filter(|s| !s.is_empty());
@@ -341,8 +338,7 @@ mod deep_probe_tests {
 
     #[test]
     fn parse_uptime_handles_canonical_line() {
-        let s =
-            " 12:34:56 up 5 days,  3:42,  2 users,  load average: 0.12, 0.34, 0.45\n";
+        let s = " 12:34:56 up 5 days,  3:42,  2 users,  load average: 0.12, 0.34, 0.45\n";
         let (up, la) = parse_uptime(s);
         assert_eq!(up.as_deref(), Some("5 days,  3:42"));
         assert_eq!(la.as_deref(), Some("0.12, 0.34, 0.45"));

@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use pier_core::connections::{
     self, ConnectionStore, DbCredentialPatch, NewDbCredential, ResolvedDbCredential,
 };
@@ -11,7 +13,6 @@ use pier_core::services::docker;
 use pier_core::services::firewall;
 use pier_core::services::git::{CommitInfo, GitClient, StashEntry, UnpushedCommit};
 use pier_core::services::influx::{self, InfluxConfig};
-use pier_core::services::remote_db_cli::{self, CliConn, CliKind};
 use pier_core::services::mysql::{
     self as mysql_service, MysqlClient, MysqlConfig, MysqlProcessRow,
 };
@@ -21,6 +22,7 @@ use pier_core::services::package_manager;
 use pier_core::services::package_mirror;
 use pier_core::services::postgres::{PgActivityRow, PostgresClient, PostgresConfig};
 use pier_core::services::redis::{RedisClient, RedisConfig};
+use pier_core::services::remote_db_cli::{self, CliConn, CliKind};
 use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
 use pier_core::services::sqlite_remote;
@@ -2550,7 +2552,7 @@ fn ssh_sessions_retain(state: tauri::State<'_, AppState>, active: Vec<String>) {
         .collect();
     // Key shape is `auth_mode:user@host:port`; the suffix after the
     // first `:` is the addressing we match on.
-    let suffix_of = |key: &str| key.splitn(2, ':').nth(1).unwrap_or(key).to_string();
+    let suffix_of = |key: &str| key.split_once(':').map(|x| x.1).unwrap_or(key).to_string();
     // Drop handshake guards for targets with no remaining tab. This
     // runs before the sftp_sessions early-return because failed
     // handshakes create guards without ever populating the session
@@ -2596,7 +2598,7 @@ fn ssh_sessions_retain(state: tauri::State<'_, AppState>, active: Vec<String>) {
 /// one against `session` if none is cached. Every SFTP command used
 /// to call `open_sftp_blocking` itself, paying a `request_subsystem`
 /// + `SftpSession::new` round-trip pair on every call; the cache
-/// collapses that to once per SSH session.
+///   collapses that to once per SSH session.
 fn get_or_open_sftp_client(
     state: &tauri::State<'_, AppState>,
     session: &SshSession,
@@ -4547,9 +4549,7 @@ fn ssh_connection_save(
     eprintln!("[pierx][conn_save] protocol param = {protocol:?} -> {proto:?}");
 
     // VNC standard auth has no user (password only); SSH and RDP require one.
-    if resolved_host.is_empty()
-        || (resolved_user.is_empty() && proto != ConnectionProtocol::Vnc)
-    {
+    if resolved_host.is_empty() || (resolved_user.is_empty() && proto != ConnectionProtocol::Vnc) {
         return Err(String::from("Host and user must not be empty."));
     }
 
@@ -4681,9 +4681,7 @@ fn ssh_connection_update(
     let proto = parse_protocol(protocol.as_deref());
     eprintln!("[pierx][conn_update] protocol param = {protocol:?} -> {proto:?}");
 
-    if resolved_host.is_empty()
-        || (resolved_user.is_empty() && proto != ConnectionProtocol::Vnc)
-    {
+    if resolved_host.is_empty() || (resolved_user.is_empty() && proto != ConnectionProtocol::Vnc) {
         return Err(String::from("Host and user must not be empty."));
     }
 
@@ -5629,7 +5627,6 @@ fn ssh_session_prewarm(
     if already_cached {
         return Ok(());
     }
-    drop(state);
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
         // Errors are intentional no-ops: prewarm is best-effort, and a
@@ -7635,7 +7632,11 @@ fn map_sqlserver_query_result(
         rows: result
             .rows
             .into_iter()
-            .map(|row| row.into_iter().map(|cell| cell.unwrap_or_default()).collect())
+            .map(|row| {
+                row.into_iter()
+                    .map(|cell| cell.unwrap_or_default())
+                    .collect()
+            })
             .collect(),
         truncated: result.truncated,
         affected_rows: result.affected_rows,
@@ -7717,7 +7718,9 @@ async fn mssql_overview(
         })
         .map_err(|e| e.to_string())?;
 
-        let databases = client.list_databases_blocking().map_err(|e| e.to_string())?;
+        let databases = client
+            .list_databases_blocking()
+            .map_err(|e| e.to_string())?;
         let current_database = client
             .current_database_blocking()
             .map_err(|e| e.to_string())?;
@@ -7927,7 +7930,8 @@ fn remote_cli_query_impl(
         password: db_password,
         service: db_service.trim().to_string(),
     };
-    let r = remote_db_cli::query_blocking(&session, kind, &conn, &sql).map_err(|e| e.to_string())?;
+    let r =
+        remote_db_cli::query_blocking(&session, kind, &conn, &sql).map_err(|e| e.to_string())?;
     if let Some(err) = r.error {
         return Err(err);
     }
@@ -10024,8 +10028,10 @@ async fn nanolink_server_send_command(
             &key_path,
             saved_connection_index,
         )?;
-        nanolink::server_send_command_blocking(&session, nl_port, &jwt, &agent_id, &cmd_type, &target)
-            .map_err(|e| e.to_string())
+        nanolink::server_send_command_blocking(
+            &session, nl_port, &jwt, &agent_id, &cmd_type, &target,
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("nanolink_server_send_command join: {e}"))?
@@ -11706,7 +11712,7 @@ struct WebhookBatchReplayRow {
 async fn software_webhooks_replay_batch(limit: u32) -> Result<Vec<WebhookBatchReplayRow>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let n = limit.clamp(1, 50) as usize;
-        let failures = pier_core::services::webhook::list_failures().map_err(|e| e)?;
+        let failures = pier_core::services::webhook::list_failures()?;
         let mut out = Vec::with_capacity(n.min(failures.len()));
         for f in failures.into_iter().take(n) {
             let r = pier_core::services::webhook::replay_blocking(
@@ -12442,8 +12448,7 @@ async fn software_compose_export_k8s(
             lift_bind_mounts: lift_bind_mounts.unwrap_or(false),
         };
         let summary =
-            pier_core::services::compose_k8s::convert_with_summary_and_options(&yaml, ns, &opts)
-                .map_err(|e| e)?;
+            pier_core::services::compose_k8s::convert_with_summary_and_options(&yaml, ns, &opts)?;
         Ok::<_, String>(ComposeK8sExportView {
             compose_yaml: summary.compose_yaml,
             k8s_yaml: summary.k8s_yaml,
@@ -13229,7 +13234,7 @@ async fn software_mirror_set(
         let manager = env
             .package_manager
             .ok_or_else(|| "host has no detected package manager".to_string())?;
-        let id = package_mirror::MirrorId::from_str(&mirror_id)
+        let id = package_mirror::MirrorId::parse_id(&mirror_id)
             .ok_or_else(|| format!("unknown mirror id: {mirror_id}"))?;
         let report =
             package_mirror::set_mirror_blocking(&session, manager, id, sudo_password.as_deref())
@@ -14467,9 +14472,14 @@ fn sqlite_browse_remote_impl(
     let preview = if table_name.is_empty() {
         None
     } else {
-        let result =
-            sqlite_remote::preview_table_blocking(&session, trimmed, &table_name, 24, supports_json)
-                .map_err(|e| e.to_string())?;
+        let result = sqlite_remote::preview_table_blocking(
+            &session,
+            trimmed,
+            &table_name,
+            24,
+            supports_json,
+        )
+        .map_err(|e| e.to_string())?;
         Some(DataPreview {
             columns: result.columns,
             rows: result.rows,
@@ -14570,8 +14580,9 @@ fn sqlite_execute_remote_impl(
         sudo_password,
         effective_user.as_deref(),
     )?;
-    let result = sqlite_remote::execute_blocking(&session, trimmed_path, trimmed_sql, supports_json)
-        .map_err(|e| e.to_string())?;
+    let result =
+        sqlite_remote::execute_blocking(&session, trimmed_path, trimmed_sql, supports_json)
+            .map_err(|e| e.to_string())?;
     // Mirror the local sqlite_execute shape: a syntax error
     // inside the CLI becomes an Err rather than a result with
     // .error. That way the panel's `queryError` path fires.
@@ -14827,7 +14838,7 @@ fn shell_quote_dir(dir: &str) -> String {
 /// 100 KB) so the per-byte loop is fine.
 fn encode_base64(input: &[u8]) -> String {
     const ALPH: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     let mut i = 0;
     while i + 3 <= input.len() {
         let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8) | (input[i + 2] as u32);
@@ -16397,7 +16408,7 @@ fn sftp_read_text_impl(
     };
     let raw_len = decode_slice.len();
     let text = String::from_utf8_lossy(decode_slice).into_owned();
-    let lossy = text.as_bytes().len() != raw_len || text.contains('\u{FFFD}');
+    let lossy = text.len() != raw_len || text.contains('\u{FFFD}');
     let eol = detect_eol(&text);
     Ok(SftpTextFile {
         path,
@@ -16541,7 +16552,7 @@ fn sftp_write_text_impl(
     // The editor can't open anything larger than the read cap, so a
     // larger write means an on-save transform / paste blew past it —
     // refuse rather than stream a multi-MB whole-file overwrite.
-    let content_len = content.as_bytes().len() as u64;
+    let content_len = content.len() as u64;
     if content_len > SFTP_TEXT_READ_MAX {
         return Err(format!(
             "Content is {} bytes; editor write limit is {} bytes",
@@ -17104,7 +17115,8 @@ fn pierfs_cors(
 ) -> tauri::http::Response<Vec<u8>> {
     if let Some(o) = origin {
         if let Ok(val) = o.parse() {
-            resp.headers_mut().insert("access-control-allow-origin", val);
+            resp.headers_mut()
+                .insert("access-control-allow-origin", val);
         }
     }
     resp

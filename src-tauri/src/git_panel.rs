@@ -1512,7 +1512,7 @@ fn default_push_remote(repo_path: &Path) -> Option<String> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect();
-    if remotes.iter().any(|remote| *remote == "origin") {
+    if remotes.contains(&"origin") {
         Some(String::from("origin"))
     } else {
         remotes.first().map(|remote| remote.to_string())

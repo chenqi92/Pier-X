@@ -33,8 +33,7 @@ use tokio_util::sync::CancellationToken;
 use pier_core::services::ai::{
     classify_command, classify_list_path, classify_read_path, classify_write_path, provider,
     redact, ChatMessage, CliFlavor, CliMode, ProviderConfig, ProviderKind, RiskAssessment,
-    RiskLevel, StopKind,
-    ToolCall, ToolSpec,
+    RiskLevel, StopKind, ToolCall, ToolSpec,
 };
 
 const AI_CHAT_EVENT: &str = "ai-chat";
@@ -222,7 +221,9 @@ fn build_provider_config(settings: &AiProviderSettings) -> ProviderConfig {
         None
     } else {
         let slot = settings.secret_id.as_deref().unwrap_or(&settings.kind);
-        pier_core::credentials::get(&secret_key(slot)).ok().flatten()
+        pier_core::credentials::get(&secret_key(slot))
+            .ok()
+            .flatten()
     };
     let cli_flavor = settings.cli_flavor.as_deref().and_then(|f| match f {
         "claude-code" => Some(CliFlavor::ClaudeCode),
@@ -506,13 +507,10 @@ pub fn start_mcp_server(app: AppHandle) {
         None => return,
     };
     let _ = MCP_PORT.set(port);
-    std::thread::spawn(move || loop {
-        match server.recv() {
-            Ok(request) => {
-                let app = app.clone();
-                std::thread::spawn(move || mcp_handle(app, request));
-            }
-            Err(_) => break,
+    std::thread::spawn(move || {
+        while let Ok(request) = server.recv() {
+            let app = app.clone();
+            std::thread::spawn(move || mcp_handle(app, request));
         }
     });
 }
@@ -572,15 +570,30 @@ fn mcp_handle(app: AppHandle, mut request: tiny_http::Request) {
             } ]
         }),
         "tools/call" => {
-            let name = msg.pointer("/params/name").and_then(Value::as_str).unwrap_or("");
+            let name = msg
+                .pointer("/params/name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let decision = if name == "approve" {
-                let args = msg.pointer("/params/arguments").cloned().unwrap_or_else(|| json!({}));
+                let args = msg
+                    .pointer("/params/arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
                 let tool_name = args.get("tool_name").and_then(Value::as_str).unwrap_or("");
                 let input = args.get("input").cloned().unwrap_or_else(|| json!({}));
-                let tool_use_id = args.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
+                let tool_use_id = args
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 let runtime = app.state::<AiRuntime>();
-                let (allow, message) =
-                    mcp_approve_decision(&app, runtime.inner(), &conv_id, tool_name, &input, tool_use_id);
+                let (allow, message) = mcp_approve_decision(
+                    &app,
+                    runtime.inner(),
+                    &conv_id,
+                    tool_name,
+                    &input,
+                    tool_use_id,
+                );
                 if allow {
                     json!({ "behavior": "allow" })
                 } else {
@@ -599,14 +612,21 @@ fn mcp_handle(app: AppHandle, mut request: tiny_http::Request) {
             return;
         }
     };
-    mcp_respond_json(request, &json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+    mcp_respond_json(
+        request,
+        &json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+    );
 }
 
 /// Map a Claude tool name + input to a Pier-X risk assessment.
 fn classify_claude_tool(tool_name: &str, input: &Value) -> (String, String, RiskAssessment) {
     match tool_name {
         "Bash" | "PowerShell" => {
-            let cmd = input.get("command").and_then(Value::as_str).unwrap_or("").to_string();
+            let cmd = input
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let risk = classify_command(&cmd);
             (format!("{tool_name}: {cmd}"), cmd, risk)
         }
@@ -618,14 +638,25 @@ fn classify_claude_tool(tool_name: &str, input: &Value) -> (String, String, Risk
                 .unwrap_or("")
                 .to_string();
             let risk = classify_write_path(&path);
-            (format!("{tool_name} {path}"), format!("{tool_name} {path}"), risk)
+            (
+                format!("{tool_name} {path}"),
+                format!("{tool_name} {path}"),
+                risk,
+            )
         }
-        "Read" | "Glob" | "Grep" | "LS" | "WebFetch" | "WebSearch" | "TodoWrite" | "NotebookRead" => {
-            (tool_name.to_string(), tool_name.to_string(), RiskAssessment::new(RiskLevel::L0))
-        }
+        "Read" | "Glob" | "Grep" | "LS" | "WebFetch" | "WebSearch" | "TodoWrite"
+        | "NotebookRead" => (
+            tool_name.to_string(),
+            tool_name.to_string(),
+            RiskAssessment::new(RiskLevel::L0),
+        ),
         other => {
             // Unknown (incl. Task, which can spawn sub-agents) -> fail-closed L2.
-            (other.to_string(), other.to_string(), RiskAssessment::new(RiskLevel::L2))
+            (
+                other.to_string(),
+                other.to_string(),
+                RiskAssessment::new(RiskLevel::L2),
+            )
         }
     }
 }
@@ -665,7 +696,10 @@ fn mcp_approve_decision(
         emit_event(app, conversation_id, "toolCall", p);
         return (
             false,
-            format!("BLOCKED by Pier-X red-line policy ({})", risk.reasons.join("; ")),
+            format!(
+                "BLOCKED by Pier-X red-line policy ({})",
+                risk.reasons.join("; ")
+            ),
         );
     }
 
@@ -674,7 +708,9 @@ fn mcp_approve_decision(
         RiskLevel::L0 => Some("auto"),
         RiskLevel::L1 => {
             let session_hit = conv.session_allows.lock().unwrap().iter().any(|(h, p)| {
-                h == target_host && !p.is_empty() && command_text.trim_start().starts_with(p.as_str())
+                h == target_host
+                    && !p.is_empty()
+                    && command_text.trim_start().starts_with(p.as_str())
             });
             if session_hit {
                 Some("session")
@@ -931,7 +967,8 @@ pub fn ai_chat_send(
                     let url = format!("http://127.0.0.1:{port}/mcp/{conversation_id}");
                     let mcp_json =
                         json!({ "mcpServers": { "pierx": { "type": "http", "url": url } } });
-                    let path = std::env::temp_dir().join(format!("pierx-mcp-{conversation_id}.json"));
+                    let path =
+                        std::env::temp_dir().join(format!("pierx-mcp-{conversation_id}.json"));
                     if fs::write(&path, mcp_json.to_string()).is_ok() {
                         cfg.cli_extra_args = vec![
                             "--permission-mode".into(),

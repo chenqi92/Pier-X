@@ -43,12 +43,12 @@ pub use completions::{
     complete, complete_with_library, complete_with_library_using, Completion, CompletionKind,
     DirReadEntry, DirReader, LocalDirReader,
 };
-pub use library::{CommandPack, Library, OptionEntry, SubcommandEntry, SCHEMA_VERSION};
 pub use emulator::{Cell, Color, VtEmulator};
 pub use history::{
     append as history_append, clear as history_clear, is_sensitive, load as history_load,
     HistoryError,
 };
+pub use library::{CommandPack, Library, OptionEntry, SubcommandEntry, SCHEMA_VERSION};
 pub use man::{man_synopsis, ManError, ManOption, ManSynopsis};
 pub use pty::{Pty, TerminalError};
 pub use session::{GridSnapshot, NotifyEvent, NotifyFn, PierTerminal};

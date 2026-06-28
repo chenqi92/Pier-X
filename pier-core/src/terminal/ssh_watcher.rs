@@ -379,12 +379,7 @@ fn any_master_socket_present(dir: &Path) -> bool {
         .into_iter()
         .flatten()
         .filter_map(|entry| entry.ok())
-        .any(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("cm-")
-        })
+        .any(|entry| entry.file_name().to_string_lossy().starts_with("cm-"))
 }
 
 /// Leaf-name check: matches `ssh` on Unix, `ssh.exe` on Windows

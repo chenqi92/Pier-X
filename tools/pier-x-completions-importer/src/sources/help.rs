@@ -82,10 +82,8 @@ fn parse_into(body: &str, pack: &mut CommandPack) {
             Section::Commands => {
                 if let Some(entry) = parse_two_column(line) {
                     if !entry.name.starts_with('-') {
-                        pack.subcommands.push(SubcommandEntry::with_en(
-                            entry.name,
-                            entry.desc,
-                        ));
+                        pack.subcommands
+                            .push(SubcommandEntry::with_en(entry.name, entry.desc));
                     }
                 }
             }
@@ -117,17 +115,17 @@ fn section_header(line: &str) -> Option<Section> {
     let lower = trimmed.to_ascii_lowercase();
     let lower = lower.trim_end_matches(':');
     match lower {
-        "commands" | "subcommands" | "available commands" | "common commands"
+        "commands"
+        | "subcommands"
+        | "available commands"
+        | "common commands"
         | "main porcelain commands" => Some(Section::Commands),
         "options" | "flags" | "global flags" | "global options" => Some(Section::Options),
         // Anything that *looks* like a header (single line, ends
         // with `:`, ALL CAPS, or starts at column 0 after blank
         // lines) but isn't ours → flip to Other so we don't keep
         // appending to the previous section.
-        h if (h.is_empty() || h.contains(' '))
-            && line.ends_with(':')
-            && !line.starts_with(' ') =>
-        {
+        h if (h.is_empty() || h.contains(' ')) && line.ends_with(':') && !line.starts_with(' ') => {
             Some(Section::Other)
         }
         _ => None,

@@ -432,14 +432,12 @@ async fn run_with_sudo(session: &SshSession, cmd: &str) -> Result<WebServerActio
     // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
     // password. Pre-existing NOPASSWD setups keep working via the
     // `sudo -n ` fallback when no password is set.
-    let prefix = if is_root
-        || session.has_sudo_password().await
-        || session.is_elevation_armed().await
-    {
-        ""
-    } else {
-        "sudo -n "
-    };
+    let prefix =
+        if is_root || session.has_sudo_password().await || session.is_elevation_armed().await {
+            ""
+        } else {
+            "sudo -n "
+        };
     let (code, out) = session.exec_with_sudo(&format!("{prefix}{cmd}")).await?;
     Ok(WebServerActionResult {
         ok: code == 0,
@@ -870,14 +868,12 @@ pub async fn save_file_validate_reload(
     // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
     // password. Pre-existing NOPASSWD setups keep working via the
     // `sudo -n ` fallback when no password is set.
-    let prefix = if is_root
-        || session.has_sudo_password().await
-        || session.is_elevation_armed().await
-    {
-        ""
-    } else {
-        "sudo -n "
-    };
+    let prefix =
+        if is_root || session.has_sudo_password().await || session.is_elevation_armed().await {
+            ""
+        } else {
+            "sudo -n "
+        };
 
     let ts = match session.exec_with_sudo("date +%s").await {
         Ok((0, out)) => out.trim().to_string(),
@@ -1018,14 +1014,12 @@ pub async fn save_files_batch(
     // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
     // password. Pre-existing NOPASSWD setups keep working via the
     // `sudo -n ` fallback when no password is set.
-    let prefix = if is_root
-        || session.has_sudo_password().await
-        || session.is_elevation_armed().await
-    {
-        ""
-    } else {
-        "sudo -n "
-    };
+    let prefix =
+        if is_root || session.has_sudo_password().await || session.is_elevation_armed().await {
+            ""
+        } else {
+            "sudo -n "
+        };
 
     let ts = match session.exec_with_sudo("date +%s").await {
         Ok((0, out)) => out.trim().to_string(),
@@ -1288,14 +1282,12 @@ pub async fn create_site_file(
     // `exec_with_sudo` to wrap with `sudo -S -p ''` and pipe the
     // password. Pre-existing NOPASSWD setups keep working via the
     // `sudo -n ` fallback when no password is set.
-    let prefix = if is_root
-        || session.has_sudo_password().await
-        || session.is_elevation_armed().await
-    {
-        ""
-    } else {
-        "sudo -n "
-    };
+    let prefix =
+        if is_root || session.has_sudo_password().await || session.is_elevation_armed().await {
+            ""
+        } else {
+            "sudo -n "
+        };
 
     // Make sure the parent dir exists (caddy's conf.d isn't created by
     // default on every install).

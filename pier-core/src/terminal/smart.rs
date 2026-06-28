@@ -595,7 +595,11 @@ mod tests {
         // dash is the strictest commonly-available POSIX sh (Debian's
         // /bin/sh); fall back to whatever `sh` is. busybox is the closest
         // analogue to the box that hit this bug.
-        for prog in [&["dash", "-n"][..], &["busybox", "ash", "-n"][..], &["sh", "-n"][..]] {
+        for prog in [
+            &["dash", "-n"][..],
+            &["busybox", "ash", "-n"][..],
+            &["sh", "-n"][..],
+        ] {
             let mut child = match Command::new(prog[0])
                 .args(&prog[1..])
                 .stdin(Stdio::piped())

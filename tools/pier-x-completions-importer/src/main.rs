@@ -72,7 +72,10 @@ struct Args {
 
     /// TOML file with `commands = [...]`. Used when `--cmd` is
     /// not supplied.
-    #[arg(long, default_value = "tools/pier-x-completions-importer/seeds/default-list.toml")]
+    #[arg(
+        long,
+        default_value = "tools/pier-x-completions-importer/seeds/default-list.toml"
+    )]
     seeds: PathBuf,
 
     /// Force one specific source instead of picking by score.

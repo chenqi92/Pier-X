@@ -202,8 +202,12 @@ pub fn complete_with_library_using(
         let preceding = preceding_words(line, word_start);
         let active = walk_subcommands(pack, &preceding[1..]);
         let lib_rows = match active {
-            Some(SubcommandView::Pack(p)) => library_rows(prefix, &p.subcommands, &p.options, locale),
-            Some(SubcommandView::Sub(s)) => library_rows(prefix, &s.subcommands, &s.options, locale),
+            Some(SubcommandView::Pack(p)) => {
+                library_rows(prefix, &p.subcommands, &p.options, locale)
+            }
+            Some(SubcommandView::Sub(s)) => {
+                library_rows(prefix, &s.subcommands, &s.options, locale)
+            }
             None => Vec::new(),
         };
         if !lib_rows.is_empty() {
@@ -220,9 +224,15 @@ pub fn complete_with_library_using(
 /// nothing has been typed.
 fn head_command(line: &str) -> Option<&str> {
     let trimmed = line.trim_start();
-    let end = trimmed.find(|c: char| c.is_whitespace()).unwrap_or(trimmed.len());
+    let end = trimmed
+        .find(|c: char| c.is_whitespace())
+        .unwrap_or(trimmed.len());
     let head = &trimmed[..end];
-    if head.is_empty() { None } else { Some(head) }
+    if head.is_empty() {
+        None
+    } else {
+        Some(head)
+    }
 }
 
 /// Words separating the head command from the cursor's current
@@ -230,9 +240,7 @@ fn head_command(line: &str) -> Option<&str> {
 /// `["git", "remote", "add"]`. The first element is always the
 /// command head.
 fn preceding_words(line: &str, word_start: usize) -> Vec<&str> {
-    line[..word_start]
-        .split_whitespace()
-        .collect()
+    line[..word_start].split_whitespace().collect()
 }
 
 /// View into the active subcommand context — either the top-level
@@ -473,11 +481,7 @@ fn complete_command(prefix: &str) -> Vec<Completion> {
 /// File and directory entries under `cwd / dirname(prefix)` whose
 /// basename begins with `basename(prefix)`. Returns directories
 /// before files for stable ordering.
-fn complete_file_with(
-    prefix: &str,
-    cwd: Option<&Path>,
-    reader: &dyn DirReader,
-) -> Vec<Completion> {
+fn complete_file_with(prefix: &str, cwd: Option<&Path>, reader: &dyn DirReader) -> Vec<Completion> {
     let (dir_part, base_part) = split_path_prefix(prefix);
 
     let base_dir = if dir_part.is_empty() {
@@ -578,7 +582,9 @@ fn split_path_prefix(prefix: &str) -> (String, String) {
     // Special-case the root directory: trimming all trailing
     // separators would collapse `/` into `""`, losing absolute-path
     // semantics. Same for Windows `C:\`.
-    let dir = if raw_dir == "/" || (cfg!(windows) && (raw_dir == "\\" || is_windows_drive_root(raw_dir))) {
+    let dir = if raw_dir == "/"
+        || (cfg!(windows) && (raw_dir == "\\" || is_windows_drive_root(raw_dir)))
+    {
         raw_dir.to_string()
     } else {
         raw_dir
@@ -689,9 +695,18 @@ mod tests {
     #[test]
     fn command_position_with_slash_completes_paths() {
         let reader = FixedReader(vec![
-            DirReadEntry { name: "quick-start.sh".into(), is_dir: false },
-            DirReadEntry { name: "install.sh".into(), is_dir: false },
-            DirReadEntry { name: "data".into(), is_dir: true },
+            DirReadEntry {
+                name: "quick-start.sh".into(),
+                is_dir: false,
+            },
+            DirReadEntry {
+                name: "install.sh".into(),
+                is_dir: false,
+            },
+            DirReadEntry {
+                name: "data".into(),
+                is_dir: true,
+            },
         ]);
         let lib = crate::terminal::library::Library::empty();
 
@@ -813,10 +828,7 @@ mod tests {
             split_path_prefix("/etc"),
             ("/".to_string(), "etc".to_string()),
         );
-        assert_eq!(
-            split_path_prefix("/"),
-            ("/".to_string(), String::new()),
-        );
+        assert_eq!(split_path_prefix("/"), ("/".to_string(), String::new()),);
         assert_eq!(
             split_path_prefix("/usr/lo"),
             ("/usr".to_string(), "lo".to_string()),
@@ -843,7 +855,10 @@ mod tests {
     #[test]
     fn home_dir_resolves_via_known_env_vars() {
         // Always returns *something* in test environments.
-        assert!(home_dir().is_some(), "expected HOME or USERPROFILE to be set");
+        assert!(
+            home_dir().is_some(),
+            "expected HOME or USERPROFILE to be set"
+        );
     }
 
     #[test]
@@ -878,7 +893,11 @@ mod tests {
             .expect("`build` should be a known docker subcommand");
         assert_eq!(build_row.kind, CompletionKind::Subcommand);
         assert!(
-            build_row.description.as_deref().unwrap_or("").contains("Build"),
+            build_row
+                .description
+                .as_deref()
+                .unwrap_or("")
+                .contains("Build"),
             "expected English description, got {:?}",
             build_row.description,
         );
@@ -902,8 +921,11 @@ mod tests {
         assert_eq!(attach.value, "docker attach");
         // We should still see the regular binary completion for the
         // command name itself.
-        assert!(rows.iter().any(|r| r.value == "docker" && matches!(r.kind, CompletionKind::Binary | CompletionKind::Builtin)),
-                "`docker` itself should still be in the list");
+        assert!(
+            rows.iter().any(|r| r.value == "docker"
+                && matches!(r.kind, CompletionKind::Binary | CompletionKind::Builtin)),
+            "`docker` itself should still be in the list"
+        );
     }
 
     #[test]

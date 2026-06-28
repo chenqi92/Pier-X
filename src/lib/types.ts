@@ -1207,7 +1207,7 @@ export function normalizeRightTool(tool: RightTool): {
   return { rightTool: tool, dbKind: null };
 }
 
-// ── Tab Model (matches Qt Main.qml tab schema) ─────────────────
+// ── Tab Model ─────────────────
 
 /**
  * Overlay SSH addressing inferred from the user typing `ssh user@host`
@@ -1486,7 +1486,7 @@ export const DEFAULT_LOG_SOURCE: LogSource = {
   customCommand: "",
 };
 
-// ── Tab color palette (matches Qt TabBar.qml) ──────────────────
+// ── Tab color palette ──────────────────
 
 export const TAB_COLORS = [
   { name: "Red", value: "#e06c75" },

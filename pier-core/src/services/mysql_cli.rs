@@ -96,8 +96,7 @@ pub fn parse_batch(stdout: &str) -> CliTable {
 /// socket so the `auth_socket` plugin authenticates by OS uid.
 /// `database`, when a safe identifier, is passed as the default schema.
 fn mysql_command(sql: &str, database: Option<&str>) -> String {
-    let mut cmd =
-        String::from("mysql --batch --protocol=socket --default-character-set=utf8mb4");
+    let mut cmd = String::from("mysql --batch --protocol=socket --default-character-set=utf8mb4");
     if let Some(db) = database {
         if is_safe_ident(db) {
             cmd.push(' ');
@@ -130,7 +129,9 @@ fn run_batch(
             "elevation.db",
             &format!("mysql socket-CLI exited {code}: {first}"),
         );
-        return Err(SshError::InvalidConfig(format!("mysql exited {code}: {first}")));
+        return Err(SshError::InvalidConfig(format!(
+            "mysql exited {code}: {first}"
+        )));
     }
     let table = parse_batch(&out);
     crate::logging::write_event_verbose(
@@ -148,11 +149,7 @@ fn run_batch(
 
 /// Probe whether the elevated `mysql` CLI is usable (binary present +
 /// socket auth works). Returns the server version string on success.
-pub fn probe(
-    session: &SshSession,
-    elevation: &Elevation,
-    secret: Option<&str>,
-) -> Result<String> {
+pub fn probe(session: &SshSession, elevation: &Elevation, secret: Option<&str>) -> Result<String> {
     let table = run_batch(session, elevation, secret, "SELECT VERSION()", None)?;
     Ok(table
         .rows
@@ -183,7 +180,7 @@ fn col_idx(columns: &[String], name: &str) -> Option<usize> {
     columns.iter().position(|c| c.eq_ignore_ascii_case(name))
 }
 
-fn cell<'a>(row: &'a [Option<String>], idx: Option<usize>) -> Option<&'a str> {
+fn cell(row: &[Option<String>], idx: Option<usize>) -> Option<&str> {
     idx.and_then(|i| row.get(i)).and_then(|v| v.as_deref())
 }
 
@@ -217,8 +214,7 @@ pub fn list_tables_meta(
         col_idx(&t.columns, "update_time"),
         col_idx(&t.columns, "table_comment"),
     );
-    Ok(t
-        .rows
+    Ok(t.rows
         .iter()
         .filter_map(|r| {
             let name = cell(r, i_name)?.to_string();
@@ -279,8 +275,7 @@ pub fn list_routines(
         col_idx(&t.columns, "routine_name"),
         col_idx(&t.columns, "routine_type"),
     );
-    Ok(t
-        .rows
+    Ok(t.rows
         .iter()
         .filter_map(|r| {
             Some(RoutineSummary {
@@ -315,8 +310,7 @@ pub fn list_columns(
         col_idx(&t.columns, "Extra"),
         col_idx(&t.columns, "Comment"),
     );
-    Ok(t
-        .rows
+    Ok(t.rows
         .iter()
         .filter_map(|r| {
             Some(ColumnInfo {
@@ -383,8 +377,20 @@ mod tests {
 
     #[test]
     fn empty_output_is_empty_table() {
-        assert_eq!(parse_batch(""), CliTable { columns: vec![], rows: vec![] });
-        assert_eq!(parse_batch("\n"), CliTable { columns: vec![], rows: vec![] });
+        assert_eq!(
+            parse_batch(""),
+            CliTable {
+                columns: vec![],
+                rows: vec![]
+            }
+        );
+        assert_eq!(
+            parse_batch("\n"),
+            CliTable {
+                columns: vec![],
+                rows: vec![]
+            }
+        );
     }
 
     #[test]

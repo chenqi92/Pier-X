@@ -72,9 +72,9 @@ vte = "0.15"
 # key exchange, authentication, channels, port forwarding). The
 # `Pty` trait in terminal::pty is synchronous, so the ssh module
 # bridges the two worlds via a shared multi-thread tokio runtime
-# behind a `OnceLock`. Default features pull aws-lc-rs for crypto
-# (portable across Apple Silicon / x86_64 / Windows ARM64).
-russh = { version = "0.60", features = ["async-trait"] }
+# behind a `OnceLock`. Keep default features off so russh uses the
+# existing ring-backed crypto path instead of pulling aws-lc-sys/CMake.
+russh = { version = "0.60", default-features = false, features = ["async-trait", "flate2", "ring", "rsa"] }
 
 # SFTP subsystem on top of russh. Gives us read_dir / open /
 # read / write / mkdir / remove / rename without us having to
@@ -100,7 +100,7 @@ redis = { version = "1.2", default-features = false, features = [
 # case `require`/`verify-full` protect.
 tokio-postgres = "0.7"
 # Opt-in TLS for the direct (non-tunneled) PostgreSQL path. Pinned to the
-# same rustls 0.23 already in the tree (ironrdp-tls / ureq), so no second
+# same rustls 0.23 already in the tree (RDP / ureq), so no second
 # rustls stack is added for PG. `ring` selects an explicit crypto provider
 # (both ring + aws-lc-rs are present transitively, so the default is
 # ambiguous and must be named) — `webpki-roots` backs `verify-full`.
@@ -238,32 +238,15 @@ jpeg-encoder = "0.6"
 # KDC traffic; username/password NLA runs NTLM in-band).
 ironrdp = { version = "0.15", default-features = false, features = ["connector", "session", "input", "graphics", "pdu"], optional = true }
 ironrdp-tokio = { version = "0.9", features = ["reqwest"], optional = true }
-ironrdp-tls = { version = "0.2", default-features = false, features = ["rustls"], optional = true }
-
-# FreeRDP-backed RDP via the `freerdp-sys` workspace crate (vendored
-# libfreerdp3 built from source with the MS-RDPEGFX H.264/AVC444 pipeline).
-# Optional + behind the `rdp-freerdp` feature: only this edge pulls in the
-# cmake/bindgen native build, so the default IronRDP build stays pure-Rust.
-freerdp-sys = { path = "../freerdp-sys", optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"], optional = true }
+x509-cert = { version = "0.2", default-features = false, features = ["std"], optional = true }
 
 [features]
 default = ["rdp"]
 # Compile the IronRDP-backed RDP client. On by default; disable with
 # `--no-default-features` to build only the in-crate VNC client plus the
 # rest of pier-core (faster iteration, no rustls build).
-rdp = ["dep:ironrdp", "dep:ironrdp-tokio", "dep:ironrdp-tls"]
-
-# EXPERIMENTAL FreeRDP-backed RDP client — real H.264 / AVC444 EGFX via FFI to
-# libfreerdp3, the capability IronRDP 0.x lacks entirely (verified: no H.264
-# decoder, and its architecture only emits decoded dirty-rects). OFF by default
-# and intentionally NOT in `default`: the protocol code, the bindgen layer, and
-# the per-target libfreerdp3 build land incrementally behind this flag so the
-# shipping IronRDP path stays green until FreeRDP proves out on every release
-# target (Windows x64/ARM64, macOS universal, Linux deb/rpm/AppImage). When this
-# flag is on it supersedes `rdp` for the RDP protocol. This deliberately crosses
-# the crate's "no C-ABI bridge / pure-Rust" stance for the H.264 win; see
-# remote_desktop::rdp_freerdp and docs/PRODUCT-SPEC.md once migration lands.
-rdp-freerdp = ["dep:freerdp-sys"]
+rdp = ["dep:ironrdp", "dep:ironrdp-tokio", "dep:tokio-rustls", "dep:x509-cert"]
 
 # Unix PTY — forkpty + ioctl wrappers live in libc. Only pulled in on
 # Unix targets; Windows uses the ConPTY-backed implementation below.

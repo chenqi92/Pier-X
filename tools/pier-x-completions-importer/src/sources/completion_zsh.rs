@@ -294,7 +294,10 @@ _describe -t commands "command" commands
         let subs = parse_describe_blocks(body);
         assert_eq!(subs.len(), 2);
         assert_eq!(subs[0].name, "build");
-        assert_eq!(subs[0].i18n.get("en").unwrap(), "Build an image from a Dockerfile");
+        assert_eq!(
+            subs[0].i18n.get("en").unwrap(),
+            "Build an image from a Dockerfile"
+        );
     }
 
     #[test]

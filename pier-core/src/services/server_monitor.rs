@@ -1050,8 +1050,7 @@ pub fn parse_df(text: &str, snap: &mut ServerSnapshot) {
             snap.disk_total = format_df_size(total_b);
             snap.disk_used = format_df_size(used_b);
             snap.disk_avail = format_df_size(avail_b);
-            snap.disk_use_pct =
-                ((used_b as f64 / total_b as f64) * 100.0 * 10.0).round() / 10.0;
+            snap.disk_use_pct = ((used_b as f64 / total_b as f64) * 100.0 * 10.0).round() / 10.0;
         }
     }
 }
@@ -1154,7 +1153,7 @@ pub fn parse_lsblk(text: &str) -> Vec<BlockDeviceEntry> {
             }
             let key = &trimmed[key_start..i];
             i += 1; // skip `=`
-            // Read the value: either a quoted string or a bare token.
+                    // Read the value: either a quoted string or a bare token.
             let value = if i < bytes.len() && bytes[i] == b'"' {
                 i += 1;
                 let v_start = i;

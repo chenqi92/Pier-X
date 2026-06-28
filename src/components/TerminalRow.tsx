@@ -25,15 +25,20 @@ function resolveTerminalColor(tag: string, ansi: string[]): string | undefined {
       const r = steps[Math.floor(value / 36) % 6];
       const g = steps[Math.floor(value / 6) % 6];
       const b = steps[value % 6];
-      return `rgb(${r},${g},${b})`;
+      return toHexColor(r, g, b);
     }
     if (n >= 232 && n <= 255) {
       const shade = 8 + (n - 232) * 10;
-      return `rgb(${shade},${shade},${shade})`;
+      return toHexColor(shade, shade, shade);
     }
     return undefined;
   }
   return tag;
+}
+
+function toHexColor(r: number, g: number, b: number): string {
+  const hex = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, "0");
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
 }
 
 /**

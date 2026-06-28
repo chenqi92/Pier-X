@@ -84,6 +84,17 @@ impl From<mysql_async::Error> for MysqlError {
 /// Result alias for mysql ops.
 pub type Result<T, E = MysqlError> = std::result::Result<T, E>;
 
+type RawProcessRow = (
+    u64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    i64,
+    Option<String>,
+    Option<String>,
+);
+
 /// Connection config for a MySQL endpoint. Kept as a struct
 /// so future auth modes (TLS CA, client cert) can be added
 /// without a signature change.
@@ -426,21 +437,12 @@ impl MysqlClient {
              FROM information_schema.processlist \
              WHERE ID <> CONNECTION_ID() \
              ORDER BY TIME DESC, ID";
-        let raw: Vec<(
-            u64,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            i64,
-            Option<String>,
-            Option<String>,
-        )> = sql.fetch(&mut conn).await?;
+        let raw: Vec<RawProcessRow> = sql.fetch(&mut conn).await?;
         drop(conn);
         Ok(raw
             .into_iter()
-            .map(|(id, user, host, db, command, time, state, info)| {
-                MysqlProcessRow {
+            .map(
+                |(id, user, host, db, command, time, state, info)| MysqlProcessRow {
                     id,
                     user,
                     host,
@@ -449,8 +451,8 @@ impl MysqlClient {
                     time_seconds: time,
                     state,
                     info,
-                }
-            })
+                },
+            )
             .collect())
     }
 
@@ -681,7 +683,17 @@ impl MysqlClient {
         Ok(rows
             .into_iter()
             .map(
-                |(name, column_type, _collation, null_flag, key, default_value, extra, _priv, comment)| {
+                |(
+                    name,
+                    column_type,
+                    _collation,
+                    null_flag,
+                    key,
+                    default_value,
+                    extra,
+                    _priv,
+                    comment,
+                )| {
                     ColumnInfo {
                         name,
                         column_type,

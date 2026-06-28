@@ -561,9 +561,7 @@ impl PostgresClient {
                 wait_event_type: r
                     .try_get::<_, Option<String>>("wait_event_type")
                     .unwrap_or(None),
-                wait_event: r
-                    .try_get::<_, Option<String>>("wait_event")
-                    .unwrap_or(None),
+                wait_event: r.try_get::<_, Option<String>>("wait_event").unwrap_or(None),
                 query: r.try_get::<_, Option<String>>("query").unwrap_or(None),
             });
         }

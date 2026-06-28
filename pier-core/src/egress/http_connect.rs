@@ -97,8 +97,7 @@ async fn read_until_double_crlf(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 fn is_valid_request_host(host: &str) -> bool {
     !host.is_empty()
         && host.bytes().all(|b| {
-            b.is_ascii_alphanumeric()
-                || matches!(b, b'.' | b'-' | b'_' | b'[' | b']' | b':')
+            b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'[' | b']' | b':')
         })
 }
 
@@ -124,9 +123,8 @@ fn parse_status_line(head: &str) -> io::Result<u16> {
 /// Standard base64 encode (RFC 4648 §4) — about 30 lines, kept here
 /// to dodge a separate `base64` crate dependency for one call site.
 fn base64_encode(bytes: &[u8]) -> String {
-    const TBL: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    const TBL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut chunks = bytes.chunks_exact(3);
     for chunk in chunks.by_ref() {
         let b0 = chunk[0] as u32;
@@ -191,7 +189,9 @@ mod tests {
         assert!(!is_valid_request_host("evil.com\r\nX-Injected: 1"));
         assert!(!is_valid_request_host("evil.com\nGET /"));
         assert!(!is_valid_request_host("a b.com"));
-        assert!(!is_valid_request_host("evil.com\r\n\r\nGET http://internal/"));
+        assert!(!is_valid_request_host(
+            "evil.com\r\n\r\nGET http://internal/"
+        ));
     }
 
     #[tokio::test]
@@ -210,7 +210,10 @@ mod tests {
             parse_status_line("HTTP/1.1 200 Connection established\r\n").unwrap(),
             200
         );
-        assert_eq!(parse_status_line("HTTP/1.0 407 Proxy auth\r\n").unwrap(), 407);
+        assert_eq!(
+            parse_status_line("HTTP/1.0 407 Proxy auth\r\n").unwrap(),
+            407
+        );
         assert!(parse_status_line("garbage").is_err());
     }
 

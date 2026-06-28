@@ -30,10 +30,38 @@ const READ_ONLY_KEYWORDS: &[&str] = &[
 /// e.g. `EXPLAIN ANALYZE DELETE …` (PostgreSQL actually executes the
 /// analyzed statement) or `SELECT … INTO newtbl`.
 const WRITE_KEYWORDS: &[&str] = &[
-    "INSERT", "UPDATE", "DELETE", "REPLACE", "MERGE", "UPSERT", "TRUNCATE", "DROP", "CREATE",
-    "ALTER", "RENAME", "GRANT", "REVOKE", "CALL", "EXEC", "EXECUTE", "LOAD", "COPY", "IMPORT",
-    "INTO", "ATTACH", "DETACH", "VACUUM", "REINDEX", "CLUSTER", "LOCK", "UNLOCK", "HANDLER",
-    "INSTALL", "UNINSTALL", "OPTIMIZE", "REPAIR",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "REPLACE",
+    "MERGE",
+    "UPSERT",
+    "TRUNCATE",
+    "DROP",
+    "CREATE",
+    "ALTER",
+    "RENAME",
+    "GRANT",
+    "REVOKE",
+    "CALL",
+    "EXEC",
+    "EXECUTE",
+    "LOAD",
+    "COPY",
+    "IMPORT",
+    "INTO",
+    "ATTACH",
+    "DETACH",
+    "VACUUM",
+    "REINDEX",
+    "CLUSTER",
+    "LOCK",
+    "UNLOCK",
+    "HANDLER",
+    "INSTALL",
+    "UNINSTALL",
+    "OPTIMIZE",
+    "REPAIR",
 ];
 
 /// Is `sql` a single read-only statement? Conservative: a write hidden
@@ -77,7 +105,10 @@ pub fn is_read_only_sql(sql: &str) -> bool {
 /// alphabetic keyword and the remaining text after it. `None` when the
 /// statement doesn't start with a word.
 fn split_leading_keyword(body: &str) -> Option<(String, &str)> {
-    let kw: String = body.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let kw: String = body
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
     if kw.is_empty() {
         return None;
     }
@@ -97,7 +128,7 @@ fn set_is_read_only(rest: &str) -> bool {
     let bounded_after = |tail: &str| {
         tail.chars()
             .next()
-            .map_or(true, |c| !(c.is_ascii_alphanumeric() || c == '_'))
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'))
     };
     for kw in ["global", "persist_only", "persist", "role"] {
         if let Some(tail) = trimmed.strip_prefix(kw) {
@@ -361,8 +392,12 @@ mod tests {
         // PostgreSQL's EXPLAIN ANALYZE actually runs the analyzed statement.
         assert!(!is_read_only_sql("EXPLAIN ANALYZE DELETE FROM t"));
         assert!(!is_read_only_sql("EXPLAIN ANALYZE UPDATE t SET x = 1"));
-        assert!(!is_read_only_sql("EXPLAIN ANALYZE INSERT INTO t VALUES (1)"));
-        assert!(!is_read_only_sql("explain (analyze, verbose) delete from t"));
+        assert!(!is_read_only_sql(
+            "EXPLAIN ANALYZE INSERT INTO t VALUES (1)"
+        ));
+        assert!(!is_read_only_sql(
+            "explain (analyze, verbose) delete from t"
+        ));
         // Plain EXPLAIN of a read stays allowed.
         assert!(is_read_only_sql("EXPLAIN SELECT 1"));
         assert!(is_read_only_sql("EXPLAIN ANALYZE SELECT * FROM t"));
@@ -374,7 +409,9 @@ mod tests {
         // SELECT … INTO creates/populates a table (SQL Server / PostgreSQL)
         // or writes a file (MySQL SELECT … INTO OUTFILE).
         assert!(!is_read_only_sql("SELECT * INTO newtbl FROM t"));
-        assert!(!is_read_only_sql("select a, b into dumpfile '/tmp/x' from t"));
+        assert!(!is_read_only_sql(
+            "select a, b into dumpfile '/tmp/x' from t"
+        ));
         // A column literally named with a write word is not a write.
         assert!(is_read_only_sql("SELECT delete_flag, created_at FROM t"));
         assert!(is_read_only_sql("SELECT * FROM t WHERE note = 'delete me'"));

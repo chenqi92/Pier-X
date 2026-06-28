@@ -12,6 +12,7 @@
 
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
+#![allow(clippy::too_many_arguments)]
 
 pub mod connections;
 pub mod credentials;
@@ -40,13 +41,14 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// asset-protocol grants in the Tauri layer.
 pub fn random_hex_token(byte_len: usize) -> std::io::Result<String> {
     let mut buf = vec![0u8; byte_len];
-    getrandom::getrandom(&mut buf)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    getrandom::getrandom(&mut buf).map_err(std::io::Error::other)?;
     use std::fmt::Write as _;
-    Ok(buf.iter().fold(String::with_capacity(byte_len * 2), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    }))
+    Ok(buf
+        .iter()
+        .fold(String::with_capacity(byte_len * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        }))
 }
 
 #[cfg(test)]

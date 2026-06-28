@@ -203,14 +203,10 @@ impl SshSession {
             // Egress path: dial through the profile, then hand the
             // resulting byte stream to russh via connect_stream.
             let dial_fut = async {
-                let stream = crate::egress::resolve_tcp_with(
-                    Some(profile),
-                    &config.host,
-                    config.port,
-                    ctx,
-                )
-                .await
-                .map_err(SshError::Connect)?;
+                let stream =
+                    crate::egress::resolve_tcp_with(Some(profile), &config.host, config.port, ctx)
+                        .await
+                        .map_err(SshError::Connect)?;
                 client::connect_stream(russh_config, stream, handler)
                     .await
                     .map_err(SshError::from)
@@ -298,8 +294,7 @@ impl SshSession {
         egress: Option<&crate::egress::EgressProfile>,
         ctx: Option<&dyn crate::egress::EgressContext>,
     ) -> Result<Self> {
-        runtime::shared()
-            .block_on(Self::connect_with_egress_ctx(config, verifier, egress, ctx))
+        runtime::shared().block_on(Self::connect_with_egress_ctx(config, verifier, egress, ctx))
     }
 
     /// Run every authentication method the config specifies, in
@@ -845,15 +840,7 @@ impl SshSession {
         // xterm-256color matches what terminal::pty::UnixPty pins for
         // local shells, so TUIs like vim and htop render correctly.
         channel
-            .request_pty(
-                true,
-                "xterm-256color",
-                cols as u32,
-                rows as u32,
-                0,
-                0,
-                &[],
-            )
+            .request_pty(true, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
             .await?;
         channel.request_shell(true).await?;
         let prelude = Self::confirm_shell_started(&mut channel).await?;
@@ -902,8 +889,7 @@ impl SshSession {
                     }
                     Some(ChannelMsg::Failure) => {
                         return Err(SshError::InvalidConfig(
-                            "failed to open channel: server rejected the shell request"
-                                .to_string(),
+                            "failed to open channel: server rejected the shell request".to_string(),
                         ));
                     }
                     Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
@@ -1089,7 +1075,8 @@ impl SshSession {
         if self.has_sudo_password().await || self.is_elevation_armed().await {
             return self.exec_with_sudo(command).await;
         }
-        self.exec_command(&format!("LC_ALL=C sudo -n {command}")).await
+        self.exec_command(&format!("LC_ALL=C sudo -n {command}"))
+            .await
     }
 
     /// True when this session has a non-empty sudo password attached.
@@ -1232,7 +1219,8 @@ impl SshSession {
                 // `su`'d in the terminal), which `sudo` rejects. Fall back
                 // to `su - root` over a PTY with the same secret so the
                 // panel still follows the terminal's elevation.
-                self.su_fallback_if_auth_failed(res, "root", command, secret).await
+                self.su_fallback_if_auth_failed(res, "root", command, secret)
+                    .await
             }
             Elevation::SudoUser { target_user } => {
                 let (wrapped, stdin) =
@@ -1242,7 +1230,8 @@ impl SshSession {
                     .await
             }
             Elevation::Su { target_user } => {
-                self.exec_su_pty(target_user, secret.unwrap_or(""), command).await
+                self.exec_su_pty(target_user, secret.unwrap_or(""), command)
+                    .await
             }
         }
     }
@@ -1277,7 +1266,9 @@ impl SshSession {
             log::info!(
                 "[audit] sudo did not authorize (auth={looks_auth} silent={silent}), falling back to su - {target_user}"
             );
-            let su_res = self.exec_su_pty(target_user, secret.unwrap_or(""), command).await?;
+            let su_res = self
+                .exec_su_pty(target_user, secret.unwrap_or(""), command)
+                .await?;
             log::info!(
                 "[audit] su fallback exit={} out_len={}",
                 su_res.0,
@@ -1319,15 +1310,16 @@ impl SshSession {
         // Single-quote the username so a value with shell metacharacters
         // can't break out of the `su` token (mirrors the wrappers in
         // `crate::sudo`; the value should already be validated upstream).
-        let full = format!("LC_ALL=C su - {} -c '{escaped}'", crate::sudo::quote_user(user));
+        let full = format!(
+            "LC_ALL=C su - {} -c '{escaped}'",
+            crate::sudo::quote_user(user)
+        );
 
         let mut channel = self.handle.channel_open_session().await?;
         // A minimal PTY: `dumb` term keeps escape sequences out of the
         // output, small fixed size, no special modes. `want_reply=true`
         // so the PTY is confirmed allocated before we exec `su`.
-        channel
-            .request_pty(true, "dumb", 80, 24, 0, 0, &[])
-            .await?;
+        channel.request_pty(true, "dumb", 80, 24, 0, 0, &[]).await?;
         channel.exec(true, full.as_bytes()).await?;
 
         let mut full_out: Vec<u8> = Vec::new();
@@ -1350,8 +1342,10 @@ impl SshSession {
                 Ok(None) => break, // channel closed — normal completion
                 Err(_) => {
                     let _ = channel.close().await;
-                    let preview: String =
-                        String::from_utf8_lossy(&full_out).chars().take(160).collect();
+                    let preview: String = String::from_utf8_lossy(&full_out)
+                        .chars()
+                        .take(160)
+                        .collect();
                     log::warn!(
                         "[audit] su - {user} timed out after {SU_IDLE:?} idle pw_attempts={pw_attempts} raw_len={} raw_preview={preview:?}",
                         full_out.len()
@@ -1372,9 +1366,7 @@ impl SshSession {
                     // waiting on the idle timeout — su would otherwise emit a
                     // fresh prompt that, once we exhaust our attempts, nobody
                     // answers.
-                    if !seen.contains(SENTINEL)
-                        && crate::sudo::is_elevation_auth_failure(&seen)
-                    {
+                    if !seen.contains(SENTINEL) && crate::sudo::is_elevation_auth_failure(&seen) {
                         let _ = channel.close().await;
                         break;
                     }
@@ -1581,9 +1573,7 @@ impl SshSession {
             exit_code = CANCELLED_EXIT_CODE;
         }
         if !line_buf.is_empty() {
-            let trimmed = line_buf
-                .strip_suffix(b"\r")
-                .unwrap_or(&line_buf);
+            let trimmed = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
             on_line(&String::from_utf8_lossy(trimmed));
         }
         Ok((exit_code, String::from_utf8_lossy(&full).into_owned()))
@@ -1944,15 +1934,9 @@ mod tests {
         );
     }
 
-    fn drain_capture(
-        input: &[u8],
-        full: &mut Vec<u8>,
-        buf: &mut Vec<u8>,
-    ) -> Vec<String> {
+    fn drain_capture(input: &[u8], full: &mut Vec<u8>, buf: &mut Vec<u8>) -> Vec<String> {
         let mut lines = Vec::new();
-        SshSession::drain_chunk(input, full, buf, &mut |s: &str| {
-            lines.push(s.to_string())
-        });
+        SshSession::drain_chunk(input, full, buf, &mut |s: &str| lines.push(s.to_string()));
         lines
     }
 
@@ -1961,7 +1945,10 @@ mod tests {
         let mut full = Vec::new();
         let mut buf = Vec::new();
 
-        assert_eq!(drain_capture(b"hello\nworld", &mut full, &mut buf), vec!["hello"]);
+        assert_eq!(
+            drain_capture(b"hello\nworld", &mut full, &mut buf),
+            vec!["hello"]
+        );
         assert_eq!(buf, b"world");
 
         assert_eq!(drain_capture(b"\nlast", &mut full, &mut buf), vec!["world"]);

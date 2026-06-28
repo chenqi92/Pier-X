@@ -29,8 +29,8 @@ export type GridColumnMeta = {
   /** Part of the primary key — required to identify rows for UPDATE/DELETE. */
   pk: boolean;
   /** Pre-computed list of valid values when the column's type is an
-   *  enum (PG only for now). The grid renders a `<datalist>` so the
-   *  edit cell behaves like a dropdown. */
+   *  enum (PG only for now). The grid feeds these to the themed
+   *  suggestion UI for the edit cell. */
   enumValues?: string[];
 };
 

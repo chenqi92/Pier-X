@@ -64,8 +64,12 @@ fn parse_server(server: &str) -> io::Result<SocketAddr> {
     } else {
         format!("{server}:53")
     };
-    let mut iter = std::net::ToSocketAddrs::to_socket_addrs(&with_port)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("DNS server {server}: {e}")))?;
+    let mut iter = std::net::ToSocketAddrs::to_socket_addrs(&with_port).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("DNS server {server}: {e}"),
+        )
+    })?;
     iter.next().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::AddrNotAvailable,
@@ -76,7 +80,11 @@ fn parse_server(server: &str) -> io::Result<SocketAddr> {
 
 async fn query_one(host: &str, server: SocketAddr, qtype: u16) -> io::Result<Option<IpAddr>> {
     let query = build_query(host, qtype)?;
-    let bind = if server.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
+    let bind = if server.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    };
     let socket = UdpSocket::bind(bind).await?;
     socket.connect(server).await?;
 
@@ -144,7 +152,10 @@ fn encode_name(host: &str, buf: &mut Vec<u8>) -> io::Result<()> {
 /// `skip_name`.
 fn parse_first_ip(buf: &[u8], qtype: u16) -> io::Result<Option<IpAddr>> {
     if buf.len() < 12 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "DNS reply too short"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "DNS reply too short",
+        ));
     }
     let flags = u16::from_be_bytes([buf[2], buf[3]]);
     let rcode = flags & 0x000F;
@@ -160,7 +171,10 @@ fn parse_first_ip(buf: &[u8], qtype: u16) -> io::Result<Option<IpAddr>> {
     for _ in 0..qd {
         pos = skip_name(buf, pos)?;
         if pos + 4 > buf.len() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "DNS reply truncated"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "DNS reply truncated",
+            ));
         }
         pos += 4;
     }
@@ -168,18 +182,25 @@ fn parse_first_ip(buf: &[u8], qtype: u16) -> io::Result<Option<IpAddr>> {
     for _ in 0..an {
         pos = skip_name(buf, pos)?;
         if pos + 10 > buf.len() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "DNS reply truncated"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "DNS reply truncated",
+            ));
         }
         let rtype = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
         // skip class(2) + ttl(4)
         let rdlen = u16::from_be_bytes([buf[pos + 8], buf[pos + 9]]) as usize;
         pos += 10;
         if pos + rdlen > buf.len() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "DNS reply truncated"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "DNS reply truncated",
+            ));
         }
         if rtype == qtype {
             if qtype == QTYPE_A && rdlen == 4 {
-                let ip = std::net::Ipv4Addr::new(buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]);
+                let ip =
+                    std::net::Ipv4Addr::new(buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]);
                 return Ok(Some(IpAddr::V4(ip)));
             }
             if qtype == QTYPE_AAAA && rdlen == 16 {
@@ -199,7 +220,10 @@ fn parse_first_ip(buf: &[u8], qtype: u16) -> io::Result<Option<IpAddr>> {
 fn skip_name(buf: &[u8], mut pos: usize) -> io::Result<usize> {
     loop {
         if pos >= buf.len() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "DNS name overruns reply"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "DNS name overruns reply",
+            ));
         }
         let len = buf[pos];
         if len == 0 {
@@ -253,7 +277,7 @@ mod tests {
         buf.extend_from_slice(&1u16.to_be_bytes()); // an
         buf.extend_from_slice(&0u16.to_be_bytes()); // ns
         buf.extend_from_slice(&0u16.to_be_bytes()); // ar
-        // Question
+                                                    // Question
         encode_name("example.com", &mut buf).unwrap();
         buf.extend_from_slice(&QTYPE_A.to_be_bytes());
         buf.extend_from_slice(&QCLASS_IN.to_be_bytes());

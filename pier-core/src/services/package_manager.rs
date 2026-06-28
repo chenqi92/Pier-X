@@ -398,7 +398,7 @@ pub enum ServiceAction {
     /// when the user wants their config change to take effect.
     Restart,
     /// `systemctl reload <unit>` — only offered for descriptors with
-    /// `supports_reload = true` (currently nginx).
+    /// `supports_reload = true`.
     Reload,
 }
 
@@ -2864,7 +2864,7 @@ pub fn resolve_descriptor_for_package(
 ) -> Option<&'static str> {
     for d in registry() {
         if let Some(pkgs) = packages_for(d, manager) {
-            if pkgs.iter().any(|p| *p == package_name) {
+            if pkgs.contains(&package_name) {
                 return Some(d.id);
             }
         }
@@ -2875,7 +2875,7 @@ pub fn resolve_descriptor_for_package(
                 .iter()
                 .find_map(|(m, ps)| (*m == manager).then_some(*ps))
             {
-                if pkgs.iter().any(|p| *p == package_name) {
+                if pkgs.contains(&package_name) {
                     return Some(d.id);
                 }
             }
@@ -3506,7 +3506,7 @@ struct UserExtrasParsed {
 fn merged_registry() -> &'static [PackageDescriptor] {
     MERGED_REGISTRY.get_or_init(|| {
         let extras = ensure_user_extras_loaded();
-        let mut v: Vec<PackageDescriptor> = REGISTRY.iter().cloned().collect();
+        let mut v: Vec<PackageDescriptor> = REGISTRY.to_vec();
         let built_in_ids: std::collections::HashSet<&str> = REGISTRY.iter().map(|d| d.id).collect();
         for e in &extras.packages {
             if built_in_ids.contains(e.id) {
@@ -3525,7 +3525,7 @@ fn merged_registry() -> &'static [PackageDescriptor] {
 fn merged_bundles() -> &'static [SoftwareBundle] {
     MERGED_BUNDLES.get_or_init(|| {
         let extras = ensure_user_extras_loaded();
-        let mut v: Vec<SoftwareBundle> = BUNDLES.iter().copied().collect();
+        let mut v: Vec<SoftwareBundle> = BUNDLES.to_vec();
         let built_in_ids: std::collections::HashSet<&str> = BUNDLES.iter().map(|b| b.id).collect();
         for b in &extras.bundles {
             if built_in_ids.contains(b.id) {
@@ -5123,10 +5123,7 @@ fn provision_field<'a>(
     values: &'a std::collections::HashMap<String, String>,
     key: &str,
 ) -> Option<&'a str> {
-    values
-        .get(key)
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
+    values.get(key).map(|s| s.trim()).filter(|s| !s.is_empty())
 }
 
 fn provision_required<'a>(
@@ -5222,8 +5219,8 @@ pub async fn provision_apply(
     id: &str,
     values: &std::collections::HashMap<String, String>,
 ) -> Result<PostgresActionReport> {
-    let spec = provision_spec(id)
-        .ok_or_else(|| SshError::InvalidConfig(format!("未知的配置项: {id}")))?;
+    let spec =
+        provision_spec(id).ok_or_else(|| SshError::InvalidConfig(format!("未知的配置项: {id}")))?;
     match spec.handler {
         "redis-password" => {
             let pw = provision_required(values, "password")?;
@@ -5369,7 +5366,12 @@ async fn minio_install_native(
     let redacted_command = format!("sh -c {}", shell_single_quote(&redacted_script));
     let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
     let stdout = sanitize_sudo_output(&stdout, Some(root_password));
-    Ok(provision_report(redacted_command, exit_code, stdout, env.is_root))
+    Ok(provision_report(
+        redacted_command,
+        exit_code,
+        stdout,
+        env.is_root,
+    ))
 }
 
 /// Shell body of the NanoLink Agent installer. Uses only shell/env
@@ -5518,7 +5520,12 @@ async fn nanolink_agent_install(
     let redacted_command = format!("sh -c {}", shell_single_quote(&redacted_script));
     let (exit_code, stdout) = session.exec_maybe_sudo(&command, env.is_root).await?;
     let stdout = sanitize_sudo_output(&stdout, Some(token));
-    Ok(provision_report(redacted_command, exit_code, stdout, env.is_root))
+    Ok(provision_report(
+        redacted_command,
+        exit_code,
+        stdout,
+        env.is_root,
+    ))
 }
 
 /// Validate a `host:port` server address inlined into the installer.
@@ -6006,16 +6013,16 @@ where
     };
 
     let setup_exit = match exec_sudo_streaming(
-            session,
-            &setup_command,
-            setup_stdin.as_deref(),
-            |line| {
-                on_line(line);
-                push_tail(line, &mut tail_lines);
-            },
-            cancel.clone(),
-        )
-        .await
+        session,
+        &setup_command,
+        setup_stdin.as_deref(),
+        |line| {
+            on_line(line);
+            push_tail(line, &mut tail_lines);
+        },
+        cancel.clone(),
+    )
+    .await
     {
         Ok((code, _)) => code,
         Err(e) => return Err(e),
@@ -6156,19 +6163,19 @@ where
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = exec_sudo_streaming(
-            session,
-            &command,
-            sudo_stdin.as_deref(),
-            |line| {
-                on_line(line);
-                tail_lines.push(line.to_string());
-                if tail_lines.len() > 80 {
-                    tail_lines.drain(0..tail_lines.len() - 60);
-                }
-            },
-            cancel.clone(),
-        )
-        .await?;
+        session,
+        &command,
+        sudo_stdin.as_deref(),
+        |line| {
+            on_line(line);
+            tail_lines.push(line.to_string());
+            if tail_lines.len() > 80 {
+                tail_lines.drain(0..tail_lines.len() - 60);
+            }
+        },
+        cancel.clone(),
+    )
+    .await?;
     let output_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
     if exit_code == CANCELLED_EXIT_CODE || cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
@@ -6532,16 +6539,16 @@ where
     };
 
     let exec_exit = match exec_sudo_streaming(
-            session,
-            &exec_command,
-            exec_stdin.as_deref(),
-            |line| {
-                on_line(line);
-                push_tail(line, &mut tail_lines);
-            },
-            cancel.clone(),
-        )
-        .await
+        session,
+        &exec_command,
+        exec_stdin.as_deref(),
+        |line| {
+            on_line(line);
+            push_tail(line, &mut tail_lines);
+        },
+        cancel.clone(),
+    )
+    .await
     {
         Ok((code, _)) => code,
         Err(e) => {
@@ -6752,19 +6759,19 @@ where
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = exec_sudo_streaming(
-            session,
-            &command,
-            sudo_stdin.as_deref(),
-            |line| {
-                on_line(line);
-                tail_lines.push(line.to_string());
-                if tail_lines.len() > 80 {
-                    tail_lines.drain(0..tail_lines.len() - 60);
-                }
-            },
-            cancel.clone(),
-        )
-        .await?;
+        session,
+        &command,
+        sudo_stdin.as_deref(),
+        |line| {
+            on_line(line);
+            tail_lines.push(line.to_string());
+            if tail_lines.len() > 80 {
+                tail_lines.drain(0..tail_lines.len() - 60);
+            }
+        },
+        cancel.clone(),
+    )
+    .await?;
     let output_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
     // Cancellation has to be checked BEFORE the "looks like sudo" /
@@ -6954,19 +6961,19 @@ where
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = exec_sudo_streaming(
-            session,
-            &command,
-            sudo_stdin.as_deref(),
-            |line| {
-                on_line(line);
-                tail_lines.push(line.to_string());
-                if tail_lines.len() > 80 {
-                    tail_lines.drain(0..tail_lines.len() - 60);
-                }
-            },
-            cancel.clone(),
-        )
-        .await?;
+        session,
+        &command,
+        sudo_stdin.as_deref(),
+        |line| {
+            on_line(line);
+            tail_lines.push(line.to_string());
+            if tail_lines.len() > 80 {
+                tail_lines.drain(0..tail_lines.len() - 60);
+            }
+        },
+        cancel.clone(),
+    )
+    .await?;
     let output_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
     // Same fast-path-out as the install side: cancel beats every other
@@ -7064,19 +7071,19 @@ where
 
     let mut tail_lines: Vec<String> = Vec::new();
     let (exit_code, _full) = exec_sudo_streaming(
-            session,
-            &command,
-            sudo_stdin.as_deref(),
-            |line| {
-                on_line(line);
-                tail_lines.push(line.to_string());
-                if tail_lines.len() > 80 {
-                    tail_lines.drain(0..tail_lines.len() - 60);
-                }
-            },
-            None,
-        )
-        .await?;
+        session,
+        &command,
+        sudo_stdin.as_deref(),
+        |line| {
+            on_line(line);
+            tail_lines.push(line.to_string());
+            if tail_lines.len() > 80 {
+                tail_lines.drain(0..tail_lines.len() - 60);
+            }
+        },
+        None,
+    )
+    .await?;
     let output_tail = sanitize_sudo_output(&tail_lines.join("\n"), sudo_password);
 
     if !env.is_root && looks_like_sudo_password_prompt(&output_tail) {
@@ -7407,10 +7414,10 @@ fn build_install_command(
 /// wording shows up across distros and locales):
 ///
 ///  * apt: `不再含有 Release` / `no longer has a Release file`
-///         `Failed to fetch ... 404`
+///    `Failed to fetch ... 404`
 ///  * dnf/yum: `Failed to download metadata for repo '<id>'`
-///             `Cannot download repomd.xml`
-///             `skipping unavailable repo '<id>'`
+///    `Cannot download repomd.xml`
+///    `skipping unavailable repo '<id>'`
 ///  * zypper: `Repository '<id>' is invalid`
 ///
 /// Always returns warnings keyed by the repository URL or repo id —
@@ -7499,7 +7506,7 @@ fn extract_url_token(line: &str) -> Option<String> {
     let i = line.find("http").or_else(|| line.find("https"))?;
     let tail = &line[i..];
     let end = tail.find(|c: char| c.is_whitespace()).unwrap_or(tail.len());
-    let url = tail[..end].trim_end_matches(|c: char| matches!(c, ',' | '.' | ';' | ')' | ']'));
+    let url = tail[..end].trim_end_matches([',', '.', ';', ')', ']']);
     if url.starts_with("http") && url.len() > "http://".len() {
         Some(url.to_string())
     } else {
@@ -7921,7 +7928,11 @@ where
                 .exec_command_streaming_with_stdin(command, s, on_line, cancel)
                 .await
         }
-        None => session.exec_command_streaming(command, on_line, cancel).await,
+        None => {
+            session
+                .exec_command_streaming(command, on_line, cancel)
+                .await
+        }
     }
 }
 
@@ -9140,7 +9151,9 @@ mod tests {
         let cmd = build_systemctl_command(ServiceAction::Stop, "redis", false, Some("hunter2"));
         // Full is the `sudo -S` form and must NOT contain the password —
         // it rides on stdin so `/proc/<pid>/cmdline` can't leak it.
-        assert!(cmd.full.starts_with("LC_ALL=C sudo -S -p '' systemctl stop "));
+        assert!(cmd
+            .full
+            .starts_with("LC_ALL=C sudo -S -p '' systemctl stop "));
         assert!(!cmd.full.contains("hunter2"));
         // The password is handed back on stdin with a trailing newline.
         assert_eq!(cmd.stdin.as_deref(), Some("hunter2\n"));
@@ -9233,8 +9246,9 @@ mod tests {
         // Reload semantics are software-specific — most daemons we
         // ship would effectively restart on `reload`. The whitelist
         // is the small set of daemons that genuinely support
-        // zero-downtime reload (nginx config, fail2ban jail rules).
-        const RELOAD_OK: &[&str] = &["nginx", "fail2ban"];
+        // zero-downtime reload (web server/proxy graceful reloads
+        // and fail2ban jail rules).
+        const RELOAD_OK: &[&str] = &["nginx", "fail2ban", "haproxy", "apache"];
         for d in registry() {
             let expected = RELOAD_OK.contains(&d.id);
             assert_eq!(

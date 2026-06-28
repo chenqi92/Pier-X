@@ -1,9 +1,3 @@
 [workspace]
 resolver = "2"
 members = ["pier-core", "src-tauri", "tools/pier-x-completions-importer"]
-
-# Keep the experimental FreeRDP backend out of routine workspace checks.
-# It remains available as pier-core's optional path dependency when
-# `rdp-freerdp` is explicitly enabled, but daily IDE/cargo scans should not
-# require the vendored FreeRDP submodule.
-exclude = ["freerdp-sys"]

@@ -60,7 +60,7 @@ pub enum MirrorId {
 
 impl MirrorId {
     /// Stable lowercase id used in serialization and logs. The
-    /// inverse of [`MirrorId::from_str`].
+    /// inverse of [`MirrorId::parse_id`].
     pub fn as_str(self) -> &'static str {
         match self {
             MirrorId::Aliyun => "aliyun",
@@ -73,7 +73,7 @@ impl MirrorId {
 
     /// Parse a serialized id back to the enum. Returns `None` for
     /// any string that isn't one of the catalog entries.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_id(s: &str) -> Option<Self> {
         match s {
             "aliyun" => Some(MirrorId::Aliyun),
             "tsinghua" => Some(MirrorId::Tsinghua),
@@ -295,10 +295,7 @@ pub struct MirrorActionReport {
 /// Detect the current mirror for a manager. Always succeeds —
 /// returns `current_id = None` when the file is unreadable or
 /// doesn't match any known hostname.
-pub async fn detect_mirror(
-    session: &SshSession,
-    manager: PackageManager,
-) -> MirrorState {
+pub async fn detect_mirror(session: &SshSession, manager: PackageManager) -> MirrorState {
     match manager {
         PackageManager::Apt => detect_apt(session).await,
         PackageManager::Dnf | PackageManager::Yum => detect_dnf(session).await,
@@ -350,10 +347,7 @@ pub async fn restore_mirror(
 /// Blocking wrapper for [`detect_mirror`]. Tauri commands using
 /// `spawn_blocking` call this directly so they can stay in a
 /// synchronous closure body.
-pub fn detect_mirror_blocking(
-    session: &SshSession,
-    manager: PackageManager,
-) -> MirrorState {
+pub fn detect_mirror_blocking(session: &SshSession, manager: PackageManager) -> MirrorState {
     crate::ssh::runtime::shared().block_on(detect_mirror(session, manager))
 }
 
@@ -364,8 +358,7 @@ pub fn set_mirror_blocking(
     mirror_id: MirrorId,
     sudo_password: Option<&str>,
 ) -> Result<MirrorActionReport> {
-    crate::ssh::runtime::shared()
-        .block_on(set_mirror(session, manager, mirror_id, sudo_password))
+    crate::ssh::runtime::shared().block_on(set_mirror(session, manager, mirror_id, sudo_password))
 }
 
 /// Blocking wrapper for [`restore_mirror`].
@@ -586,9 +579,8 @@ const DNF_DIR: &str = "/etc/yum.repos.d";
 const DNF_DIR_BAK: &str = "/etc/yum.repos.d.pier-bak";
 
 async fn detect_dnf(session: &SshSession) -> MirrorState {
-    let cmd = format!(
-        "cat {DNF_DIR}/*.repo 2>/dev/null | grep -hE '^(baseurl|mirrorlist)=' | head -50"
-    );
+    let cmd =
+        format!("cat {DNF_DIR}/*.repo 2>/dev/null | grep -hE '^(baseurl|mirrorlist)=' | head -50");
     let lines = match session.exec_command(&cmd).await {
         Ok((_, stdout)) => stdout,
         Err(_) => String::new(),
@@ -709,9 +701,7 @@ const PACMAN_FILE_BAK: &str = "/etc/pacman.d/mirrorlist.pier-bak";
 
 async fn detect_pacman(session: &SshSession) -> MirrorState {
     // First non-comment Server = line wins.
-    let cmd = format!(
-        "grep -m1 -E '^[[:space:]]*Server[[:space:]]*=' {PACMAN_FILE} 2>/dev/null"
-    );
+    let cmd = format!("grep -m1 -E '^[[:space:]]*Server[[:space:]]*=' {PACMAN_FILE} 2>/dev/null");
     let line = match session.exec_command(&cmd).await {
         Ok((_, stdout)) => stdout,
         Err(_) => String::new(),
@@ -721,11 +711,9 @@ async fn detect_pacman(session: &SshSession) -> MirrorState {
     let current_id = host
         .as_deref()
         .and_then(|h| {
-            MIRRORS.iter().find(|m| {
-                m.pacman_url
-                    .map(|u| u.contains(h))
-                    .unwrap_or(false)
-            })
+            MIRRORS
+                .iter()
+                .find(|m| m.pacman_url.map(|u| u.contains(h)).unwrap_or(false))
         })
         .map(|m| m.id.as_str().to_string());
     MirrorState {
@@ -980,7 +968,7 @@ mod tests {
     #[test]
     fn mirror_by_id_round_trips() {
         for m in supported_mirrors() {
-            let id = MirrorId::from_str(m.id.as_str()).expect("id parses");
+            let id = MirrorId::parse_id(m.id.as_str()).expect("id parses");
             let back = mirror_by_id(id).expect("lookup");
             assert_eq!(back.id, m.id);
         }
@@ -1012,7 +1000,10 @@ mod tests {
 
     #[test]
     fn build_sed_swap_escapes_dots_and_alternates() {
-        let expr = build_sed_swap(&["archive.ubuntu.com", "deb.debian.org"], "mirrors.aliyun.com");
+        let expr = build_sed_swap(
+            &["archive.ubuntu.com", "deb.debian.org"],
+            "mirrors.aliyun.com",
+        );
         // Dots must be regex-escaped so `.` doesn't match arbitrary chars.
         assert!(expr.contains("archive\\.ubuntu\\.com"));
         assert!(expr.contains("deb\\.debian\\.org"));
@@ -1054,9 +1045,18 @@ mod tests {
     #[test]
     fn host_for_manager_routes_per_manager() {
         let aliyun = mirror_by_id(MirrorId::Aliyun).unwrap();
-        assert_eq!(host_for_manager(aliyun, PackageManager::Apt), "mirrors.aliyun.com");
-        assert_eq!(host_for_manager(aliyun, PackageManager::Dnf), "mirrors.aliyun.com");
-        assert_eq!(host_for_manager(aliyun, PackageManager::Apk), "mirrors.aliyun.com");
+        assert_eq!(
+            host_for_manager(aliyun, PackageManager::Apt),
+            "mirrors.aliyun.com"
+        );
+        assert_eq!(
+            host_for_manager(aliyun, PackageManager::Dnf),
+            "mirrors.aliyun.com"
+        );
+        assert_eq!(
+            host_for_manager(aliyun, PackageManager::Apk),
+            "mirrors.aliyun.com"
+        );
         // pacman url strips down to bare hostname.
         assert_eq!(
             host_for_manager(aliyun, PackageManager::Pacman),
@@ -1070,8 +1070,10 @@ mod tests {
         let parsed = parse_benchmark_output(raw, PackageManager::Apt);
         assert_eq!(parsed.len(), 5);
         // Lookup by id (order matches MIRRORS).
-        let map: std::collections::HashMap<_, _> =
-            parsed.iter().map(|l| (l.mirror_id.clone(), l.latency_ms)).collect();
+        let map: std::collections::HashMap<_, _> = parsed
+            .iter()
+            .map(|l| (l.mirror_id.clone(), l.latency_ms))
+            .collect();
         assert_eq!(map.get("aliyun"), Some(&Some(123)));
         assert_eq!(map.get("tsinghua"), Some(&Some(456)));
         assert_eq!(map.get("ustc"), Some(&None));
@@ -1083,8 +1085,10 @@ mod tests {
     #[test]
     fn parse_benchmark_output_missing_lines_become_none() {
         let parsed = parse_benchmark_output("aliyun 200 0.100", PackageManager::Apt);
-        let map: std::collections::HashMap<_, _> =
-            parsed.iter().map(|l| (l.mirror_id.clone(), l.latency_ms)).collect();
+        let map: std::collections::HashMap<_, _> = parsed
+            .iter()
+            .map(|l| (l.mirror_id.clone(), l.latency_ms))
+            .collect();
         assert_eq!(map.get("aliyun"), Some(&Some(100)));
         // Other mirrors weren't in the output: latency_ms = None.
         assert_eq!(map.get("tsinghua"), Some(&None));

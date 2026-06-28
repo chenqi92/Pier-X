@@ -182,10 +182,7 @@ impl<'a> Lexer<'a> {
                     let start = self.pos;
                     self.pos = k + 1;
                     while let Some(c) = self.peek() {
-                        if matches!(
-                            c,
-                            b' ' | b'\t' | b'\r' | b'\n' | b'}' | b'#' | b'"' | b'`'
-                        ) {
+                        if matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b'}' | b'#' | b'"' | b'`') {
                             break;
                         }
                         if c == b'{' {
@@ -304,10 +301,7 @@ impl<'a> Lexer<'a> {
                 // a logical line) the brace is a block opener.
                 let start = self.pos;
                 while let Some(c) = self.peek() {
-                    if matches!(
-                        c,
-                        b' ' | b'\t' | b'\r' | b'\n' | b'}' | b'#' | b'"' | b'`'
-                    ) {
+                    if matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b'}' | b'#' | b'"' | b'`') {
                         break;
                     }
                     if c == b'{' {
@@ -477,9 +471,8 @@ fn parse_block(
                                     lex.pos += 1;
                                 }
                                 let raw = &lex.src[start..lex.pos];
-                                inline_comment = Some(
-                                    String::from_utf8_lossy(raw).trim().to_string(),
-                                );
+                                inline_comment =
+                                    Some(String::from_utf8_lossy(raw).trim().to_string());
                             }
                             break;
                         }
@@ -601,9 +594,7 @@ fn read_heredoc_body(lex: &mut Lexer<'_>, delim: &str, errors: &mut Vec<String>)
         body.push_str(&line);
         body.push('\n');
         if lex.peek().is_none() {
-            errors.push(format!(
-                "heredoc not terminated (expected `{delim}`)"
-            ));
+            errors.push(format!("heredoc not terminated (expected `{delim}`)"));
             return body;
         }
         lex.pos += 1; // consume newline
@@ -808,10 +799,7 @@ mod tests {
             _ => panic!(),
         };
         assert_eq!(site.name, "example.com");
-        assert_eq!(
-            site.args,
-            vec!["www.example.com:443".to_string()],
-        );
+        assert_eq!(site.args, vec!["www.example.com:443".to_string()],);
     }
 
     #[test]
@@ -832,7 +820,8 @@ mod tests {
     #[test]
     fn global_options_block() {
         // Top-of-file `{ ... }` with no preceding addresses.
-        let src = "{\n    email admin@example.com\n    debug\n}\n\nexample.com {\n    file_server\n}\n";
+        let src =
+            "{\n    email admin@example.com\n    debug\n}\n\nexample.com {\n    file_server\n}\n";
         let r = parse(src);
         assert!(r.errors.is_empty());
         let global = match &r.nodes[0] {
@@ -870,8 +859,7 @@ mod tests {
     #[test]
     fn backtick_string_multiline() {
         // Backtick strings can span newlines without escapes.
-        let src =
-            "example.com {\n    respond `hello\nworld`\n}\n";
+        let src = "example.com {\n    respond `hello\nworld`\n}\n";
         let r = parse(src);
         assert!(r.errors.is_empty(), "errors: {:?}", r.errors);
         let site = match &r.nodes[0] {
@@ -901,8 +889,7 @@ mod tests {
 
     #[test]
     fn double_quote_with_escape() {
-        let src =
-            "example.com {\n    respond \"she said \\\"hi\\\"\"\n}\n";
+        let src = "example.com {\n    respond \"she said \\\"hi\\\"\"\n}\n";
         let r = parse(src);
         assert!(r.errors.is_empty(), "errors: {:?}", r.errors);
         let out = render(&r.nodes);
@@ -938,10 +925,7 @@ mod tests {
 
     #[test]
     fn round_trip_minimal_site() {
-        assert_idempotent(
-            "example.com {\n    respond \"OK\"\n}\n",
-            "minimal_site",
-        );
+        assert_idempotent("example.com {\n    respond \"OK\"\n}\n", "minimal_site");
     }
 
     #[test]
@@ -964,7 +948,8 @@ mod tests {
 
     #[test]
     fn round_trip_global_block() {
-        let src = "{\n    email admin@example.com\n    debug\n}\n\nexample.com {\n    file_server\n}\n";
+        let src =
+            "{\n    email admin@example.com\n    debug\n}\n\nexample.com {\n    file_server\n}\n";
         assert_idempotent(src, "global_block");
     }
 

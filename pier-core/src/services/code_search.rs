@@ -173,7 +173,7 @@ fn cwd_expr(opts: &SearchOpts) -> String {
 /// `head -n` cap, +1 so the parser can detect truncation
 /// unambiguously (cap rows = exact, +1 row = truncated).
 fn head_cap(opts: &SearchOpts) -> usize {
-    opts.max_hits.max(1).min(5000) + 1
+    opts.max_hits.clamp(1, 5000) + 1
 }
 
 /// Content search: grep file contents. rg → git grep → plain grep.
@@ -363,7 +363,7 @@ fn parse_output(stdout: &str, max_hits: usize, exit_code: i32) -> SearchOutput {
 
     let mut hits: Vec<SearchHit> = Vec::new();
     let mut truncated = false;
-    let cap = max_hits.max(1).min(5000);
+    let cap = max_hits.clamp(1, 5000);
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     if !matches!(row_kind, RowKind::None) {

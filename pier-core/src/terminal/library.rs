@@ -425,10 +425,7 @@ mod tests {
     #[test]
     fn bundled_packs_parse_and_have_consistent_schema() {
         let lib = Library::bundled();
-        assert!(
-            !lib.is_empty(),
-            "bundled() should ship at least one pack"
-        );
+        assert!(!lib.is_empty(), "bundled() should ship at least one pack");
         for name in lib.commands() {
             let pack = lib.lookup(name).unwrap();
             assert_eq!(

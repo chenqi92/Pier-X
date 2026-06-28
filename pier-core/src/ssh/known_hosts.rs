@@ -251,12 +251,7 @@ impl HostKeyVerifier {
     /// Look up `(host, port, key)` in the configured source
     /// without mutating anything — returns one of the three
     /// outcomes the sync / async paths then act on.
-    fn preflight(
-        &self,
-        host: &str,
-        port: u16,
-        key: &PublicKey,
-    ) -> Result<Decision, VerifyError> {
+    fn preflight(&self, host: &str, port: u16, key: &PublicKey) -> Result<Decision, VerifyError> {
         match &self.source {
             HostKeySource::AcceptAllLogFingerprint => {
                 let fingerprint = key.fingerprint(russh::keys::HashAlg::Sha256);
@@ -303,10 +298,8 @@ impl HostKeyVerifier {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(
-                        parent,
-                        std::fs::Permissions::from_mode(0o700),
-                    );
+                    let _ =
+                        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
                 }
             }
         }
@@ -682,9 +675,8 @@ mod tests {
         let _ = fs::remove_file(&path);
         let key = make_test_key(6);
 
-        let prompt: HostKeyPromptCb = Arc::new(|_req| {
-            Box::pin(async move { HostKeyDecision::Reject })
-        });
+        let prompt: HostKeyPromptCb =
+            Arc::new(|_req| Box::pin(async move { HostKeyDecision::Reject }));
         let verifier = HostKeyVerifier::open_ssh_known_hosts(path.clone()).with_prompt(prompt);
         let err = verifier
             .verify_async("r.example.com", 22, &key)
@@ -698,7 +690,10 @@ mod tests {
             }
         ));
         assert!(
-            !path.exists() || std::fs::read_to_string(&path).unwrap_or_default().is_empty(),
+            !path.exists()
+                || std::fs::read_to_string(&path)
+                    .unwrap_or_default()
+                    .is_empty(),
             "rejected host must not be learned",
         );
         let _ = fs::remove_file(&path);
@@ -740,8 +735,7 @@ mod tests {
             *calls_cb.lock().unwrap() += 1;
             Box::pin(async move { HostKeyDecision::Reject })
         });
-        let verifier2 =
-            HostKeyVerifier::open_ssh_known_hosts(path.clone()).with_prompt(prompt2);
+        let verifier2 = HostKeyVerifier::open_ssh_known_hosts(path.clone()).with_prompt(prompt2);
         assert!(verifier2
             .verify_async("c.example.com", 22, &key_b)
             .await
@@ -762,9 +756,8 @@ mod tests {
         assert!(seed.verify("k.example.com", 22, &key_a).unwrap());
         let original = std::fs::read_to_string(&path).unwrap();
 
-        let prompt: HostKeyPromptCb = Arc::new(|_| {
-            Box::pin(async move { HostKeyDecision::Reject })
-        });
+        let prompt: HostKeyPromptCb =
+            Arc::new(|_| Box::pin(async move { HostKeyDecision::Reject }));
         let verifier = HostKeyVerifier::open_ssh_known_hosts(path.clone()).with_prompt(prompt);
         let err = verifier
             .verify_async("k.example.com", 22, &key_b)

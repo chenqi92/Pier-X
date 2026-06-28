@@ -103,7 +103,10 @@ pub async fn query(
         ),
         CliKind::Dameng => (
             "disql",
-            format!("{}/{}@{}:{}", conn.user, conn.password, conn.host, conn.port),
+            format!(
+                "{}/{}@{}:{}",
+                conn.user, conn.password, conn.host, conn.port
+            ),
         ),
     };
 

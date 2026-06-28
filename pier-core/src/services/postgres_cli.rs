@@ -56,7 +56,13 @@ pub fn parse_psql(stdout: &str) -> CliTable {
     let rows = lines
         .map(|line| {
             line.split('\t')
-                .map(|f| if f == "\\N" { None } else { Some(f.to_string()) })
+                .map(|f| {
+                    if f == "\\N" {
+                        None
+                    } else {
+                        Some(f.to_string())
+                    }
+                })
                 .collect()
         })
         .collect();
@@ -98,7 +104,9 @@ fn run_psql(
             "elevation.db",
             &format!("postgres socket-CLI exited {code}: {first}"),
         );
-        return Err(SshError::InvalidConfig(format!("psql exited {code}: {first}")));
+        return Err(SshError::InvalidConfig(format!(
+            "psql exited {code}: {first}"
+        )));
     }
     let table = parse_psql(&out);
     crate::logging::write_event_verbose(
@@ -115,11 +123,7 @@ fn run_psql(
 }
 
 /// Probe — `SELECT version()`.
-pub fn probe(
-    session: &SshSession,
-    elevation: &Elevation,
-    secret: Option<&str>,
-) -> Result<String> {
+pub fn probe(session: &SshSession, elevation: &Elevation, secret: Option<&str>) -> Result<String> {
     let t = run_psql(session, elevation, secret, "SELECT version()", None)?;
     Ok(t.rows
         .first()
@@ -176,7 +180,7 @@ pub fn list_schemas(
 fn col_idx(columns: &[String], name: &str) -> Option<usize> {
     columns.iter().position(|c| c.eq_ignore_ascii_case(name))
 }
-fn cell<'a>(row: &'a [Option<String>], idx: Option<usize>) -> Option<&'a str> {
+fn cell(row: &[Option<String>], idx: Option<usize>) -> Option<&str> {
     idx.and_then(|i| row.get(i)).and_then(|v| v.as_deref())
 }
 
@@ -210,11 +214,18 @@ pub fn list_tables_meta(
         col_idx(&t.columns, "idx"),
         col_idx(&t.columns, "comment"),
     );
-    Ok(t
-        .rows
+    Ok(t.rows
         .iter()
         .filter_map(|r| {
-            let to_u64 = |v: Option<&str>| v.and_then(|s| s.parse::<i64>().ok()).and_then(|n| if n < 0 { None } else { Some(n as u64) });
+            let to_u64 = |v: Option<&str>| {
+                v.and_then(|s| s.parse::<i64>().ok()).and_then(|n| {
+                    if n < 0 {
+                        None
+                    } else {
+                        Some(n as u64)
+                    }
+                })
+            };
             Some(TableSummary {
                 name: cell(r, i_name)?.to_string(),
                 row_count: to_u64(cell(r, i_rows)),
@@ -276,8 +287,7 @@ pub fn list_routines(
         col_idx(&t.columns, "routine_name"),
         col_idx(&t.columns, "routine_type"),
     );
-    Ok(t
-        .rows
+    Ok(t.rows
         .iter()
         .filter_map(|r| {
             Some(RoutineSummary {
@@ -324,8 +334,7 @@ pub fn list_columns(
         col_idx(&t.columns, "extra"),
         col_idx(&t.columns, "comment"),
     );
-    Ok(t
-        .rows
+    Ok(t.rows
         .iter()
         .filter_map(|r| {
             Some(ColumnInfo {

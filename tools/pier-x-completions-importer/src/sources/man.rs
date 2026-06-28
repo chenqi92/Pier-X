@@ -188,7 +188,8 @@ fn flush(current: &mut Option<Pending>, state: &mut State, pack: &mut CommandPac
                 raw_flag.to_string()
             };
             if !flag.is_empty() && flag.starts_with('-') {
-                pack.options.push(OptionEntry::with_en(flag, pending.body.trim()));
+                pack.options
+                    .push(OptionEntry::with_en(flag, pending.body.trim()));
             }
         }
         State::Commands => {

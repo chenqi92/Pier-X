@@ -591,10 +591,7 @@ impl SftpClient {
             // WRITE | CREATE without TRUNCATE keeps the existing
             // bytes intact so seek + write tail extends the file.
             self.inner
-                .open_with_flags(
-                    remote.to_string(),
-                    OpenFlags::WRITE | OpenFlags::CREATE,
-                )
+                .open_with_flags(remote.to_string(), OpenFlags::WRITE | OpenFlags::CREATE)
                 .await
                 .map_err(sftp_error)?
         } else {

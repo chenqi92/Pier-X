@@ -328,12 +328,22 @@ function authorInitial(author: string) {
   return first.toUpperCase();
 }
 
+const AUTHOR_COLOR_TOKENS = [
+  "var(--accent)",
+  "var(--pos)",
+  "var(--warn)",
+  "var(--info)",
+  "var(--svc-mysql)",
+  "var(--svc-log)",
+  "var(--svc-nanolink)",
+  "var(--svc-search)",
+];
+
 function authorColor(author: string) {
   const value = String(author || "");
   let hash = 0;
   for (let i = 0; i < value.length; i += 1) hash = (hash * 31 + value.charCodeAt(i)) | 0;
-  const hue = Math.abs(hash * 37) % 360;
-  return `hsl(${hue} 55% 45%)`;
+  return AUTHOR_COLOR_TOKENS[Math.abs(hash) % AUTHOR_COLOR_TOKENS.length];
 }
 
 function statusToneFromCode(code: string): PillTone {

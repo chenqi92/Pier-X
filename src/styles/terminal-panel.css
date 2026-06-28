@@ -25,7 +25,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  font-size: 11.5px;
+  font-size: var(--size-small);
   font-weight: var(--weight-semibold);
   color: var(--ink);
   font-family: var(--mono);
@@ -72,7 +72,7 @@
   top: -9999px;
   left: -9999px;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--size-body);
   line-height: 1.45;
   white-space: pre;
 }
@@ -82,7 +82,7 @@
   flex-shrink: 0;
   overflow: hidden;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--size-body);
   /* line-height is set inline as integer px via --terminal-row-h. Stacked block
    * rows use that value for both box height and line-box so every row abuts the
    * next with no sub-pixel gap — flex-column added WebKit rounding that showed

@@ -140,13 +140,28 @@ pub fn encode_tile(
     jpeg_threshold_px: u32,
 ) -> FrameTile {
     let area = u32::from(width) * u32::from(height);
-    let want_jpeg = jpeg_threshold_px != 0 && area >= jpeg_threshold_px && width >= 16 && height >= 16;
+    let want_jpeg =
+        jpeg_threshold_px != 0 && area >= jpeg_threshold_px && width >= 16 && height >= 16;
     if want_jpeg {
         if let Some(jpeg) = rgba_to_jpeg(&rgba, width, height, JPEG_QUALITY) {
-            return FrameTile { x, y, width, height, encoding: TileEncoding::Jpeg, data: jpeg };
+            return FrameTile {
+                x,
+                y,
+                width,
+                height,
+                encoding: TileEncoding::Jpeg,
+                data: jpeg,
+            };
         }
     }
-    FrameTile { x, y, width, height, encoding: TileEncoding::Rgba, data: rgba }
+    FrameTile {
+        x,
+        y,
+        width,
+        height,
+        encoding: TileEncoding::Rgba,
+        data: rgba,
+    }
 }
 
 /// Compress an RGBA buffer to a baseline JPEG (alpha dropped). Returns
@@ -163,7 +178,12 @@ fn rgba_to_jpeg(rgba: &[u8], width: u16, height: u16, quality: u8) -> Option<Vec
     let mut out: Vec<u8> = Vec::new();
     let encoder = jpeg_encoder::Encoder::new(&mut out, quality);
     encoder
-        .encode(&rgba[..expected], width, height, jpeg_encoder::ColorType::Rgba)
+        .encode(
+            &rgba[..expected],
+            width,
+            height,
+            jpeg_encoder::ColorType::Rgba,
+        )
         .ok()?;
     Some(out)
 }

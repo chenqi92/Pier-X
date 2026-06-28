@@ -257,9 +257,9 @@ impl EgressKind {
     /// profile omits an explicit `dns`.
     pub fn default_dns(&self) -> EgressDns {
         match self {
-            EgressKind::None
-            | EgressKind::Socks5 { .. }
-            | EgressKind::Http { .. } => EgressDns::Passthrough,
+            EgressKind::None | EgressKind::Socks5 { .. } | EgressKind::Http { .. } => {
+                EgressDns::Passthrough
+            }
             EgressKind::SshJump { .. }
             | EgressKind::Wireguard { .. }
             | EgressKind::ExternalVpn { .. } => EgressDns::Tunnel,
@@ -316,7 +316,8 @@ pub async fn resolve_tcp_with(
                     "ssh-jump egress requires an EgressContext implementation",
                 ));
             };
-            ctx.ssh_jump_dial(via_connection, &target, target_port).await
+            ctx.ssh_jump_dial(via_connection, &target, target_port)
+                .await
         }
         EgressKind::Wireguard { .. } | EgressKind::ExternalVpn { .. } => {
             // Subprocess VPN model — see PRODUCT-SPEC §3.4 and
@@ -372,7 +373,7 @@ async fn system_resolve(host: &str) -> io::Result<String> {
     Ok(first.ip().to_string())
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 fn kind_label(kind: &EgressKind) -> &'static str {
     match kind {
         EgressKind::None => "none",
@@ -399,7 +400,10 @@ fn resolve_auth(auth: &Option<EgressAuthRef>) -> io::Result<Option<(String, Stri
         }
         Ok(None) => Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("egress credential missing in keyring: {}", auth.credential_id),
+            format!(
+                "egress credential missing in keyring: {}",
+                auth.credential_id
+            ),
         )),
         Err(e) => Err(io::Error::other(e.to_string())),
     }
@@ -461,8 +465,13 @@ pub fn probe_tcp_blocking(
     timeout: std::time::Duration,
     ctx: Option<&dyn EgressContext>,
 ) -> ProbeOutcome {
-    crate::ssh::runtime::shared()
-        .block_on(probe_tcp(profile, target_host, target_port, timeout, ctx))
+    crate::ssh::runtime::shared().block_on(probe_tcp(
+        profile,
+        target_host,
+        target_port,
+        timeout,
+        ctx,
+    ))
 }
 
 #[cfg(test)]

@@ -67,7 +67,13 @@ fn push_hit(hits: &mut Vec<String>, label: &str) {
 }
 
 fn is_token_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '+' || c == '/' || c == '='
+    c.is_ascii_alphanumeric()
+        || c == '_'
+        || c == '-'
+        || c == '.'
+        || c == '+'
+        || c == '/'
+        || c == '='
 }
 
 fn scrub_line(line: &str, hits: &mut Vec<String>) -> String {
@@ -105,9 +111,23 @@ fn scrub_authorization(line: &str, hits: &mut Vec<String>) -> String {
 /// `password=…`, `api_key: …`, `export TOKEN=…`, etc.
 fn scrub_key_value(line: &str, hits: &mut Vec<String>) -> String {
     const KEYS: &[&str] = &[
-        "password", "passwd", "pwd", "secret", "token", "api_key", "apikey", "api-key",
-        "access_key", "accesskey", "secret_key", "secretkey", "private_key", "auth_token",
-        "client_secret", "aws_secret_access_key", "aws_access_key_id",
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "api-key",
+        "access_key",
+        "accesskey",
+        "secret_key",
+        "secretkey",
+        "private_key",
+        "auth_token",
+        "client_secret",
+        "aws_secret_access_key",
+        "aws_access_key_id",
     ];
     let mut result = line.to_string();
     let mut search_from = 0usize;
@@ -118,7 +138,10 @@ fn scrub_key_value(line: &str, hits: &mut Vec<String>) -> String {
             if let Some(rel) = lower[search_from..].find(key) {
                 let pos = search_from + rel;
                 let candidate = (pos, key.len());
-                if best.map(|b| candidate.0 < b.0 || (candidate.0 == b.0 && candidate.1 > b.1)).unwrap_or(true) {
+                if best
+                    .map(|b| candidate.0 < b.0 || (candidate.0 == b.0 && candidate.1 > b.1))
+                    .unwrap_or(true)
+                {
                     // Prefer the longest key at the same position so
                     // `aws_secret_access_key` wins over `secret`.
                     best = Some(candidate);
@@ -149,7 +172,11 @@ fn scrub_key_value(line: &str, hits: &mut Vec<String>) -> String {
         let sep_offset = after_key.len() - trimmed.len() + 1;
         let mut value_start = pos + key_len + sep_offset;
         let bytes: Vec<char> = result.chars().collect();
-        while value_start < bytes.len() && (bytes[value_start] == ' ' || bytes[value_start] == '"' || bytes[value_start] == '\'') {
+        while value_start < bytes.len()
+            && (bytes[value_start] == ' '
+                || bytes[value_start] == '"'
+                || bytes[value_start] == '\'')
+        {
             value_start += 1;
         }
         let mut value_end = value_start;

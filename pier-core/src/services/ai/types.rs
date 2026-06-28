@@ -41,7 +41,11 @@ pub struct RiskAssessment {
 impl RiskAssessment {
     /// A bare assessment at `level` with no reasons attached.
     pub fn new(level: RiskLevel) -> Self {
-        Self { level, reasons: Vec::new(), as_root: false }
+        Self {
+            level,
+            reasons: Vec::new(),
+            as_root: false,
+        }
     }
 }
 
@@ -94,11 +98,21 @@ pub struct ChatMessage {
 impl ChatMessage {
     /// A plain user turn.
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: ChatRole::User, content: content.into(), tool_calls: Vec::new(), tool_call_id: None }
+        Self {
+            role: ChatRole::User,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }
     }
     /// An assistant turn (text and/or tool calls).
     pub fn assistant(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
-        Self { role: ChatRole::Assistant, content: content.into(), tool_calls, tool_call_id: None }
+        Self {
+            role: ChatRole::Assistant,
+            content: content.into(),
+            tool_calls,
+            tool_call_id: None,
+        }
     }
     /// A tool-result turn answering `call_id`.
     pub fn tool_result(call_id: impl Into<String>, content: impl Into<String>) -> Self {

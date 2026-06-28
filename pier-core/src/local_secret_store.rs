@@ -66,7 +66,7 @@ impl Default for StoreFile {
 }
 
 fn io_other<E: ToString>(e: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e.to_string())
+    io::Error::other(e.to_string())
 }
 
 fn data_dir() -> io::Result<PathBuf> {
@@ -176,12 +176,9 @@ fn load_store_for_write() -> io::Result<StoreFile> {
                     );
                     Ok(StoreFile::default())
                 }
-                Err(re) => Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!(
-                        "secret store is corrupt and could not be quarantined: {re} (original: {e})"
-                    ),
-                )),
+                Err(re) => Err(io::Error::other(format!(
+                    "secret store is corrupt and could not be quarantined: {re} (original: {e})"
+                ))),
             }
         }
     }

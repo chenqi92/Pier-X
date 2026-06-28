@@ -101,8 +101,7 @@ impl EgressForwarder {
         target_port: u16,
         ctx: Option<Arc<dyn EgressContext>>,
     ) -> io::Result<Self> {
-        runtime::shared()
-            .block_on(Self::start(profile, target_host, target_port, ctx))
+        runtime::shared().block_on(Self::start(profile, target_host, target_port, ctx))
     }
 }
 

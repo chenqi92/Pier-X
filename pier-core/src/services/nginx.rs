@@ -361,11 +361,7 @@ async fn list_dir(
             .and_then(|s| s.split('.').next())
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(0);
-        let name = path
-            .rsplit('/')
-            .next()
-            .unwrap_or(path)
-            .to_string();
+        let name = path.rsplit('/').next().unwrap_or(path).to_string();
         out.push(NginxFile {
             path: path.to_string(),
             name,
@@ -379,11 +375,7 @@ async fn list_dir(
 
 /// Single-file stat — used for `nginx.conf` and orphan sites-enabled
 /// links. Empty `kind` if the file doesn't exist.
-async fn stat_one(
-    session: &SshSession,
-    path: &str,
-    kind: NginxFileKind,
-) -> Option<NginxFile> {
+async fn stat_one(session: &SshSession, path: &str, kind: NginxFileKind) -> Option<NginxFile> {
     let cmd = format!(
         "test -e {p} && stat -c '%s\\t%Y' {p} 2>/dev/null",
         p = shell_single_quote(path),
@@ -402,11 +394,7 @@ async fn stat_one(
         .next()
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
-    let name = path
-        .rsplit('/')
-        .next()
-        .unwrap_or(path)
-        .to_string();
+    let name = path.rsplit('/').next().unwrap_or(path).to_string();
     Some(NginxFile {
         path: path.to_string(),
         name,
@@ -524,14 +512,12 @@ pub async fn create_file(
     // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
     // and pipe the password. Pre-existing NOPASSWD setups continue
     // to work via the `sudo -n ` fallback when no password is set.
-    let prefix = if is_root
-        || session.has_sudo_password().await
-        || session.is_elevation_armed().await
-    {
-        ""
-    } else {
-        "sudo -n "
-    };
+    let prefix =
+        if is_root || session.has_sudo_password().await || session.is_elevation_armed().await {
+            ""
+        } else {
+            "sudo -n "
+        };
 
     // Refuse to clobber. `test -e` covers files, dirs, symlinks.
     let exists_check = format!(
@@ -673,14 +659,12 @@ pub async fn save_file_validate_reload(
     // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
     // and pipe the password. Pre-existing NOPASSWD setups continue
     // to work via the `sudo -n ` fallback when no password is set.
-    let prefix = if is_root
-        || session.has_sudo_password().await
-        || session.is_elevation_armed().await
-    {
-        ""
-    } else {
-        "sudo -n "
-    };
+    let prefix =
+        if is_root || session.has_sudo_password().await || session.is_elevation_armed().await {
+            ""
+        } else {
+            "sudo -n "
+        };
 
     // Use the seconds-since-epoch from the remote so concurrent edits
     // from different clients don't collide on a clock-skew window.
@@ -815,8 +799,7 @@ pub fn save_file_validate_reload_blocking(
     path: &str,
     content: &str,
 ) -> Result<NginxSaveResult> {
-    crate::ssh::runtime::shared()
-        .block_on(save_file_validate_reload(session, path, content))
+    crate::ssh::runtime::shared().block_on(save_file_validate_reload(session, path, content))
 }
 
 /// Run `nginx -t` only — useful when the user wants to dry-run before
@@ -836,14 +819,12 @@ pub async fn validate(session: &SshSession) -> Result<NginxValidateResult> {
     // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
     // and pipe the password. Pre-existing NOPASSWD setups continue
     // to work via the `sudo -n ` fallback when no password is set.
-    let prefix = if is_root
-        || session.has_sudo_password().await
-        || session.is_elevation_armed().await
-    {
-        ""
-    } else {
-        "sudo -n "
-    };
+    let prefix =
+        if is_root || session.has_sudo_password().await || session.is_elevation_armed().await {
+            ""
+        } else {
+            "sudo -n "
+        };
     let (code, out) = session
         .exec_with_sudo(&format!("{prefix}nginx -t 2>&1"))
         .await?;
@@ -876,14 +857,12 @@ pub async fn reload(session: &SshSession) -> Result<NginxValidateResult> {
     // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
     // and pipe the password. Pre-existing NOPASSWD setups continue
     // to work via the `sudo -n ` fallback when no password is set.
-    let prefix = if is_root
-        || session.has_sudo_password().await
-        || session.is_elevation_armed().await
-    {
-        ""
-    } else {
-        "sudo -n "
-    };
+    let prefix =
+        if is_root || session.has_sudo_password().await || session.is_elevation_armed().await {
+            ""
+        } else {
+            "sudo -n "
+        };
     let (code, out) = session
         .exec_with_sudo(&format!(
             "{prefix}sh -c 'if command -v systemctl >/dev/null 2>&1; then \
@@ -933,31 +912,23 @@ pub async fn toggle_site(
     // `exec_with_sudo` to wrap the bare command with `sudo -S -p ''`
     // and pipe the password. Pre-existing NOPASSWD setups continue
     // to work via the `sudo -n ` fallback when no password is set.
-    let prefix = if is_root
-        || session.has_sudo_password().await
-        || session.is_elevation_armed().await
-    {
-        ""
-    } else {
-        "sudo -n "
-    };
+    let prefix =
+        if is_root || session.has_sudo_password().await || session.is_elevation_armed().await {
+            ""
+        } else {
+            "sudo -n "
+        };
 
     let cmd = if enable {
         format!(
             "{prefix}ln -sf {src} {dst} 2>&1",
-            src = shell_single_quote(&format!(
-                "{NGINX_SITES_AVAILABLE_DIR}/{site_name}"
-            )),
-            dst = shell_single_quote(&format!(
-                "{NGINX_SITES_ENABLED_DIR}/{site_name}"
-            )),
+            src = shell_single_quote(&format!("{NGINX_SITES_AVAILABLE_DIR}/{site_name}")),
+            dst = shell_single_quote(&format!("{NGINX_SITES_ENABLED_DIR}/{site_name}")),
         )
     } else {
         format!(
             "{prefix}rm -f {dst} 2>&1",
-            dst = shell_single_quote(&format!(
-                "{NGINX_SITES_ENABLED_DIR}/{site_name}"
-            )),
+            dst = shell_single_quote(&format!("{NGINX_SITES_ENABLED_DIR}/{site_name}")),
         )
     };
     let (code, out) = session.exec_with_sudo(&cmd).await?;
@@ -1005,7 +976,10 @@ enum Tok {
     Word(String),
     /// Quoted argument; the bool tracks single (`'`) vs double (`"`)
     /// so the renderer can emit the same style.
-    Quoted { text: String, single: bool },
+    Quoted {
+        text: String,
+        single: bool,
+    },
     Semi,
     BraceOpen,
     BraceClose,
@@ -1215,7 +1189,7 @@ fn parse_block(
                     for c in pending_comments.drain(..) {
                         out.push(NginxNode::Comment {
                             text: c,
-                            leading_blanks: if first { 0 } else { 0 },
+                            leading_blanks: 0,
                         });
                         first = false;
                     }
@@ -1276,9 +1250,8 @@ fn parse_block(
                                     lex.pos += 1;
                                 }
                                 let raw = &lex.src[start..lex.pos];
-                                inline_comment = Some(
-                                    String::from_utf8_lossy(raw).trim().to_string(),
-                                );
+                                inline_comment =
+                                    Some(String::from_utf8_lossy(raw).trim().to_string());
                             }
                             break;
                         }
@@ -1294,9 +1267,7 @@ fn parse_block(
                             break;
                         }
                         Tok::Eof => {
-                            errors.push(format!(
-                                "directive `{directive_name}` not terminated",
-                            ));
+                            errors.push(format!("directive `{directive_name}` not terminated",));
                             break;
                         }
                     }
@@ -1321,9 +1292,7 @@ fn parse_block(
                 // configs never start a directive with a quote, but a
                 // hand-crafted file might — accept it as a "word-like"
                 // directive name and continue, recording the issue.
-                errors.push(format!(
-                    "directive starts with a quoted string: {text}",
-                ));
+                errors.push(format!("directive starts with a quoted string: {text}",));
             }
         }
     }
@@ -1487,12 +1456,8 @@ fn needs_quoting(arg: &str) -> bool {
     {
         return false;
     }
-    arg.chars().any(|c| {
-        matches!(
-            c,
-            ' ' | '\t' | ';' | '{' | '}' | '#' | '"' | '\''
-        )
-    })
+    arg.chars()
+        .any(|c| matches!(c, ' ' | '\t' | ';' | '{' | '}' | '#' | '"' | '\''))
 }
 
 fn escape_double_quoted(s: &str) -> String {
@@ -1528,7 +1493,11 @@ pub(crate) fn shell_single_quote(s: &str) -> String {
 /// pulling in the `base64` crate would be overkill. Standard alphabet,
 /// no line breaks, no URL-safe variant.
 pub(crate) fn base64_writer(out: &mut String) -> Base64Writer<'_> {
-    Base64Writer { out, buf: 0, bits: 0 }
+    Base64Writer {
+        out,
+        buf: 0,
+        bits: 0,
+    }
 }
 
 pub(crate) struct Base64Writer<'a> {
@@ -1539,8 +1508,7 @@ pub(crate) struct Base64Writer<'a> {
 
 impl std::io::Write for Base64Writer<'_> {
     fn write(&mut self, src: &[u8]) -> std::io::Result<usize> {
-        const ALPH: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const ALPH: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         for &b in src {
             self.buf = (self.buf << 8) | (b as u32);
             self.bits += 8;
@@ -1553,15 +1521,14 @@ impl std::io::Write for Base64Writer<'_> {
         Ok(src.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
-        const ALPH: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const ALPH: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         if self.bits > 0 {
             let idx = ((self.buf << (6 - self.bits)) & 0x3f) as usize;
             self.out.push(ALPH[idx] as char);
             self.bits = 0;
         }
         // Pad to a multiple of 4 chars.
-        while self.out.len() % 4 != 0 {
+        while !self.out.len().is_multiple_of(4) {
             self.out.push('=');
         }
         Ok(())
@@ -1617,8 +1584,10 @@ mod tests {
 
     #[test]
     fn parse_quoted_args_preserve_style() {
-        let r = parse(r#"server_name "example.com" 'sub.example.com';
-"#);
+        let r = parse(
+            r#"server_name "example.com" 'sub.example.com';
+"#,
+        );
         assert!(r.errors.is_empty(), "{:?}", r.errors);
         let NginxNode::Directive(d) = &r.nodes[0] else {
             panic!()
@@ -1781,7 +1750,10 @@ http {
         let r = parse("} worker_processes 4;\n");
         assert!(r.errors.iter().any(|e| e.contains("stray")));
         // The valid directive after the stray `}` still parses.
-        assert!(r.nodes.iter().any(|n| matches!(n, NginxNode::Directive(d) if d.name == "worker_processes")));
+        assert!(r
+            .nodes
+            .iter()
+            .any(|n| matches!(n, NginxNode::Directive(d) if d.name == "worker_processes")));
     }
 
     #[test]
@@ -1844,12 +1816,8 @@ http {
     fn is_allowed_create_path_rejects_traversal_and_other_dirs() {
         assert!(!is_allowed_create_path("/etc/nginx/nginx.conf"));
         assert!(!is_allowed_create_path("/etc/passwd"));
-        assert!(!is_allowed_create_path(
-            "/etc/nginx/conf.d/sub/file.conf"
-        ));
-        assert!(!is_allowed_create_path(
-            "/etc/nginx/conf.d/../passwd"
-        ));
+        assert!(!is_allowed_create_path("/etc/nginx/conf.d/sub/file.conf"));
+        assert!(!is_allowed_create_path("/etc/nginx/conf.d/../passwd"));
         assert!(!is_allowed_create_path("/etc/nginx/conf.d/"));
         assert!(!is_allowed_create_path("/etc/nginx/conf.d/."));
         assert!(!is_allowed_create_path("/etc/nginx/conf.d/.."));

@@ -590,16 +590,13 @@ fn parse_csv_table(stdout: &str) -> (Vec<String>, Vec<Vec<String>>) {
 
 /// Map positional CSV rows onto column-name keys for the
 /// schema-introspection callers (`list_tables`, `table_columns`).
-fn csv_rows_to_maps(
-    columns: &[String],
-    rows: Vec<Vec<String>>,
-) -> Vec<BTreeMap<String, String>> {
+fn csv_rows_to_maps(columns: &[String], rows: Vec<Vec<String>>) -> Vec<BTreeMap<String, String>> {
     rows.into_iter()
         .map(|row| {
             columns
                 .iter()
                 .cloned()
-                .zip(row.into_iter())
+                .zip(row)
                 .collect::<BTreeMap<String, String>>()
         })
         .collect()
@@ -886,7 +883,13 @@ pub fn preview_table_blocking(
     limit: usize,
     supports_json: bool,
 ) -> Result<RemoteQueryResult> {
-    crate::ssh::runtime::shared().block_on(preview_table(session, db_path, table, limit, supports_json))
+    crate::ssh::runtime::shared().block_on(preview_table(
+        session,
+        db_path,
+        table,
+        limit,
+        supports_json,
+    ))
 }
 /// Blocking wrapper for [`execute`].
 pub fn execute_blocking(
@@ -1018,10 +1021,7 @@ mod tests {
         let (cols, rows) =
             parse_csv_table("a,b,c\n\"x,y\",\"he said \"\"hi\"\"\",\"line1\nline2\"\n");
         assert_eq!(cols, vec!["a", "b", "c"]);
-        assert_eq!(
-            rows,
-            vec![vec!["x,y", "he said \"hi\"", "line1\nline2"]]
-        );
+        assert_eq!(rows, vec![vec!["x,y", "he said \"hi\"", "line1\nline2"]]);
     }
 
     #[test]

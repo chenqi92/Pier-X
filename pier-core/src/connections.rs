@@ -345,11 +345,7 @@ impl ConnectionStore {
     /// Insert or replace an egress profile by id. Returns true if
     /// an existing entry was replaced, false if the entry is new.
     pub fn upsert_egress(&mut self, profile: EgressProfile) -> bool {
-        if let Some(slot) = self
-            .egress_profiles
-            .iter_mut()
-            .find(|p| p.id == profile.id)
-        {
+        if let Some(slot) = self.egress_profiles.iter_mut().find(|p| p.id == profile.id) {
             *slot = profile;
             true
         } else {
@@ -690,10 +686,7 @@ pub fn save_db_credential(
 /// Returns `None` if no existing slot is a duplicate, or if the
 /// would-be key has empty fields (which would otherwise collapse
 /// every empty-field cred together).
-fn find_db_cred_upsert_slot(
-    databases: &[DbCredential],
-    input: &NewDbCredential,
-) -> Option<usize> {
+fn find_db_cred_upsert_slot(databases: &[DbCredential], input: &NewDbCredential) -> Option<usize> {
     use crate::ssh::config::DbCredentialSource as Src;
 
     if matches!(input.kind, DbKind::Sqlite) {
@@ -727,10 +720,7 @@ fn find_db_cred_upsert_slot(
         return None;
     }
     databases.iter().position(|c| {
-        c.kind == input.kind
-            && c.host.trim() == host
-            && c.port == port
-            && c.user.trim() == user
+        c.kind == input.kind && c.host.trim() == host && c.port == port && c.user.trim() == user
     })
 }
 
@@ -1363,32 +1353,12 @@ mod tests {
 
     #[test]
     fn upsert_slot_sqlite_uses_path() {
-        let mut a = cred(
-            "a",
-            DbKind::Sqlite,
-            "",
-            0,
-            "",
-            DbCredentialSource::Manual,
-        );
+        let mut a = cred("a", DbKind::Sqlite, "", 0, "", DbCredentialSource::Manual);
         a.sqlite_path = Some("/srv/app.db".into());
-        let mut b = cred(
-            "b",
-            DbKind::Sqlite,
-            "",
-            0,
-            "",
-            DbCredentialSource::Manual,
-        );
+        let mut b = cred("b", DbKind::Sqlite, "", 0, "", DbCredentialSource::Manual);
         b.sqlite_path = Some("/srv/other.db".into());
         let dbs = vec![a, b];
-        let mut i = input(
-            DbKind::Sqlite,
-            "",
-            0,
-            "",
-            DbCredentialSource::Manual,
-        );
+        let mut i = input(DbKind::Sqlite, "", 0, "", DbCredentialSource::Manual);
         i.sqlite_path = Some("/srv/other.db".into());
         assert_eq!(find_db_cred_upsert_slot(&dbs, &i), Some(1));
     }

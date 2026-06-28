@@ -1286,7 +1286,10 @@ fn wrap_cells(cells: &[Cell], cols: usize) -> Vec<Vec<Cell>> {
                 cur.push(cells[i + 1].clone());
                 i += 2;
             } else {
-                cur.push(Cell { ch: '\0', ..Cell::default() });
+                cur.push(Cell {
+                    ch: '\0',
+                    ..Cell::default()
+                });
                 i += 1;
             }
         } else {

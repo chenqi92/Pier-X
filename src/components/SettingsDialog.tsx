@@ -2738,12 +2738,12 @@ export default function SettingsDialog({
                 <SectionTitle>{t("Preview")}</SectionTitle>
                 <div className="settings__preview-card">
                   {/* No ×uiScale here: webview zoom already scales rendered px. */}
-                  <p style={{ fontFamily: `"${settings.uiFontFamily}", var(--sans)`, fontSize: "13px" }}>
+                  <p style={{ fontFamily: `"${settings.uiFontFamily}", var(--sans)`, fontSize: "var(--size-body)" }}>
                     {t("The quick brown fox jumps over the lazy dog — Bold text")}
                   </p>
                   <p
                     className="mono text-muted"
-                    style={{ fontFamily: `"${settings.monoFontFamily}", var(--mono)`, fontSize: "13px" }}
+                    style={{ fontFamily: `"${settings.monoFontFamily}", var(--mono)`, fontSize: "var(--size-body)" }}
                   >
                     {'const result = await query("SELECT * FROM users");'}
                   </p>

@@ -189,13 +189,7 @@ where
             let cancel = cancel.clone();
             joinset.spawn(async move {
                 upload_worker_loop(
-                    worker_idx,
-                    client,
-                    queue,
-                    progress,
-                    cumulative,
-                    cancel,
-                    total,
+                    worker_idx, client, queue, progress, cumulative, cancel, total,
                 )
                 .await
             });
@@ -306,13 +300,7 @@ where
             let cancel = cancel.clone();
             joinset.spawn(async move {
                 download_worker_loop(
-                    worker_idx,
-                    client,
-                    queue,
-                    progress,
-                    cumulative,
-                    cancel,
-                    total,
+                    worker_idx, client, queue, progress, cumulative, cancel, total,
                 )
                 .await
             });
@@ -397,9 +385,7 @@ async fn upload_worker_loop(
                 Some(&cancel),
             )
             .await;
-        if let Err(e) = result {
-            return Err(e);
-        }
+        result?;
     }
 }
 
@@ -457,9 +443,7 @@ async fn download_worker_loop(
                 Some(&cancel),
             )
             .await;
-        if let Err(e) = result {
-            return Err(e);
-        }
+        result?;
     }
 }
 
@@ -467,7 +451,7 @@ async fn download_worker_loop(
 
 /// File size below which chunked parallel is skipped — open + close
 /// + N-channel setup overhead dominates the actual transfer for
-/// small files. 8 MB is a safe knee.
+///   small files. 8 MB is a safe knee.
 pub const CHUNKED_PARALLEL_MIN_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Suffix for the partial-write sibling file. Chunked transfers

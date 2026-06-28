@@ -12,18 +12,14 @@
 //!   used by modern macOS Screen Sharing.
 //! * **RDP** — backed by IronRDP ([`rdp`], behind the `rdp` feature).
 
-// TOFU certificate pinning, shared by both RDP backends.
-#[cfg(any(feature = "rdp", feature = "rdp-freerdp"))]
+// TOFU certificate pinning, shared by RDP sessions.
+#[cfg(feature = "rdp")]
 pub mod cert_pins;
 mod error;
 mod frame;
 mod input;
-// IronRDP is the RDP backend only when FreeRDP isn't superseding it; skip
-// compiling it (and its rustls stack) entirely when `rdp-freerdp` is on.
-#[cfg(all(feature = "rdp", not(feature = "rdp-freerdp")))]
+#[cfg(feature = "rdp")]
 pub mod rdp;
-#[cfg(feature = "rdp-freerdp")]
-pub mod rdp_freerdp;
 pub mod vnc;
 
 pub use error::{RemoteDesktopError, Result};
@@ -132,13 +128,8 @@ impl RemoteDesktopSession {
         let width = config.width.max(1);
         let height = config.height.max(1);
 
-        let task = runtime::shared().spawn(run_session(
-            config,
-            sink,
-            input_rx,
-            control_rx,
-            cert_prompt,
-        ));
+        let task =
+            runtime::shared().spawn(run_session(config, sink, input_rx, control_rx, cert_prompt));
 
         Ok(Self {
             input_tx,
@@ -193,21 +184,15 @@ async fn run_session(
     let backend = runtime::shared().spawn(async move {
         // `cert_prompt` is consumed only by the RDP backends; silence the
         // unused warning in a VNC-only build.
-        #[cfg(not(any(feature = "rdp", feature = "rdp-freerdp")))]
+        #[cfg(not(feature = "rdp"))]
         let _ = &cert_prompt;
         match config.protocol {
             RemoteProtocol::Vnc => vnc::run(config, backend_sink, input_rx, control_rx).await,
-            // FreeRDP supersedes IronRDP for the RDP protocol when its (experimental)
-            // feature is compiled in — it adds the real H.264/AVC444 path IronRDP lacks.
-            #[cfg(feature = "rdp-freerdp")]
-            RemoteProtocol::Rdp => {
-                rdp_freerdp::run(config, backend_sink, input_rx, control_rx, cert_prompt).await
-            }
-            #[cfg(all(feature = "rdp", not(feature = "rdp-freerdp")))]
+            #[cfg(feature = "rdp")]
             RemoteProtocol::Rdp => {
                 rdp::run(config, backend_sink, input_rx, control_rx, cert_prompt).await
             }
-            #[cfg(all(not(feature = "rdp"), not(feature = "rdp-freerdp")))]
+            #[cfg(not(feature = "rdp"))]
             RemoteProtocol::Rdp => Err(RemoteDesktopError::Unsupported(
                 "RDP support was not compiled into this build".to_string(),
             )),

@@ -263,9 +263,7 @@ impl SqlServerClient {
     pub async fn list_databases(&mut self) -> Result<Vec<String>> {
         let rows = self
             .client
-            .simple_query(
-                "SELECT name FROM sys.databases WHERE database_id > 4 ORDER BY name",
-            )
+            .simple_query("SELECT name FROM sys.databases WHERE database_id > 4 ORDER BY name")
             .await?
             .into_first_result()
             .await?;
@@ -370,11 +368,7 @@ impl SqlServerClient {
              WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' \
                AND tc.TABLE_SCHEMA = '{s}' AND tc.TABLE_NAME = '{t}'"
         );
-        let pk: std::collections::BTreeSet<String> = match self
-            .client
-            .simple_query(pk_sql)
-            .await
-        {
+        let pk: std::collections::BTreeSet<String> = match self.client.simple_query(pk_sql).await {
             Ok(stream) => stream
                 .into_first_result()
                 .await
@@ -402,7 +396,12 @@ impl SqlServerClient {
         Ok(rows
             .iter()
             .map(|r| {
-                let name = r.try_get::<&str, _>(0).ok().flatten().unwrap_or_default().to_string();
+                let name = r
+                    .try_get::<&str, _>(0)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+                    .to_string();
                 let base_type = r.try_get::<&str, _>(1).ok().flatten().unwrap_or_default();
                 let max_len = r.try_get::<i32, _>(2).ok().flatten();
                 let column_type = match max_len {
@@ -416,19 +415,23 @@ impl SqlServerClient {
                     .flatten()
                     .map(|v| v.eq_ignore_ascii_case("YES"))
                     .unwrap_or(true);
-                let default_value = r
-                    .try_get::<&str, _>(4)
-                    .ok()
-                    .flatten()
-                    .map(str::to_string);
+                let default_value = r.try_get::<&str, _>(4).ok().flatten().map(str::to_string);
                 let is_identity = r.try_get::<i32, _>(5).ok().flatten().unwrap_or(0) == 1;
                 ColumnInfo {
-                    key: if pk.contains(&name) { "PRI".to_string() } else { String::new() },
+                    key: if pk.contains(&name) {
+                        "PRI".to_string()
+                    } else {
+                        String::new()
+                    },
                     name,
                     column_type,
                     nullable,
                     default_value,
-                    extra: if is_identity { "IDENTITY".to_string() } else { String::new() },
+                    extra: if is_identity {
+                        "IDENTITY".to_string()
+                    } else {
+                        String::new()
+                    },
                 }
             })
             .collect())

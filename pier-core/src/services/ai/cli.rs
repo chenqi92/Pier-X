@@ -133,7 +133,11 @@ fn build_args(flavor: CliFlavor, cfg: &ProviderConfig) -> Vec<String> {
             // live run (CLI version drift blocked it, see §5.14.8); the
             // parser below is best-effort. Prompt read from stdin (`-`).
             // Codex has no MCP permission tool wired here, so M2b ~ M2a.
-            let mut a = vec!["exec".to_string(), "--json".to_string(), "--sandbox".to_string()];
+            let mut a = vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                "--sandbox".to_string(),
+            ];
             if mode == CliMode::ModelBackend {
                 a.push("read-only".to_string());
             } else {
@@ -235,8 +239,13 @@ fn parse_claude_line(
                         // M2a: surface the CLI's own tool steps read-only.
                         "tool_use" if render_tools => {
                             let name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
-                            let input =
-                                clip(&block.get("input").map(|i| i.to_string()).unwrap_or_default(), 200);
+                            let input = clip(
+                                &block
+                                    .get("input")
+                                    .map(|i| i.to_string())
+                                    .unwrap_or_default(),
+                                200,
+                            );
                             let l = format!("\n\n🔧 **{name}** `{input}`\n");
                             acc.text.push_str(&l);
                             on_delta(&l);
@@ -515,7 +524,11 @@ pub fn stream_cli(
 pub fn known_models(cfg: &ProviderConfig) -> Vec<String> {
     match flavor_of(cfg) {
         CliFlavor::ClaudeCode => {
-            vec!["opus".to_string(), "sonnet".to_string(), "haiku".to_string()]
+            vec![
+                "opus".to_string(),
+                "sonnet".to_string(),
+                "haiku".to_string(),
+            ]
         }
         CliFlavor::Codex => vec!["gpt-5.1-codex".to_string(), "gpt-5-codex".to_string()],
     }
@@ -536,7 +549,10 @@ pub fn test_connection(cfg: &ProviderConfig) -> Result<String, AiError> {
         .map_err(|e| AiError::Http(format!("failed to launch {bin}: {e}")))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        return Err(AiError::Http(format!("{bin} --version failed: {}", err.trim())));
+        return Err(AiError::Http(format!(
+            "{bin} --version failed: {}",
+            err.trim()
+        )));
     }
     let ver_raw = String::from_utf8_lossy(&out.stdout);
     let ver = ver_raw.lines().next().unwrap_or("").trim();
@@ -701,10 +717,18 @@ fn probe_version(bin: &str) -> Option<String> {
 pub fn detect(flavor: CliFlavor) -> CliDetect {
     for cand in detect_candidates(flavor) {
         if let Some(version) = probe_version(&cand) {
-            return CliDetect { found: true, path: cand, version };
+            return CliDetect {
+                found: true,
+                path: cand,
+                version,
+            };
         }
     }
-    CliDetect { found: false, path: String::new(), version: String::new() }
+    CliDetect {
+        found: false,
+        path: String::new(),
+        version: String::new(),
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
@@ -723,7 +747,9 @@ mod tests {
             let mut on_delta = |s: &str| out.push_str(s);
             for l in lines {
                 match flavor {
-                    CliFlavor::ClaudeCode => parse_claude_line(l, &mut on_delta, &mut acc, render_tools),
+                    CliFlavor::ClaudeCode => {
+                        parse_claude_line(l, &mut on_delta, &mut acc, render_tools)
+                    }
                     CliFlavor::Codex => parse_codex_line(l, &mut on_delta, &mut acc, render_tools),
                 }
             }
@@ -814,24 +840,40 @@ mod tests {
 
     #[test]
     fn m1_tools_off_m2a_accept_m2b_extra_args() {
-        let m1 = build_args(CliFlavor::ClaudeCode, &cli_cfg(CliFlavor::ClaudeCode, CliMode::ModelBackend));
-        let i = m1.iter().position(|a| a == "--tools").expect("M1 has --tools");
+        let m1 = build_args(
+            CliFlavor::ClaudeCode,
+            &cli_cfg(CliFlavor::ClaudeCode, CliMode::ModelBackend),
+        );
+        let i = m1
+            .iter()
+            .position(|a| a == "--tools")
+            .expect("M1 has --tools");
         assert_eq!(m1[i + 1], "");
         assert!(m1.iter().any(|a| a == "stream-json"));
         assert!(m1.windows(2).any(|w| w[0] == "--model" && w[1] == "sonnet"));
 
-        let m2a = build_args(CliFlavor::ClaudeCode, &cli_cfg(CliFlavor::ClaudeCode, CliMode::NativeAgent));
+        let m2a = build_args(
+            CliFlavor::ClaudeCode,
+            &cli_cfg(CliFlavor::ClaudeCode, CliMode::NativeAgent),
+        );
         assert!(!m2a.iter().any(|a| a == "--tools"));
-        assert!(m2a.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "acceptEdits"));
+        assert!(m2a
+            .windows(2)
+            .any(|w| w[0] == "--permission-mode" && w[1] == "acceptEdits"));
 
         // M2b: no acceptEdits/--tools; extra args (set by the shell layer)
         // are appended verbatim.
         let mut cfg = cli_cfg(CliFlavor::ClaudeCode, CliMode::GatedAgent);
-        cfg.cli_extra_args = vec!["--permission-prompt-tool".into(), "mcp__pierx__approve".into()];
+        cfg.cli_extra_args = vec![
+            "--permission-prompt-tool".into(),
+            "mcp__pierx__approve".into(),
+        ];
         let m2b = build_args(CliFlavor::ClaudeCode, &cfg);
         assert!(!m2b.iter().any(|a| a == "--tools"));
         assert!(!m2b.iter().any(|a| a == "acceptEdits"));
-        assert!(m2b.windows(2).any(|w| w[0] == "--permission-prompt-tool" && w[1] == "mcp__pierx__approve"));
+        assert!(m2b
+            .windows(2)
+            .any(|w| w[0] == "--permission-prompt-tool" && w[1] == "mcp__pierx__approve"));
     }
 
     #[test]

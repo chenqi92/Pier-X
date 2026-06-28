@@ -115,13 +115,7 @@ impl FileStatus {
 fn is_unmerged(x: char, y: char) -> bool {
     matches!(
         (x, y),
-        ('D', 'D')
-            | ('A', 'U')
-            | ('U', 'D')
-            | ('U', 'A')
-            | ('D', 'U')
-            | ('A', 'A')
-            | ('U', 'U')
+        ('D', 'D') | ('A', 'U') | ('U', 'D') | ('U', 'A') | ('D', 'U') | ('A', 'A') | ('U', 'U')
     )
 }
 

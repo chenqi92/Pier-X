@@ -152,8 +152,12 @@ impl VpnProcess {
         if self.oneshot_active {
             return true;
         }
-        let Ok(mut guard) = self.lock_child() else { return false };
-        let Some(child) = guard.as_mut() else { return false };
+        let Ok(mut guard) = self.lock_child() else {
+            return false;
+        };
+        let Some(child) = guard.as_mut() else {
+            return false;
+        };
         matches!(child.try_wait(), Ok(None))
     }
 }
@@ -400,9 +404,9 @@ pub fn spawn(profile_id: &str, kind: &EgressKind) -> io::Result<Option<VpnProces
             cmd.stdin(Stdio::null());
             cmd.stdout(Stdio::null());
             cmd.stderr(Stdio::piped());
-            let child = cmd.spawn().map_err(|e| {
-                io::Error::new(e.kind(), format!("spawn {cmdline}: {e}"))
-            })?;
+            let child = cmd
+                .spawn()
+                .map_err(|e| io::Error::new(e.kind(), format!("spawn {cmdline}: {e}")))?;
             log::info!("egress vpn subprocess started for profile '{profile_id}': {cmdline}");
             let process = VpnProcess {
                 profile_id: profile_id.to_string(),
@@ -455,7 +459,10 @@ mod tests {
         };
         let plan = plan_for("p", &kind).unwrap().expect("plan");
         assert_eq!(plan.program, "openvpn");
-        assert_eq!(plan.args, vec!["--config".to_string(), "/tmp/example.ovpn".into()]);
+        assert_eq!(
+            plan.args,
+            vec!["--config".to_string(), "/tmp/example.ovpn".into()]
+        );
     }
 
     #[test]
@@ -495,7 +502,10 @@ mod tests {
             protocol: Some(OpenConnectProtocol::Pulse),
         };
         let plan = plan_for("p", &kind).unwrap().expect("plan");
-        assert_eq!(plan.args, vec!["--config".to_string(), "/tmp/example.ovpn".into()]);
+        assert_eq!(
+            plan.args,
+            vec!["--config".to_string(), "/tmp/example.ovpn".into()]
+        );
     }
 
     #[test]

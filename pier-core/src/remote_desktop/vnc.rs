@@ -410,7 +410,7 @@ async fn read_cursor<R: AsyncRead + Unpin>(
     h: u16,
 ) -> Result<()> {
     let pixels_len = (w as usize) * (h as usize) * 4;
-    let stride = ((w as usize) + 7) / 8;
+    let stride = (w as usize).div_ceil(8);
     let mask_len = stride * (h as usize);
     let mut pixels = vec![0u8; pixels_len];
     rd.read_exact(&mut pixels).await?;

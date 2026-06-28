@@ -69,6 +69,5 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 /// because they treat unrecognised args as a file to open. We
 /// skip the completion-zsh source for these without spawning.
 /// The man / --help paths still run.
-pub const SKIP_COMPLETION_ZSH: &[&str] = &[
-    "vim", "nvim", "emacs", "nano", "less", "more", "view", "ed",
-];
+pub const SKIP_COMPLETION_ZSH: &[&str] =
+    &["vim", "nvim", "emacs", "nano", "less", "more", "view", "ed"];

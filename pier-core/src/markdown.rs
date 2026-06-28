@@ -324,8 +324,8 @@ mod tests {
     fn max_source_bytes_is_reasonable() {
         // Sanity: 16 MB is enough for any realistic README
         // (kernel docs cap around 600 KB), but small enough
-        // that Qt's rich-text engine can still render the
-        // result without stalling the UI thread.
+        // that the React markdown viewer can render the result
+        // without stalling the UI thread.
         const _: () = assert!(MAX_SOURCE_BYTES >= 1024 * 1024);
         const _: () = assert!(MAX_SOURCE_BYTES <= 64 * 1024 * 1024);
     }

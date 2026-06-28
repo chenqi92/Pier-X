@@ -9,12 +9,14 @@
 //! Username/password (NTLM) auth therefore works; domain-Kerberos is a
 //! follow-up.
 
+use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ironrdp::connector::{self, ClientConnector, Credentials, ServerName};
 use ironrdp::graphics::image_processing::PixelFormat;
-use ironrdp::input::{Database, MousePosition, Operation, Scancode, WheelRotations};
 use ironrdp::input::MouseButton as RdpMouseButton;
+use ironrdp::input::{Database, MousePosition, Operation, Scancode, WheelRotations};
 use ironrdp::pdu::gcc::KeyboardType;
 use ironrdp::pdu::geometry::InclusiveRectangle;
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
@@ -22,9 +24,12 @@ use ironrdp::pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStage, ActiveStageOutput};
 use ironrdp_tokio::reqwest::ReqwestNetworkClient;
-use ironrdp_tokio::{FramedWrite, TokioFramed, split_tokio_framed};
+use ironrdp_tokio::{split_tokio_framed, FramedWrite, TokioFramed};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio_rustls::rustls;
+use tokio_rustls::rustls::pki_types::ServerName as TlsServerName;
 
 use super::error::{RemoteDesktopError, Result};
 use super::frame::{self, FrameEvent, FrameSink};
@@ -55,7 +60,9 @@ pub(crate) async fn run(
         // ── TCP + connector ──────────────────────────────────────────────
         let stream = TcpStream::connect((config.host.as_str(), config.port))
             .await
-            .map_err(|e| RemoteDesktopError::Connect(format!("{}:{}: {e}", config.host, config.port)))?;
+            .map_err(|e| {
+                RemoteDesktopError::Connect(format!("{}:{}: {e}", config.host, config.port))
+            })?;
         stream.set_nodelay(true).ok();
         let client_addr = stream
             .local_addr()
@@ -67,15 +74,15 @@ pub(crate) async fn run(
         // ── X.224 negotiation up to the TLS boundary ─────────────────────
         let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
             .await
-            .map_err(|e| RemoteDesktopError::Connect(format!("RDP negotiation: {}", describe_err(&e))))?;
+            .map_err(|e| {
+                RemoteDesktopError::Connect(format!("RDP negotiation: {}", describe_err(&e)))
+            })?;
 
         // ── TLS upgrade ──────────────────────────────────────────────────
         let initial_stream = framed.into_inner_no_leftover();
-        let (upgraded_stream, tls_cert) = ironrdp_tls::upgrade(initial_stream, &server_name)
+        let (upgraded_stream, server_public_key) = upgrade_tls(initial_stream, &server_name)
             .await
             .map_err(|e| RemoteDesktopError::Connect(format!("TLS upgrade: {e}")))?;
-        let server_public_key = ironrdp_tls::extract_tls_server_public_key(&tls_cert)
-            .ok_or_else(|| RemoteDesktopError::Connect("unable to extract TLS server public key".to_string()))?;
 
         // ── TOFU certificate pinning ─────────────────────────────────────
         // The TLS upgrade above does NOT verify the server certificate, so
@@ -83,7 +90,7 @@ pub(crate) async fn run(
         // BEFORE CredSSP/NLA runs — credentials are never sent to a server
         // that fails verification. Without a prompt callback: accept-new on
         // first contact, hard-fail on a changed key (possible MITM).
-        verify_server_key(&config, server_public_key, &cert_prompt).await?;
+        verify_server_key(&config, &server_public_key, &cert_prompt).await?;
 
         let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
         let mut upgraded_framed = TokioFramed::new(upgraded_stream);
@@ -96,7 +103,7 @@ pub(crate) async fn run(
             &mut upgraded_framed,
             &mut network_client,
             ServerName::new(&server_name),
-            server_public_key.to_owned(),
+            server_public_key,
             None,
         )
         .await
@@ -110,7 +117,9 @@ pub(crate) async fn run(
         .map_err(|_| {
             RemoteDesktopError::Connect(format!(
                 "{}:{}: connection timed out after {}s",
-                config.host, config.port, CONNECT_TIMEOUT.as_secs()
+                config.host,
+                config.port,
+                CONNECT_TIMEOUT.as_secs()
             ))
         })??;
 
@@ -192,6 +201,98 @@ pub(crate) async fn run(
     Ok(())
 }
 
+async fn upgrade_tls<S>(
+    stream: S,
+    server_name: &str,
+) -> io::Result<(tokio_rustls::client::TlsStream<S>, Vec<u8>)>
+where
+    S: Unpin + AsyncRead + AsyncWrite,
+{
+    let mut config = rustls::client::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoCertificateVerification))
+        .with_no_client_auth();
+
+    config.resumption = rustls::client::Resumption::disabled();
+
+    let domain = TlsServerName::try_from(server_name.to_owned()).map_err(io::Error::other)?;
+    let mut tls_stream = tokio_rustls::TlsConnector::from(Arc::new(config))
+        .connect(domain, stream)
+        .await?;
+    tls_stream.flush().await?;
+
+    let cert_der = tls_stream
+        .get_ref()
+        .1
+        .peer_certificates()
+        .and_then(|certificates| certificates.first())
+        .ok_or_else(|| io::Error::other("peer certificate is missing"))?;
+    let server_public_key = {
+        use x509_cert::der::{Decode as _, Encode as _};
+        let cert = x509_cert::Certificate::from_der(cert_der).map_err(io::Error::other)?;
+        cert.tbs_certificate
+            .subject_public_key_info
+            .to_der()
+            .map_err(|e| {
+                io::Error::other(format!("unable to extract TLS server public key: {e}"))
+            })?
+    };
+
+    Ok((tls_stream, server_public_key))
+}
+
+#[derive(Debug)]
+struct NoCertificateVerification;
+
+impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
+    fn verify_server_cert(
+        &self,
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &[rustls::pki_types::CertificateDer<'_>],
+        _: &rustls::pki_types::ServerName<'_>,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _: &[u8],
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _: &[u8],
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA1,
+            rustls::SignatureScheme::ECDSA_SHA1_Legacy,
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::ED25519,
+            rustls::SignatureScheme::ED448,
+        ]
+    }
+}
+
 /// Slice the updated rectangle out of the full RGBA framebuffer and emit it
 /// as a tile. `region` is inclusive on all edges.
 fn emit_region(sink: &FrameSink, image: &DecodedImage, region: &InclusiveRectangle, jpeg: u32) {
@@ -235,7 +336,12 @@ fn to_operations(ev: &InputEvent) -> Vec<Operation> {
         InputEvent::PointerMove { x, y } => {
             vec![Operation::MouseMove(MousePosition { x: *x, y: *y })]
         }
-        InputEvent::PointerButton { x, y, button, pressed } => {
+        InputEvent::PointerButton {
+            x,
+            y,
+            button,
+            pressed,
+        } => {
             let btn = match button {
                 MouseButton::Left => RdpMouseButton::Left,
                 MouseButton::Middle => RdpMouseButton::Middle,
@@ -259,7 +365,12 @@ fn to_operations(ev: &InputEvent) -> Vec<Operation> {
                 rotation_units,
             })]
         }
-        InputEvent::Key { scancode, extended, pressed, .. } => {
+        InputEvent::Key {
+            scancode,
+            extended,
+            pressed,
+            ..
+        } => {
             let sc = Scancode::from_u8(*extended, *scancode as u8);
             vec![if *pressed {
                 Operation::KeyPressed(sc)

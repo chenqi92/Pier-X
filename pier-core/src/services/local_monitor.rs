@@ -33,8 +33,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use sysinfo::{
-    CpuRefreshKind, Disks, MemoryRefreshKind, Networks, Pid, ProcessRefreshKind,
-    ProcessesToUpdate, RefreshKind, System,
+    CpuRefreshKind, Disks, MemoryRefreshKind, Networks, Pid, ProcessRefreshKind, ProcessesToUpdate,
+    RefreshKind, System,
 };
 
 use super::server_monitor::{DiskEntry, ProcessRow, ServerSnapshot};
@@ -141,7 +141,11 @@ pub fn collect_snapshot(include_disks: bool) -> ServerSnapshot {
     let (load_1, load_5, load_15) = if cfg!(windows) {
         (-1.0, -1.0, -1.0)
     } else {
-        (load_or_neg(load.one), load_or_neg(load.five), load_or_neg(load.fifteen))
+        (
+            load_or_neg(load.one),
+            load_or_neg(load.five),
+            load_or_neg(load.fifteen),
+        )
     };
 
     // Uptime — sysinfo returns seconds since boot. Format the same
@@ -164,7 +168,11 @@ pub fn collect_snapshot(include_disks: bool) -> ServerSnapshot {
         .filter(|(_, p)| p.thread_kind().is_none())
         .map(|(pid, p)| (*pid, p))
         .collect();
-    let total_mem_for_pct = if mem_total_bytes > 0 { mem_total_bytes as f64 } else { 1.0 };
+    let total_mem_for_pct = if mem_total_bytes > 0 {
+        mem_total_bytes as f64
+    } else {
+        1.0
+    };
     let ports_by_pid = collect_process_ports();
     let to_row = |(pid, p): (Pid, &sysinfo::Process)| -> ProcessRow {
         let mem_pct = (p.memory() as f64 / total_mem_for_pct) * 100.0;
@@ -286,7 +294,13 @@ pub fn collect_snapshot(include_disks: bool) -> ServerSnapshot {
             entries,
         )
     } else {
-        (String::new(), String::new(), String::new(), -1.0, Vec::new())
+        (
+            String::new(),
+            String::new(),
+            String::new(),
+            -1.0,
+            Vec::new(),
+        )
     };
 
     ServerSnapshot {
@@ -353,7 +367,11 @@ fn collect_windows_process_ports() -> HashMap<String, Vec<String>> {
             if tokens.len() < 5 {
                 continue;
             }
-            (tokens[1], tokens[tokens.len() - 2], tokens[tokens.len() - 1])
+            (
+                tokens[1],
+                tokens[tokens.len() - 2],
+                tokens[tokens.len() - 1],
+            )
         } else {
             (tokens[1], "", tokens[tokens.len() - 1])
         };
@@ -398,7 +416,10 @@ fn collect_unix_process_ports() -> HashMap<String, Vec<String>> {
             continue;
         };
         let pid_rest = &users[pid_idx + 4..];
-        let pid: String = pid_rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let pid: String = pid_rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
         if pid.is_empty() {
             continue;
         }

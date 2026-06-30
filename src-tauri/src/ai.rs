@@ -1567,7 +1567,8 @@ fn exec_on_target(
                 }
             }
         }
-        None => pier_core::services::local_exec::exec(command),
+        None => pier_core::services::local_exec::exec_cancellable(command, cancel)
+            .map(|(code, output)| (code, tail(&output, EXEC_OUTPUT_CAP))),
     }
 }
 

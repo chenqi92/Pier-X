@@ -195,4 +195,4 @@ multi-line only under bracketed paste else clipboard fallback), settings page
 | Tools | `db_query` (dual-gated with panel write unlock), `git_*`, `docker_*` | hidden | §5.14.3 table requires re-registering each tool as it ships |
 | L2 confirm | Typed object-name unlock for data-destroying subset | partial | v1 requires typing the command's first word for ALL L2 — stricter than spec minimum, revisit when `db_query` lands |
 | Token usage | Per-turn usage display | partial | Sums shown in panel bar; OpenAI-compatible streams without `stream_options` report no usage (provider-dependent) |
-| Local exec cancel | Stop button kills in-flight LOCAL command | partial | SSH path cancels via `CancellationToken`; local `local_exec::exec` runs to completion (cancel only stops reading) |
+| Local exec cancel | Stop button kills in-flight LOCAL command | done | SSH and local both cancel via `CancellationToken`; `local_exec::exec_cancellable` polls the token and kills the child process on stop |

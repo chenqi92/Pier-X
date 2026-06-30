@@ -3,7 +3,10 @@
 //! Used by right-panel tools when no SSH session is available.
 //! Docker, monitoring, and log viewing can all work locally.
 
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use tokio_util::sync::CancellationToken;
 
 use crate::process_util::configure_background_command;
 use crate::services::server_monitor::ServerSnapshot;
@@ -98,6 +101,80 @@ pub fn exec(cmd: &str) -> Result<(i32, String), String> {
         output.stdout.clone()
     };
     Ok((output.code, primary))
+}
+
+/// Like [`exec`], but kills the child process if `cancel` fires.
+///
+/// The AI agent's "stop" maps to a [`CancellationToken`]. The SSH exec
+/// path already cancels its remote channel on stop; the local path must
+/// do the same instead of blocking forever in `Command::output()`
+/// (PRODUCT-SPEC §5.14.8: a cancel kills the subprocess). Returns
+/// `Err("cancelled")` when the token fires before the child exits;
+/// otherwise `(exit_code, stdout_or_stderr)` exactly like [`exec`].
+pub fn exec_cancellable(cmd: &str, cancel: &CancellationToken) -> Result<(i32, String), String> {
+    use std::io::Read;
+
+    let mut command = if cfg!(target_os = "windows") {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg(cmd);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(cmd);
+        c
+    };
+    configure_background_command(&mut command);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("failed to run shell command `{cmd}`: {e}"))?;
+
+    // Drain both pipes on dedicated threads so a chatty child can't
+    // deadlock against a full pipe buffer while we poll for cancel.
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let out_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(s) = stdout.as_mut() {
+            let _ = s.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let err_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(s) = stderr.as_mut() {
+            let _ = s.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    loop {
+        if cancel.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("cancelled".into());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let out = out_handle.join().unwrap_or_default();
+                let err = err_handle.join().unwrap_or_default();
+                let stdout = String::from_utf8_lossy(&out).to_string();
+                let stderr = String::from_utf8_lossy(&err).to_string();
+                let primary = if stdout.trim().is_empty() {
+                    stderr
+                } else {
+                    stdout
+                };
+                return Ok((status.code().unwrap_or(-1), primary));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(format!("failed to wait on shell command `{cmd}`: {e}")),
+        }
+    }
 }
 
 /// Local Docker: list containers.

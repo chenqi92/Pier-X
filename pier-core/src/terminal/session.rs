@@ -309,6 +309,50 @@ impl PierTerminal {
         }
     }
 
+    /// Spawn an arbitrary interactive command inside a local PTY.
+    ///
+    /// This is for command-shaped terminal surfaces (for example a
+    /// user's already-installed agent CLI) rather than login shells:
+    /// no smart-mode shell integration is injected, and `cwd` is
+    /// respected instead of forcing the child into `$HOME`.
+    pub fn new_command(
+        cols: u16,
+        rows: u16,
+        program: &str,
+        args: &[String],
+        cwd: Option<&str>,
+        extra_env: &[(String, String)],
+        notify: NotifyFn,
+        user_data: *mut std::ffi::c_void,
+    ) -> Result<Self, TerminalError> {
+        #[cfg(unix)]
+        {
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let env_refs: Vec<(&str, &str)> = extra_env
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let pty: Box<dyn Pty> = Box::new(super::pty::UnixPty::spawn_with_env_and_cwd(
+                cols, rows, program, &arg_refs, &env_refs, cwd,
+            )?);
+            Self::with_pty(pty, cols, rows, notify, user_data)
+        }
+        #[cfg(windows)]
+        {
+            let _ = extra_env;
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let pty: Box<dyn Pty> = Box::new(super::pty::WindowsPty::spawn_with_cwd(
+                cols, rows, program, &arg_refs, cwd,
+            )?);
+            Self::with_pty(pty, cols, rows, notify, user_data)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (cols, rows, program, args, cwd, extra_env, notify, user_data);
+            Err(TerminalError::Unsupported)
+        }
+    }
+
     /// Construct a session from an already-spawned `Pty`.
     ///
     /// Useful for tests (inject a mock Pty), and for the future M3

@@ -619,6 +619,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onConnect
       return;
     }
     const localPath = localJoin(currentPath, payload.name);
+    const transferId = `sidebar-sftp-drop-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     try {
       if (payload.isDir) {
         await cmd.sftpDownloadTree({
@@ -631,6 +632,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onConnect
           savedConnectionIndex: sshTarget.savedConnectionIndex,
           remotePath: payload.path,
           localPath,
+          transferId,
         });
       } else {
         await cmd.sftpDownload({
@@ -643,6 +645,7 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onConnect
           savedConnectionIndex: sshTarget.savedConnectionIndex,
           remotePath: payload.path,
           localPath,
+          transferId,
         });
       }
       // Refresh the file list so the newly-downloaded file shows up.

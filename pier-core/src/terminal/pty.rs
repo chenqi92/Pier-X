@@ -118,6 +118,22 @@ mod unix {
             args: &[&str],
             extra_env: &[(&str, &str)],
         ) -> Result<Self, TerminalError> {
+            Self::spawn_with_env_and_cwd(cols, rows, program, args, extra_env, None)
+        }
+
+        /// Like [`Self::spawn_with_env`] but starts the child in
+        /// `cwd` when provided. Shell sessions keep the existing
+        /// `$HOME` default via [`Self::spawn_with_env`]; command-style
+        /// sessions such as local AI CLIs need the tab's working
+        /// directory instead.
+        pub fn spawn_with_env_and_cwd(
+            cols: u16,
+            rows: u16,
+            program: &str,
+            args: &[&str],
+            extra_env: &[(&str, &str)],
+            cwd: Option<&str>,
+        ) -> Result<Self, TerminalError> {
             let mut master_fd: libc::c_int = 0;
             let mut win_size = libc::winsize {
                 ws_row: rows,
@@ -178,14 +194,17 @@ mod unix {
                     }
                 }
 
-                // Change to the user's home directory so new shells
-                // don't inherit Pier-X's cwd (which is typically the
-                // bundle directory, surprising the user).
-                if let Ok(home) = std::env::var("HOME") {
-                    if let Ok(home_c) = std::ffi::CString::new(home) {
+                // Change to the requested cwd for command sessions, or
+                // to the user's home directory for normal shell sessions
+                // so they don't inherit Pier-X's bundle cwd.
+                let target_cwd = cwd
+                    .map(str::to_string)
+                    .or_else(|| std::env::var("HOME").ok());
+                if let Some(dir) = target_cwd {
+                    if let Ok(dir_c) = std::ffi::CString::new(dir) {
                         // SAFETY: chdir with a valid NUL-terminated path.
                         unsafe {
-                            libc::chdir(home_c.as_ptr());
+                            libc::chdir(dir_c.as_ptr());
                         }
                     }
                 }
@@ -488,6 +507,19 @@ mod windows_impl {
             program: &str,
             args: &[&str],
         ) -> Result<Self, TerminalError> {
+            Self::spawn_with_cwd(cols, rows, program, args, None)
+        }
+
+        /// Like [`Self::spawn`] but starts the child in `cwd` when
+        /// provided. Shell sessions keep their existing home-directory
+        /// default by calling [`Self::spawn`].
+        pub fn spawn_with_cwd(
+            cols: u16,
+            rows: u16,
+            program: &str,
+            args: &[&str],
+            cwd: Option<&str>,
+        ) -> Result<Self, TerminalError> {
             let (input_read_side, input_write_side) = create_pipe_pair()?;
             let (output_read_side, output_write_side) = create_pipe_pair()?;
 
@@ -522,9 +554,11 @@ mod windows_impl {
 
             let command_line = build_command_line(program, args);
             let mut command_line_wide = wide_null(&command_line);
-            let current_dir = std::env::var_os("USERPROFILE")
-                .filter(|dir| !dir.is_empty())
-                .map(|dir| wide_null_os(dir.as_os_str()));
+            let current_dir = cwd.map(OsStr::new).map(wide_null_os).or_else(|| {
+                std::env::var_os("USERPROFILE")
+                    .filter(|dir| !dir.is_empty())
+                    .map(|dir| wide_null_os(dir.as_os_str()))
+            });
             let env_block = env_block_for_child(program);
 
             let mut process_info: PROCESS_INFORMATION = unsafe { zeroed() };

@@ -2187,7 +2187,7 @@ function AboutPanel({ coreInfo, onCheckForUpdates }: { coreInfo?: CoreInfo | nul
       )}
 
       <div className="about-foot">
-        © 2024–2026 Pier-X · MIT licensed
+        {t("© 2024–2026 Pier-X · MIT licensed")}
       </div>
     </>
   );
@@ -2429,7 +2429,10 @@ function AiSettingsPanel() {
       <SettingRow
         label={t("Model")}
         description={
-          fetchState ?? t("Fetch the endpoint's model list and pick one — or type any model id, listed or not.")
+          fetchState ??
+          (isCli
+            ? t("Reads the CLI's local model cache, config and recent history; you can still type any model id or leave it blank for the account default.")
+            : t("Fetch the endpoint's model list and pick one — or type any model id, listed or not."))
         }
       >
         <div style={{ display: "flex", gap: "var(--sp-2)" }}>
@@ -2447,8 +2450,14 @@ function AiSettingsPanel() {
         </div>
       </SettingRow>
       <SettingRow
-        label={t("Max tokens per turn")}
-        description={t("0 = default (4096). Caps a single model response.")}
+        label={t("Max output tokens per turn")}
+        description={
+          isCli
+            ? t("CLI providers use their own account/CLI response limit; this field is ignored.")
+            : t("0 = backend default ({tokens}). Caps one API response, not the model context window.", {
+                tokens: 16384,
+              })
+        }
       >
         <input
           className="settings__input"
@@ -2457,6 +2466,7 @@ function AiSettingsPanel() {
           max={64000}
           value={settings.aiMaxTokens}
           onChange={(e) => settings.setAiMaxTokens(Number(e.currentTarget.value))}
+          disabled={isCli}
           style={{ width: 100, minWidth: 100 }}
         />
       </SettingRow>

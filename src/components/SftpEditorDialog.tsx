@@ -767,7 +767,8 @@ export default function SftpEditorDialog({
       if (!picked || typeof picked !== "string") return;
       const sep = /^[A-Za-z]:($|[\\/])|^\\\\/.test(picked) ? "\\" : "/";
       const localPath = `${picked.replace(/[\\/]+$/, "")}${sep}${effectiveName || "download"}`;
-      await cmd.sftpDownload({ ...sshArgs, remotePath: path, localPath });
+      const transferId = `editor-download-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      await cmd.sftpDownload({ ...sshArgs, remotePath: path, localPath, transferId });
     } catch (e) {
       setError(formatError(e));
     }

@@ -64,7 +64,7 @@ export const AI_VENDORS: AiVendorPreset[] = [
     baseUrl: "https://api.openai.com/v1",
     needsKey: true,
     keyHint: "sk-…",
-    modelHint: "gpt-4o",
+    modelHint: "gpt-5.5",
   },
   // ── China platforms ──────────────────────────────────────────
   {
@@ -234,7 +234,7 @@ export const AI_VENDORS: AiVendorPreset[] = [
     baseUrl: "",
     needsKey: false,
     cliFlavor: "claude-code",
-    modelHint: "sonnet (optional)",
+    modelHint: "sonnet / claude-sonnet-4-6",
   },
   {
     id: "codex",
@@ -244,7 +244,7 @@ export const AI_VENDORS: AiVendorPreset[] = [
     baseUrl: "",
     needsKey: false,
     cliFlavor: "codex",
-    modelHint: "(account default)",
+    modelHint: "gpt-5.5",
   },
   // ── Custom ───────────────────────────────────────────────────
   {

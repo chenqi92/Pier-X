@@ -2,6 +2,7 @@
 // Typed wrappers for all invoke() calls to pier-core via Tauri IPC.
 
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
+import type { AiProviderSettings } from "./ai";
 import type {
   CoreInfo,
   DbCredential,
@@ -79,6 +80,8 @@ export const devToggleDevtools = () => invoke<void>("dev_toggle_devtools");
 
 export const listDirectory = (path?: string) =>
   invoke<FileEntry[]>("list_directory", { path: path ?? null });
+export const localPathKind = (path: string) =>
+  invoke<"directory" | "file">("local_path_kind", { path });
 
 export const listDrives = () => invoke<FileEntry[]>("list_drives");
 
@@ -881,6 +884,19 @@ export const terminalCreate = (
     rows,
     shell: shell ?? null,
     smartMode: smartMode ?? false,
+  });
+
+export const terminalCreateAiCli = (params: {
+  cols: number;
+  rows: number;
+  provider: AiProviderSettings;
+  initialPrompt?: string | null;
+  cwd?: string | null;
+}) =>
+  invoke<TerminalSessionInfo>("terminal_create_ai_cli", {
+    ...params,
+    initialPrompt: params.initialPrompt ?? null,
+    cwd: params.cwd ?? null,
   });
 
 export const terminalCreateSsh = (params: {
@@ -3832,11 +3848,14 @@ export const sftpUpload = (params: {
   /** Opaque id for matching `sftp:progress` events — see
    *  {@link sftpDownload}. */
   transferId?: string | null;
+  /** Optional sudo password — EACCES falls back to `base64 -d | sudo tee`
+   *  (size-capped, no streaming). */
+  sudoPassword?: string | null;
 }) => invoke<void>("sftp_upload", params);
 
-/** Upload raw file bytes (base64) to a remote path. Used for OS
- *  file-manager drag-drop, where the webview exposes file contents
- *  but not a local path. Path-based picker uploads use {@link sftpUpload}. */
+/** Upload raw file bytes (base64) to a remote path. Used only as a
+ *  fallback when a drop exposes file contents but not a local path.
+ *  Path-based picker and Tauri drag-drop uploads use {@link sftpUpload}. */
 export const sftpWriteBytes = (params: {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   path: string;

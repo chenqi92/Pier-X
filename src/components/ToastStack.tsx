@@ -1,4 +1,5 @@
 import { AlertCircle, CheckCircle2, Info, TriangleAlert, X } from "lucide-react";
+import { useI18n } from "../i18n/useI18n";
 import { useToastStore, type ToastKind } from "../stores/useToastStore";
 
 const KIND_META: Record<
@@ -22,6 +23,7 @@ const KIND_META: Record<
  * stay until explicitly closed.
  */
 export default function ToastStack() {
+  const { t: tr } = useI18n();
   const toasts = useToastStore((s) => s.toasts);
   const dismiss = useToastStore((s) => s.dismiss);
 
@@ -95,7 +97,7 @@ export default function ToastStack() {
             </div>
             <button
               type="button"
-              aria-label="Dismiss"
+              aria-label={tr("Dismiss")}
               onClick={() => dismiss(t.id)}
               style={{
                 flexShrink: 0,

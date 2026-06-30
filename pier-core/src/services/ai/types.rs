@@ -7,6 +7,12 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Backend default output-token cap when the user leaves the UI field at
+/// `0`. This is an output cap, not the model context window.
+pub const DEFAULT_MAX_TOKENS: u32 = 16_384;
+/// Hard ceiling accepted by Pier-X's provider config, regardless of vendor.
+pub const MAX_MAX_TOKENS: u32 = 64_000;
+
 // ── Risk model ─────────────────────────────────────────────────────
 
 /// Risk tier for an AI-proposed action (PRODUCT-SPEC §5.14.4).
@@ -203,8 +209,9 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     /// Model id, verbatim.
     pub model: String,
-    /// Per-turn output cap. Defaults to 4096 (Anthropic requires an
-    /// explicit value; OpenAI-compatible endpoints accept it too).
+    /// Per-turn output cap. Defaults to [`DEFAULT_MAX_TOKENS`]
+    /// (Anthropic requires an explicit value; OpenAI-compatible
+    /// endpoints accept it too). This is not the model context window.
     #[serde(default)]
     pub max_tokens: Option<u32>,
     /// `ProviderKind::Cli` only: which agent CLI to drive.
@@ -249,7 +256,9 @@ impl ProviderConfig {
 
     /// `max_tokens` with the default applied and clamped to sane bounds.
     pub fn effective_max_tokens(&self) -> u32 {
-        self.max_tokens.unwrap_or(4096).clamp(256, 64_000)
+        self.max_tokens
+            .unwrap_or(DEFAULT_MAX_TOKENS)
+            .clamp(256, MAX_MAX_TOKENS)
     }
 }
 

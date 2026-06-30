@@ -934,29 +934,31 @@ function NoVncRemoteDesktopPanel({ tab, isActive }: Props) {
         {showStats && (
           <div className="rd-stats" aria-hidden="true">
             <div className="rd-stats__row">
-              <span>fps</span>
+              <span>{i18n.t("fps")}</span>
               <span className="rd-stats__value">{stats.fps.toFixed(1)}</span>
             </div>
             <div className="rd-stats__row">
-              <span>remote</span>
+              <span>{i18n.t("remote")}</span>
               <span className="rd-stats__value">{stats.remoteSize}</span>
             </div>
             <div className="rd-stats__row">
-              <span>mode</span>
+              <span>{i18n.t("mode")}</span>
               <span className="rd-stats__value">{stats.mode}</span>
             </div>
             <div className="rd-stats__row">
-              <span>resize</span>
-              <span className="rd-stats__value">{stats.resizeRemote ? "on" : "off"}</span>
+              <span>{i18n.t("resize")}</span>
+              <span className="rd-stats__value">
+                {i18n.t(stats.resizeRemote ? "on" : "off")}
+              </span>
             </div>
             <div className="rd-stats__row">
-              <span>idle</span>
+              <span>{i18n.t("idle")}</span>
               <span className="rd-stats__value">
                 {stats.idleMs == null ? "—" : `${Math.round(stats.idleMs)}ms`}
               </span>
             </div>
             <div className="rd-stats__row">
-              <span>frames</span>
+              <span>{i18n.t("frames")}</span>
               <span className="rd-stats__value">{stats.frames}</span>
             </div>
           </div>

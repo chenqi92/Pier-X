@@ -4325,6 +4325,18 @@ fn list_directory(path: Option<String>) -> Result<Vec<FileEntry>, String> {
     Ok(entries)
 }
 
+#[tauri::command(async)]
+fn local_path_kind(path: String) -> Result<String, String> {
+    let target = expand_local_path(&path);
+    let metadata = fs::metadata(&target)
+        .map_err(|error| format!("Failed to stat {}: {}", target.display(), error))?;
+    Ok(if metadata.is_dir() {
+        String::from("directory")
+    } else {
+        String::from("file")
+    })
+}
+
 /// Enumerate top-level volumes so the sidebar can render a "This PC"
 /// view above drive roots.
 ///
@@ -7014,6 +7026,64 @@ fn terminal_create(
         notify_ctx,
         terminal,
         resolved_shell,
+        resolved_cols,
+        resolved_rows,
+    )
+}
+
+#[tauri::command(async)]
+fn terminal_create_ai_cli(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    cols: u16,
+    rows: u16,
+    provider: AiProviderSettings,
+    initial_prompt: Option<String>,
+    cwd: Option<String>,
+) -> Result<TerminalSessionInfo, String> {
+    let mut cfg = build_provider_config(&provider);
+    if cfg.kind != pier_core::services::ai::ProviderKind::Cli {
+        return Err(String::from(
+            "terminal_create_ai_cli requires a CLI provider",
+        ));
+    }
+    let cwd_owned = cwd
+        .map(|dir| dir.trim().to_string())
+        .filter(|dir| !dir.is_empty());
+    cfg.cli_cwd = cwd_owned.clone();
+    let prompt = initial_prompt.unwrap_or_default();
+    let spec = pier_core::services::ai::cli::native_terminal_spec(&cfg, &prompt);
+    let resolved_cols = cols.max(40);
+    let resolved_rows = rows.max(12);
+    let flavor = cfg
+        .cli_flavor
+        .unwrap_or(pier_core::services::ai::CliFlavor::ClaudeCode);
+    let label = match flavor {
+        pier_core::services::ai::CliFlavor::ClaudeCode => "Claude Code",
+        pier_core::services::ai::CliFlavor::Codex => "Codex",
+    }
+    .to_string();
+
+    let (session_id, mut notify_ctx) = allocate_notify_context(&state, app);
+    let user_data = &mut *notify_ctx as *mut NotifyContext as *mut c_void;
+    let terminal = PierTerminal::new_command(
+        resolved_cols,
+        resolved_rows,
+        &spec.program,
+        &spec.args,
+        cwd_owned.as_deref(),
+        &spec.env,
+        tauri_terminal_notify as NotifyFn,
+        user_data,
+    )
+    .map_err(|error| format!("failed to launch {}: {}", spec.program, error))?;
+
+    store_terminal_session(
+        state,
+        session_id,
+        notify_ctx,
+        terminal,
+        label,
         resolved_cols,
         resolved_rows,
     )
@@ -16144,6 +16214,26 @@ fn sudo_upload_bytes(
     Ok(())
 }
 
+fn sudo_upload_local_file(
+    session: &pier_core::ssh::SshSession,
+    local: &std::path::Path,
+    remote: &str,
+) -> Result<(), String> {
+    let metadata = std::fs::metadata(local).map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err(format!("{} is not a file", local.display()));
+    }
+    if metadata.len() > SFTP_SUDO_XFER_MAX {
+        return Err(format!(
+            "File is {} bytes; sudo upload is capped at {} bytes",
+            metadata.len(),
+            SFTP_SUDO_XFER_MAX
+        ));
+    }
+    let bytes = std::fs::read(local).map_err(|e| e.to_string())?;
+    sudo_upload_bytes(session, remote, &bytes)
+}
+
 #[tauri::command]
 async fn sftp_mkdir(
     app: tauri::AppHandle,
@@ -17809,16 +17899,15 @@ fn sftp_download_impl(
     }
 }
 
-/// Max bytes accepted by [`sftp_write_bytes`]. Drag-drop uploads read
-/// the whole file into the webview and ship it base64 over IPC, so
-/// this caps the memory cost; larger files should use the path-based
-/// picker upload ([`sftp_upload`]), which streams in chunks.
+/// Max bytes accepted by [`sftp_write_bytes`]. This is only the
+/// no-local-path fallback: normal picker and Tauri path-based drag
+/// uploads use [`sftp_upload`], which streams in chunks.
 const SFTP_DROP_UPLOAD_MAX: usize = 64 * 1024 * 1024;
 
 /// Write raw bytes (base64 over IPC) to a remote file. Used by
-/// drag-drop uploads from the OS file manager, where the webview
-/// exposes file *contents* but not a local path, so the path-based
-/// [`sftp_upload`] can't be used.
+/// fallback drag-drop uploads where the webview exposes file
+/// *contents* but not a local path, so the path-based [`sftp_upload`]
+/// can't be used.
 #[tauri::command]
 async fn sftp_write_bytes(
     app: tauri::AppHandle,
@@ -17920,6 +18009,7 @@ async fn sftp_upload(
     remote_path: String,
     saved_connection_index: Option<usize>,
     transfer_id: Option<String>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
@@ -17936,6 +18026,7 @@ async fn sftp_upload(
             remote_path,
             saved_connection_index,
             transfer_id,
+            sudo_password,
         )
     })
     .await
@@ -17955,8 +18046,9 @@ fn sftp_upload_impl(
     remote_path: String,
     saved_connection_index: Option<usize>,
     transfer_id: Option<String>,
+    sudo_password: Option<String>,
 ) -> Result<(), String> {
-    let session = get_or_open_ssh_session(
+    let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
         port,
@@ -17965,17 +18057,27 @@ fn sftp_upload_impl(
         &password,
         &key_path,
         saved_connection_index,
+        sudo_password,
     )?;
     let resolved_local = expand_local_path(&local_path);
     let id = transfer_id.clone().unwrap_or_default();
 
     if transfer_id.is_none() {
         let sftp = get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode)?;
-        return sftp
-            .upload_from_blocking(&resolved_local, &remote_path)
-            .map_err(|e| e.to_string());
+        return match sftp.upload_from_blocking(&resolved_local, &remote_path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let raw = e.to_string();
+                if pier_core::sudo::is_permission_denied(&raw) && session.can_elevate_blocking() {
+                    sudo_upload_local_file(&session, &resolved_local, &remote_path)
+                } else {
+                    Err(raw)
+                }
+            }
+        };
     }
 
+    let session_for_fallback = session.clone();
     let cancel = register_transfer_cancel(&state, &id);
 
     let app_for_cb = app.clone();
@@ -18021,6 +18123,41 @@ fn sftp_upload_impl(
         }
         Err(e) => {
             let msg = e.to_string();
+            if pier_core::sudo::is_permission_denied(&msg)
+                && session_for_fallback.can_elevate_blocking()
+            {
+                match sudo_upload_local_file(&session_for_fallback, &resolved_local, &remote_path) {
+                    Ok(()) => {
+                        let total = std::fs::metadata(&resolved_local)
+                            .map(|m| m.len())
+                            .unwrap_or(0);
+                        emit_sftp_progress(
+                            &app,
+                            SftpProgressEvent {
+                                id,
+                                bytes: total,
+                                total,
+                                done: true,
+                                error: None,
+                            },
+                        );
+                        return Ok(());
+                    }
+                    Err(se) => {
+                        emit_sftp_progress(
+                            &app,
+                            SftpProgressEvent {
+                                id,
+                                bytes: 0,
+                                total: 0,
+                                done: true,
+                                error: Some(se.clone()),
+                            },
+                        );
+                        return Err(se);
+                    }
+                }
+            }
             emit_sftp_progress(
                 &app,
                 SftpProgressEvent {
@@ -20229,6 +20366,7 @@ pub fn run() {
             core_components_info,
             ssh_keys_list,
             list_directory,
+            local_path_kind,
             list_drives,
             local_create_file,
             local_create_dir,
@@ -20377,6 +20515,7 @@ pub fn run() {
             code_search,
             ssh_session_prewarm,
             terminal_create,
+            terminal_create_ai_cli,
             terminal_create_ssh,
             terminal_create_ssh_saved,
             terminal_write,

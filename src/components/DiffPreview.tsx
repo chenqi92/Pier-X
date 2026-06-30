@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Minus, Plus } from "lucide-react";
+import { useI18n } from "../i18n/useI18n";
 
 // Line-level diff display: shows added / removed / unchanged lines
 // between two text blobs. Used by the web-server editor to preview
@@ -25,6 +26,7 @@ type DiffLine =
   | { kind: "add"; newNo: number; text: string };
 
 export default function DiffPreview({ oldText, newText, context = 3 }: Props) {
+  const { t } = useI18n();
   const lines = useMemo(
     () => collapseContext(diffLines(oldText, newText), context),
     [oldText, newText, context],
@@ -33,7 +35,7 @@ export default function DiffPreview({ oldText, newText, context = 3 }: Props) {
   if (oldText === newText) {
     return (
       <div className="diff-preview diff-preview--empty mono">
-        No changes — the buffer matches what's on disk.
+        {t("No changes — the buffer matches what's on disk.")}
       </div>
     );
   }

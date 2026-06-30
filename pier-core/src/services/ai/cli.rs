@@ -22,11 +22,14 @@
 //! `CancellationToken` fires — abandoning the worker is not enough, the
 //! subprocess would keep running.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::collections::HashSet;
+use std::fs;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -158,6 +161,117 @@ fn build_args(flavor: CliFlavor, cfg: &ProviderConfig) -> Vec<String> {
     };
     a.extend(cfg.cli_extra_args.iter().cloned());
     a
+}
+
+/// Interactive PTY launch plan for the user's local agent CLI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliTerminalSpec {
+    /// Executable handed to the PTY backend.
+    pub program: String,
+    /// Arguments handed to the PTY backend.
+    pub args: Vec<String>,
+    /// Environment overrides applied to the child where the platform PTY
+    /// supports them.
+    pub env: Vec<(String, String)>,
+}
+
+fn wrap_cli_terminal_program(bin: &str, args: Vec<String>) -> (String, Vec<String>) {
+    #[cfg(target_os = "windows")]
+    {
+        let lower = bin.to_ascii_lowercase();
+        if lower.ends_with(".ps1") {
+            let mut wrapped = vec![
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-File".to_string(),
+                bin.to_string(),
+            ];
+            wrapped.extend(args);
+            return ("powershell".to_string(), wrapped);
+        }
+        if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+            let mut wrapped = vec!["/C".to_string(), bin.to_string()];
+            wrapped.extend(args);
+            return ("cmd".to_string(), wrapped);
+        }
+    }
+    (bin.to_string(), args)
+}
+
+fn build_native_terminal_args(
+    flavor: CliFlavor,
+    cfg: &ProviderConfig,
+    initial_prompt: &str,
+) -> Vec<String> {
+    let model = cfg.model.trim();
+    let prompt = initial_prompt.trim();
+    match flavor {
+        CliFlavor::ClaudeCode => {
+            let mut a = Vec::new();
+            match cfg.cli_mode {
+                CliMode::NativeAgent => {
+                    a.push("--permission-mode".to_string());
+                    a.push("acceptEdits".to_string());
+                }
+                CliMode::ModelBackend | CliMode::GatedAgent => {
+                    // Interactive mode is a direct CLI session, so Pier-X
+                    // cannot gate individual native tool calls here. Keep
+                    // Claude in its own default approval mode unless the
+                    // user explicitly selected M2a native agent.
+                    a.push("--permission-mode".to_string());
+                    a.push("default".to_string());
+                }
+            }
+            if !model.is_empty() {
+                a.push("--model".to_string());
+                a.push(model.to_string());
+            }
+            a.extend(cfg.cli_extra_args.iter().cloned());
+            if !prompt.is_empty() {
+                a.push(prompt.to_string());
+            }
+            a
+        }
+        CliFlavor::Codex => {
+            let mut a = Vec::new();
+            if cfg.cli_mode == CliMode::NativeAgent {
+                // Equivalent to Codex's old full-auto shape: automatic
+                // workspace edits, with the CLI escalating when it needs
+                // to leave the sandbox.
+                a.push("--sandbox".to_string());
+                a.push("workspace-write".to_string());
+                a.push("-a".to_string());
+                a.push("on-request".to_string());
+            }
+            if !model.is_empty() {
+                a.push("-m".to_string());
+                a.push(model.to_string());
+            }
+            a.extend(cfg.cli_extra_args.iter().cloned());
+            if !prompt.is_empty() {
+                a.push("--".to_string());
+                a.push(prompt.to_string());
+            }
+            a
+        }
+    }
+}
+
+/// Build the argv/env used to launch Claude Code or Codex as a real
+/// interactive PTY session. Unlike [`stream_cli`], this does NOT parse
+/// JSON or collapse the CLI into one request/response turn; the caller
+/// owns a terminal stream and writes user input directly to it.
+pub fn native_terminal_spec(cfg: &ProviderConfig, initial_prompt: &str) -> CliTerminalSpec {
+    let flavor = flavor_of(cfg);
+    let bin = resolve_bin(cfg);
+    let args = build_native_terminal_args(flavor, cfg, initial_prompt);
+    let (program, args) = wrap_cli_terminal_program(&bin, args);
+    let env = match flavor {
+        CliFlavor::ClaudeCode => vec![("CLAUDE_CODE_DISABLE_MOUSE".to_string(), "1".to_string())],
+        CliFlavor::Codex => Vec::new(),
+    };
+    CliTerminalSpec { program, args, env }
 }
 
 /// Flatten system + history into one prompt string fed on stdin.
@@ -520,17 +634,228 @@ pub fn stream_cli(
     })
 }
 
+const CODEX_MODEL_FALLBACK: &[&str] = &[
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex-spark",
+    "gpt-5.1-codex",
+    "gpt-5-codex",
+];
+
+const CLAUDE_MODEL_FALLBACK: &[&str] = &[
+    "sonnet",
+    "opus",
+    "haiku",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+    "claude-haiku-4-5-20251001",
+];
+
+fn push_model(out: &mut Vec<String>, seen: &mut HashSet<String>, model: impl AsRef<str>) {
+    let model = model.as_ref().trim();
+    if model.is_empty()
+        || model.starts_with('<')
+        || model.len() > 128
+        || model.chars().any(char::is_whitespace)
+    {
+        return;
+    }
+    let owned = model.to_string();
+    if seen.insert(owned.clone()) {
+        out.push(owned);
+    }
+}
+
+fn extract_toml_models(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "model" {
+            continue;
+        }
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        push_model(&mut out, &mut seen, value);
+    }
+    out
+}
+
+fn extract_codex_cache_models(text: &str) -> Vec<String> {
+    let Ok(body) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    let Some(entries) = body.get("models").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut ranked = Vec::new();
+    for entry in entries {
+        if entry
+            .get("visibility")
+            .and_then(Value::as_str)
+            .is_some_and(|v| v == "hide")
+        {
+            continue;
+        }
+        let Some(slug) = entry.get("slug").and_then(Value::as_str) else {
+            continue;
+        };
+        let priority = entry
+            .get("priority")
+            .and_then(Value::as_i64)
+            .unwrap_or(i64::MAX);
+        ranked.push((priority, slug.to_string()));
+    }
+    ranked.sort_by_key(|(priority, _)| *priority);
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for (_, model) in ranked {
+        push_model(&mut out, &mut seen, model);
+    }
+    out
+}
+
+fn extract_quoted_model_fields(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for marker in ["\"model\":\"", "\"model\": \""] {
+        let mut rest = text;
+        while let Some(idx) = rest.find(marker) {
+            let after = &rest[idx + marker.len()..];
+            let Some(end) = after.find('"') else {
+                break;
+            };
+            push_model(&mut out, &mut seen, &after[..end]);
+            rest = &after[end + 1..];
+        }
+    }
+    out
+}
+
+fn read_to_string_if_exists(path: impl AsRef<Path>) -> Option<String> {
+    fs::read_to_string(path).ok()
+}
+
+fn read_tail(path: &Path, max_bytes: u64) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    if len > max_bytes {
+        file.seek(SeekFrom::Start(len - max_bytes)).ok()?;
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text).ok()?;
+    Some(text)
+}
+
+fn collect_recent_jsonl_files(dir: &Path, depth: usize, out: &mut Vec<(SystemTime, PathBuf)>) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.is_dir() {
+            collect_recent_jsonl_files(&path, depth - 1, out);
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        out.push((meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), path));
+    }
+}
+
+fn codex_local_models(home: &str) -> Vec<String> {
+    let home = Path::new(home);
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(text) = read_to_string_if_exists(home.join(".codex/models_cache.json")) {
+        for model in extract_codex_cache_models(&text) {
+            push_model(&mut out, &mut seen, model);
+        }
+    }
+    if let Some(text) = read_to_string_if_exists(home.join(".codex/config.toml")) {
+        for model in extract_toml_models(&text) {
+            push_model(&mut out, &mut seen, model);
+        }
+    }
+    for model in CODEX_MODEL_FALLBACK {
+        push_model(&mut out, &mut seen, model);
+    }
+    out
+}
+
+fn claude_local_models(home: &str) -> Vec<String> {
+    let home = Path::new(home);
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+
+    // Keep Claude Code's documented aliases first; they track the user's
+    // current account/channel even when full model ids move.
+    for model in ["sonnet", "opus", "haiku"] {
+        push_model(&mut out, &mut seen, model);
+    }
+
+    for rel in [
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+        ".claude/CLAUDE.md",
+    ] {
+        if let Some(text) = read_to_string_if_exists(home.join(rel)) {
+            for model in extract_quoted_model_fields(&text) {
+                push_model(&mut out, &mut seen, model);
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    collect_recent_jsonl_files(&home.join(".claude/projects"), 5, &mut files);
+    collect_recent_jsonl_files(&home.join(".claude/sessions"), 4, &mut files);
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, path) in files.into_iter().take(160) {
+        if let Some(text) = read_tail(&path, 1_048_576) {
+            for model in extract_quoted_model_fields(&text) {
+                push_model(&mut out, &mut seen, model);
+            }
+        }
+    }
+
+    for model in CLAUDE_MODEL_FALLBACK {
+        push_model(&mut out, &mut seen, model);
+    }
+    out
+}
+
 /// Model ids offered in the settings dropdown (free-text entry also works).
+/// Agent CLIs do not expose a stable `/models` endpoint, so we prefer the
+/// local CLI's own cache/config/history before falling back to current aliases.
 pub fn known_models(cfg: &ProviderConfig) -> Vec<String> {
     match flavor_of(cfg) {
-        CliFlavor::ClaudeCode => {
-            vec![
-                "opus".to_string(),
-                "sonnet".to_string(),
-                "haiku".to_string(),
-            ]
-        }
-        CliFlavor::Codex => vec!["gpt-5.1-codex".to_string(), "gpt-5-codex".to_string()],
+        CliFlavor::ClaudeCode => home_dir()
+            .map(|home| claude_local_models(&home))
+            .unwrap_or_else(|| {
+                CLAUDE_MODEL_FALLBACK
+                    .iter()
+                    .map(|m| m.to_string())
+                    .collect()
+            }),
+        CliFlavor::Codex => home_dir()
+            .map(|home| codex_local_models(&home))
+            .unwrap_or_else(|| CODEX_MODEL_FALLBACK.iter().map(|m| m.to_string()).collect()),
     }
 }
 
@@ -665,6 +990,9 @@ fn detect_candidates(flavor: CliFlavor) -> Vec<String> {
         if matches!(flavor, CliFlavor::ClaudeCode) {
             v.push(join(&[".claude", "local", "claude"]));
         }
+        if cfg!(target_os = "macos") && matches!(flavor, CliFlavor::Codex) {
+            v.push("/Applications/Codex.app/Contents/Resources/codex".to_string());
+        }
     }
     v
 }
@@ -773,6 +1101,42 @@ mod tests {
     }
 
     #[test]
+    fn codex_cache_models_use_visible_slugs_in_priority_order() {
+        let models = extract_codex_cache_models(
+            r#"{
+              "models": [
+                {"slug":"codex-auto-review","visibility":"hide","priority":1},
+                {"slug":"gpt-5.4-mini","visibility":"list","priority":30},
+                {"slug":"gpt-5.5","visibility":"list","priority":7},
+                {"slug":"gpt-5.4","visibility":"list","priority":16}
+              ]
+            }"#,
+        );
+        assert_eq!(models, ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]);
+    }
+
+    #[test]
+    fn toml_models_and_json_model_fields_are_extracted_safely() {
+        assert_eq!(
+            extract_toml_models(
+                r#"
+                model = "gpt-5.5"
+                [profiles.fast]
+                model = 'gpt-5.4-mini'
+                "#,
+            ),
+            ["gpt-5.5", "gpt-5.4-mini"],
+        );
+
+        let models = extract_quoted_model_fields(
+            r#"{"message":{"model":"claude-opus-4-8"}}
+               {"message":{"model":"<synthetic>"}}
+               {"model": "claude-haiku-4-5-20251001"}"#,
+        );
+        assert_eq!(models, ["claude-opus-4-8", "claude-haiku-4-5-20251001"]);
+    }
+
+    #[test]
     fn claude_streams_text_and_captures_usage() {
         let lines = [
             r#"{"type":"system","subtype":"init","tools":[]}"#,
@@ -874,6 +1238,45 @@ mod tests {
         assert!(m2b
             .windows(2)
             .any(|w| w[0] == "--permission-prompt-tool" && w[1] == "mcp__pierx__approve"));
+    }
+
+    #[test]
+    fn native_terminal_spec_uses_interactive_cli_args() {
+        let mut claude = cli_cfg(CliFlavor::ClaudeCode, CliMode::NativeAgent);
+        claude.cli_bin = Some("/bin/claude".into());
+        let spec = native_terminal_spec(&claude, "fix tests");
+        assert_eq!(spec.program, "/bin/claude");
+        assert!(spec
+            .args
+            .windows(2)
+            .any(|w| w[0] == "--permission-mode" && w[1] == "acceptEdits"));
+        assert!(spec
+            .args
+            .windows(2)
+            .any(|w| w[0] == "--model" && w[1] == "sonnet"));
+        assert_eq!(spec.args.last().map(String::as_str), Some("fix tests"));
+        assert!(spec
+            .env
+            .iter()
+            .any(|(k, v)| k == "CLAUDE_CODE_DISABLE_MOUSE" && v == "1"));
+
+        let mut codex = cli_cfg(CliFlavor::Codex, CliMode::NativeAgent);
+        codex.cli_bin = Some("/bin/codex".into());
+        let spec = native_terminal_spec(&codex, "explain this repo");
+        assert_eq!(spec.program, "/bin/codex");
+        assert!(spec
+            .args
+            .windows(2)
+            .any(|w| w[0] == "--sandbox" && w[1] == "workspace-write"));
+        assert!(spec
+            .args
+            .windows(2)
+            .any(|w| w[0] == "-a" && w[1] == "on-request"));
+        assert!(spec
+            .args
+            .windows(2)
+            .any(|w| w[0] == "--" && w[1] == "explain this repo"));
+        assert!(spec.env.is_empty());
     }
 
     #[test]

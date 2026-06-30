@@ -358,6 +358,10 @@ fn split_compound(input: &str) -> SplitResult {
                 push_segment(&mut segments, &mut current, &mut preceded_by_pipe, false);
                 i += 2;
             }
+            '&' if next == Some('>') || (i > 0 && bytes.get(i - 1) == Some(&'>')) => {
+                current.push(c);
+                i += 1;
+            }
             '|' if next == Some('|') => {
                 push_segment(&mut segments, &mut current, &mut preceded_by_pipe, false);
                 i += 2;
@@ -620,6 +624,12 @@ fn classify_segment(tokens: &[String], depth: usize) -> RiskAssessment {
         break;
     }
     let rest = &tokens[idx.min(tokens.len())..];
+    if let Some(stripped) = shell_control_remainder(rest) {
+        if stripped.is_empty() {
+            return out;
+        }
+        return classify_segment(stripped, depth + 1);
+    }
     // `sudo -l 2>/dev/null` keeps a trailing redirect token after the
     // flags, but it's still a command-less privilege check.
     let command_less =
@@ -654,6 +664,40 @@ fn classify_segment(tokens: &[String], depth: usize) -> RiskAssessment {
         out.level = level;
     }
     out
+}
+
+/// Shell grammar control words are not commands. A segment from
+/// `split_compound` may begin with `if`, `then`, `else`, or `elif`; strip
+/// that prefix and classify the real command that follows.
+fn shell_control_remainder(tokens: &[String]) -> Option<&[String]> {
+    let first = tokens.first()?.to_ascii_lowercase();
+    let mut idx = match first.as_str() {
+        "if" | "then" | "else" | "elif" | "do" => 1,
+        "fi" | "done" | "esac" if tokens.len() == 1 => return Some(&tokens[1..]),
+        "!" => 1,
+        _ => return None,
+    };
+    while idx < tokens.len() {
+        match tokens[idx].to_ascii_lowercase().as_str() {
+            "!" | "then" | "do" => idx += 1,
+            _ => break,
+        }
+    }
+    Some(&tokens[idx..])
+}
+
+/// Locate the body of `sh -c ...`, including common bundled short
+/// options such as `sh -lc ...` / `bash -elc ...`.
+fn shell_c_body(args: &[String]) -> Option<Option<&String>> {
+    for (idx, arg) in args.iter().enumerate() {
+        if arg == "-c" {
+            return Some(args.get(idx + 1));
+        }
+        if arg.starts_with('-') && !arg.starts_with("--") && arg[1..].contains('c') {
+            return Some(args.get(idx + 1));
+        }
+    }
+    None
 }
 
 /// `/usr/bin/rm` → `rm`; lowercased.
@@ -1697,15 +1741,19 @@ fn classify_head(
 
         // ── Arbitrary code execution ───────────────────────────────
         "sh" | "bash" | "zsh" | "dash" | "ksh" | "fish" => {
-            if let Some(pos) = args.iter().position(|a| a == "-c") {
-                if let Some(inner) = args.get(pos + 1) {
+            if let Some(inner) = shell_c_body(args) {
+                if let Some(inner) = inner {
                     let inner_assessment = classify_inner(inner, depth);
-                    let mut level = inner_assessment.level.max(RiskLevel::L1);
-                    if level < RiskLevel::L1 {
-                        level = RiskLevel::L1;
-                    }
+                    let level = inner_assessment.level;
                     raise_with(out, inner_assessment);
-                    return (level, Some("shell -c wrapper".into()));
+                    return (
+                        level,
+                        if level >= RiskLevel::L1 {
+                            Some("shell -c wrapper".into())
+                        } else {
+                            None
+                        },
+                    );
                 }
                 (
                     RiskLevel::L2,
@@ -1721,6 +1769,32 @@ fn classify_head(
             }
         }
         "eval" | "exec" | "source" | "." => (RiskLevel::L2, Some("dynamic execution".into())),
+        "command" => {
+            if lower_args.iter().any(|a| a == "-v" || a == "-V") {
+                (RiskLevel::L0, None)
+            } else {
+                let inner: Vec<String> = args
+                    .iter()
+                    .filter(|a| !matches!(a.as_str(), "-p" | "--"))
+                    .cloned()
+                    .collect();
+                if inner.is_empty() {
+                    (RiskLevel::L0, None)
+                } else {
+                    let inner_assessment = classify_segment(&inner, depth + 1);
+                    let level = inner_assessment.level;
+                    raise_with(out, inner_assessment);
+                    (
+                        level,
+                        if level >= RiskLevel::L1 {
+                            Some("command builtin runs another command".into())
+                        } else {
+                            None
+                        },
+                    )
+                }
+            }
+        }
         "python" | "python3" | "perl" | "ruby" | "node" | "php" | "lua" => {
             (RiskLevel::L2, Some("arbitrary code execution".into()))
         }
@@ -2183,7 +2257,7 @@ fn classify_head(
         | "dig" | "nslookup" | "host" | "basename" | "dirname" | "realpath" | "readlink"
         | "md5sum" | "sha256sum" | "sha1sum" | "cksum" | "cmp" | "nproc" | "arch" | "groups"
         | "last" | "w" | "who" | "tasklist" | "systeminfo" | "ipconfig" | "ver" | "where"
-        | "export" | "cd" | "test" | "true" | "false" | "sleep" | "man" | "tldr"
+        | "export" | "cd" | "test" | "[" | "[[" | "hash" | "true" | "false" | "sleep" | "man" | "tldr"
         | "tree" | "numfmt" | "lsof" | "uptime.exe" | "getent"
         // read-only system / hardware inspection (PRODUCT-SPEC §5.14.4)
         | "acpi" | "biosdecode" | "ipcs" | "lsipc" | "lslocks" | "lsns" | "lsscsi"
@@ -4612,7 +4686,7 @@ mod tests {
     #[test]
     fn shell_wrapper_inspected() {
         assert_eq!(level("bash -c 'rm -rf /'"), RiskLevel::L3);
-        assert_eq!(level("sh -c 'ls -la'"), RiskLevel::L1.max(RiskLevel::L1));
+        assert_eq!(level("sh -c 'ls -la'"), RiskLevel::L0);
         assert_eq!(level("docker exec web rm -rf /"), RiskLevel::L3);
         assert_eq!(level("docker exec web ls /app"), RiskLevel::L1);
         assert_eq!(
@@ -4620,6 +4694,22 @@ mod tests {
             RiskLevel::L2
         );
         assert_eq!(level("xargs rm -rf"), RiskLevel::L2);
+    }
+
+    #[test]
+    fn shell_control_flow_keeps_read_only_probe_auto_runnable() {
+        let probe = r#"sh -lc 'echo "=== running systemd services ==="; if command -v systemctl >/dev/null 2>&1; then systemctl list-units --type=service --state=running --no-pager --plain; else ps -eo pid,comm,args --sort=comm | head -120; fi; echo; echo "=== listening ports/processes ==="; if command -v ss >/dev/null 2>&1; then ss -tulpen; elif command -v netstat >/dev/null 2>&1; then netstat -tulpn; else echo "ss/netstat not found"; fi; echo; echo "=== docker containers ==="; if command -v docker >/dev/null 2>&1; then docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"; else echo "docker not found"; fi'"#;
+        let assessment = classify_command(probe);
+        assert_eq!(
+            assessment.level,
+            RiskLevel::L0,
+            "reasons: {:?}",
+            assessment.reasons
+        );
+        assert_eq!(
+            level("sh -lc 'if command -v rm >/dev/null 2>&1; then rm -rf /; fi'"),
+            RiskLevel::L3
+        );
     }
 
     // Compound takes the max.

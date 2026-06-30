@@ -229,10 +229,10 @@ function formatModifiedTooltip(unixSeconds: number | null | undefined): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
-/** Cap for drag-drop byte uploads — the whole file is read into the
- *  webview and shipped base64, so keep it bounded. Larger files should
- *  use the path-based picker upload (streams in chunks). Mirrors the
- *  backend `SFTP_DROP_UPLOAD_MAX`. */
+/** Cap for fallback byte uploads — the whole file is read into the
+ *  webview and shipped base64, so keep it bounded. Normal drag-drop
+ *  uses Tauri file paths and streams through `sftpUpload`. Mirrors
+ *  the backend `SFTP_DROP_UPLOAD_MAX`. */
 const DROP_UPLOAD_MAX = 64 * 1024 * 1024;
 
 /** Base64-encode bytes via `btoa`, chunked to avoid call-stack limits
@@ -584,7 +584,7 @@ function SftpPanelBody({ tab }: Props) {
           if (!isOverPanel(p.position.x, p.position.y)) return;
           const paths = p.paths ?? [];
           if (paths.length === 0) return;
-          void uploadLocalFiles(paths, currentRemotePath);
+          void uploadLocalPaths(paths, currentRemotePath);
         }
       })
       .then((dispose) => {
@@ -597,8 +597,18 @@ function SftpPanelBody({ tab }: Props) {
       unlisten?.();
       setOsDropHover(false);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canUseSsh, currentRemotePath, sshArgs.host, sshArgs.port, sshArgs.user, sshArgs.authMode]);
+  }, [
+    canUseSsh,
+    currentRemotePath,
+    sshArgs.host,
+    sshArgs.port,
+    sshArgs.user,
+    sshArgs.authMode,
+    sshArgs.password,
+    sshArgs.keyPath,
+    sshArgs.savedConnectionIndex,
+    sshArgs.sudoPassword,
+  ]);
 
   async function syncTerminalToRemotePath(remotePath: string) {
     const targetPath = normalizeSyncableRemotePath(remotePath);
@@ -1023,19 +1033,45 @@ function SftpPanelBody({ tab }: Props) {
     setActionBusy(false);
   }
 
+  /** Upload paths from an OS-level drop. Tauri gives absolute paths but
+   *  not file-kind metadata, so classify locally before dispatching to
+   *  the same file/tree transfer paths used by in-app drags. */
+  async function uploadLocalPaths(localPaths: string[], remoteDir: string): Promise<void> {
+    if (!canUseSsh || localPaths.length === 0) return;
+    const files: string[] = [];
+    const dirs: LocalDragPayload[] = [];
+    for (const localPath of localPaths) {
+      const name = localBaseName(localPath);
+      if (!name) continue;
+      try {
+        const kind = await cmd.localPathKind(localPath);
+        if (kind === "directory") {
+          dirs.push({ path: localPath, name, isDir: true });
+        } else {
+          files.push(localPath);
+        }
+      } catch (e) {
+        setError(formatError(e));
+      }
+    }
+    if (files.length > 0) {
+      await uploadLocalFiles(files, remoteDir);
+    }
+    for (const dir of dirs) {
+      await uploadLocalTree(dir, remoteDir);
+    }
+  }
+
   /** True when a DOM drag carries OS files (vs. an internal payload). */
   function hasOsFiles(dt: DataTransfer | null): boolean {
     return !!dt && Array.from(dt.types ?? []).includes("Files");
   }
 
-  /** Upload files dropped from the OS file manager. With
-   *  `dragDropEnabled: false` these arrive as DOM `File` objects
-   *  without a local path (so the path-based `uploadLocalFiles` can't
-   *  be used) — we read the bytes and ship them base64 via
-   *  `sftp_write_bytes`. This path is active on webviews that deliver
-   *  external drops to the DOM (macOS WKWebView, Linux WebKitGTK);
-   *  Windows WebView2 blocks external drops while the flag is off, so
-   *  it's simply inactive there (no regression). */
+  /** Fallback for webviews that expose dropped files only as DOM
+   *  `File` objects instead of local paths. The normal OS-level path
+   *  listener above handles large files through streaming upload; this
+   *  byte path stays size-capped because it must buffer the whole file
+   *  in the webview and base64 IPC payload. */
   async function uploadDroppedFiles(fileList: FileList, remoteDir: string): Promise<void> {
     if (!canUseSsh || fileList.length === 0) return;
     setActionBusy(true);
@@ -1305,9 +1341,9 @@ function SftpPanelBody({ tab }: Props) {
   /** Recursively upload a local directory to the current remote
    *  directory. Creates a single transfer queue entry for the whole
    *  folder and lets the backend aggregate byte-level progress. */
-  async function uploadLocalTree(dir: LocalDragPayload) {
+  async function uploadLocalTree(dir: LocalDragPayload, remoteDir = currentRemotePath) {
     if (!canUseSsh) return;
-    const remotePath = joinRemotePath(currentRemotePath, dir.name);
+    const remotePath = joinRemotePath(remoteDir, dir.name);
     const id = pushTransfer({
       direction: "up",
       name: `${dir.name}/`,

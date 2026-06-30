@@ -28,6 +28,7 @@ import {
   Terminal as TerminalIcon,
 } from "lucide-react";
 import Popover from "./Popover";
+import { useI18n } from "../i18n/useI18n";
 import type { Completion } from "../lib/terminalSmart";
 
 type Props = {
@@ -79,6 +80,7 @@ export default function CompletionPopover({
   onHighlight,
   onClose,
 }: Props) {
+  const { t } = useI18n();
   const listRef = useRef<HTMLDivElement>(null);
 
   // Keep the active row visible as the user arrows up/down. We
@@ -116,7 +118,7 @@ export default function CompletionPopover({
     >
       <div ref={listRef} className="completion-popover-list">
         {items.length === 0 ? (
-          <div className="popover-section">No matches</div>
+          <div className="popover-section">{t("No matches")}</div>
         ) : (
           items.map((item, idx) => {
             const Icon = iconForKind(item.kind);

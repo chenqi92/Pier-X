@@ -213,7 +213,7 @@ fn secret_key(kind: &str) -> String {
     format!("pier-x.ai.{kind}")
 }
 
-fn build_provider_config(settings: &AiProviderSettings) -> ProviderConfig {
+pub(crate) fn build_provider_config(settings: &AiProviderSettings) -> ProviderConfig {
     let kind = provider_kind(&settings.kind);
     // CLI backends authenticate via the CLI's own login session — no
     // keyring slot, no API key (PRODUCT-SPEC §5.14.8).
@@ -1245,28 +1245,46 @@ fn run_turn(
             );
         }
 
+        let mut assistant_text = outcome.text.clone();
+        let mut tool_calls = outcome.tool_calls.clone();
+        let mut stop = outcome.stop;
+        if cfg.kind == ProviderKind::Cli
+            && cfg.cli_mode == CliMode::ModelBackend
+            && tool_calls.is_empty()
+        {
+            if let Some(call) =
+                cli_text_tool_call(&outcome.text, context.locale.as_deref().unwrap_or("en"))
+            {
+                tool_calls.push(call);
+                stop = StopKind::ToolUse;
+                if contains_pierx_run_fence(&assistant_text) {
+                    assistant_text = strip_pierx_run_fences(&assistant_text);
+                }
+            }
+        }
+
         conv.messages.lock().unwrap().push(ChatMessage::assistant(
-            outcome.text.clone(),
-            outcome.tool_calls.clone(),
+            assistant_text.clone(),
+            tool_calls.clone(),
         ));
-        if !outcome.text.is_empty() {
+        if !assistant_text.is_empty() {
             transcript_append(
                 &conversation_id,
-                json!({ "kind": "assistant", "text": outcome.text }),
+                json!({ "kind": "assistant", "text": assistant_text }),
             );
         }
 
-        if outcome.tool_calls.is_empty() || outcome.stop != StopKind::ToolUse {
+        if tool_calls.is_empty() || stop != StopKind::ToolUse {
             emit_event(
                 &app,
                 &conversation_id,
                 "done",
-                json!({ "truncated": outcome.stop == StopKind::MaxTokens }),
+                json!({ "truncated": stop == StopKind::MaxTokens }),
             );
             return;
         }
 
-        for call in &outcome.tool_calls {
+        for call in &tool_calls {
             if cancel.is_cancelled() {
                 emit_event(&app, &conversation_id, "done", json!({ "cancelled": true }));
                 return;
@@ -1296,6 +1314,164 @@ fn run_turn(
         "failed",
         json!({ "message": format!("tool loop limit reached ({MAX_TOOL_ITERATIONS} iterations)") }),
     );
+}
+
+#[derive(Clone)]
+struct FenceBlock {
+    lang: String,
+    body: String,
+}
+
+fn fenced_blocks(text: &str) -> Vec<FenceBlock> {
+    let mut out = Vec::new();
+    let mut in_code = false;
+    let mut lang = String::new();
+    let mut body: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("```") {
+            if in_code {
+                out.push(FenceBlock {
+                    lang: lang.trim().to_ascii_lowercase(),
+                    body: body.join("\n").trim().to_string(),
+                });
+                body.clear();
+                lang.clear();
+                in_code = false;
+            } else {
+                lang = rest.trim().to_string();
+                in_code = true;
+            }
+            continue;
+        }
+        if in_code {
+            body.push(line);
+        }
+    }
+    out
+}
+
+fn contains_pierx_run_fence(text: &str) -> bool {
+    fenced_blocks(text)
+        .iter()
+        .any(|b| b.lang == "pierx-run" || b.lang == "pierx")
+}
+
+fn strip_pierx_run_fences(text: &str) -> String {
+    let mut out = Vec::new();
+    let mut in_code = false;
+    let mut drop_block = false;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("```") {
+            if in_code {
+                in_code = false;
+                if drop_block {
+                    drop_block = false;
+                    continue;
+                }
+            } else {
+                let lang = rest.trim().to_ascii_lowercase();
+                in_code = true;
+                drop_block = lang == "pierx-run" || lang == "pierx";
+                if drop_block {
+                    continue;
+                }
+            }
+        }
+        if !drop_block {
+            out.push(line);
+        }
+    }
+    out.join("\n").trim().to_string()
+}
+
+fn cli_text_tool_call(text: &str, locale: &str) -> Option<ToolCall> {
+    let fences = fenced_blocks(text);
+
+    for block in &fences {
+        if block.lang != "pierx-run" && block.lang != "pierx" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(&block.body) else {
+            continue;
+        };
+        let command = v
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if command.is_empty() {
+            continue;
+        }
+        let explanation = v
+            .get("explanation")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| default_cli_tool_explanation(locale))
+            .trim();
+        return Some(synthetic_run_command(command, explanation));
+    }
+
+    // Compatibility for older prompts / already-running CLI sessions:
+    // if the CLI plainly asks Pier-X to execute one shell fence, promote it
+    // into the same risk-gated command path. Ordinary "here is a command
+    // you can run yourself" fences remain insert-only suggestions.
+    let shell_blocks: Vec<&FenceBlock> = fences
+        .iter()
+        .filter(|b| matches!(b.lang.as_str(), "" | "sh" | "shell" | "bash" | "zsh"))
+        .filter(|b| !b.body.trim().is_empty())
+        .collect();
+    if shell_blocks.len() == 1 && text_requests_execution(text) {
+        return Some(synthetic_run_command(
+            &shell_blocks[0].body,
+            default_cli_tool_explanation(locale),
+        ));
+    }
+
+    None
+}
+
+fn text_requests_execution(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let asks_to_run = lower.contains("run this")
+        || lower.contains("execute this")
+        || lower.contains("i will run")
+        || lower.contains("i'll run")
+        || text.contains("执行这")
+        || text.contains("运行这")
+        || text.contains("我来执行")
+        || text.contains("我会执行");
+    let asks_user = lower.contains("run it yourself")
+        || lower.contains("paste it")
+        || lower.contains("press enter")
+        || text.contains("你自己")
+        || text.contains("手动")
+        || text.contains("粘贴");
+    asks_to_run && !asks_user
+}
+
+fn default_cli_tool_explanation(locale: &str) -> &'static str {
+    if locale.to_ascii_lowercase().starts_with("zh") {
+        "执行模型请求的命令以继续处理当前任务。"
+    } else {
+        "Run the model-requested command to continue the task."
+    }
+}
+
+fn synthetic_run_command(command: &str, explanation: &str) -> ToolCall {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    ToolCall {
+        id: format!("cli_text_run_{now}"),
+        name: "run_command".into(),
+        arguments: json!({
+            "command": command.trim(),
+            "explanation": explanation.trim(),
+        })
+        .to_string(),
+    }
 }
 
 /// Gate + execute one tool call. Returns the text fed back to the model.
@@ -1823,7 +1999,15 @@ fn cli_system_prompt(context: &AiContext, native: bool) -> String {
         )
     } else {
         format!(
-            "You are the Pier-X assistant, embedded in a terminal / SSH / database tool for backend and ops engineers. In THIS mode you have NO tools: you cannot run commands or edit files — you only explain and propose. When you suggest a shell command or SQL, put each one alone in a fenced code block (the UI shows an insert-into-terminal button); never claim you executed anything. Current tab context (may be empty): tab={backend} {host}, os={os}, cwd={cwd}. Keep answers short and concrete; lead with the conclusion. Respond in the user's language (locale: {locale})."
+            "You are the Pier-X assistant, embedded in a terminal / SSH / database tool for backend and ops engineers. You cannot use your native CLI tools in this mode. Instead, Pier-X can run exactly one shell command for you through its own risk-gated execution channel on the CURRENT tab: tab={backend} {host}, os={os}, cwd={cwd}.\n\
+            \n\
+            When you need command output to answer the user, do NOT show a normal shell code block. Output exactly one fenced `pierx-run` block and no other prose:\n\
+            ```pierx-run\n\
+            {{\"command\":\"printf 'hello\\\\n'\",\"explanation\":\"One short sentence in the user's language explaining why this command is needed.\"}}\n\
+            ```\n\
+            Pier-X will classify the command: read-only commands auto-run, writes ask for approval, red-line destructive commands are blocked. The output will be fed back to you for the next turn.\n\
+            \n\
+            Only use normal `sh` / `bash` fences when you are intentionally suggesting a command for the user to run themselves. Never claim you executed anything until Pier-X returns output. Keep answers short and concrete; lead with the conclusion. Respond in the user's language (locale: {locale})."
         )
     }
 }
@@ -1928,5 +2112,38 @@ mod tests {
                 tokens_prefix_match(&legacy.tokens, "systemctl restart nginx")
             };
         assert!(hit);
+    }
+
+    #[test]
+    fn parses_explicit_cli_pierx_run_block() {
+        let call = cli_text_tool_call(
+            r#"```pierx-run
+{"command":"uname -a","explanation":"查看系统版本。"}
+```"#,
+            "zh",
+        )
+        .expect("tool call");
+        assert_eq!(call.name, "run_command");
+        let args: Value = serde_json::from_str(&call.arguments).unwrap();
+        assert_eq!(args["command"], "uname -a");
+        assert_eq!(args["explanation"], "查看系统版本。");
+    }
+
+    #[test]
+    fn promotes_legacy_execute_shell_fence_but_not_user_suggestion() {
+        let run = cli_text_tool_call("执行这条采集命令：\n```sh\nuptime\n```", "zh")
+            .expect("legacy shell fence promoted");
+        let args: Value = serde_json::from_str(&run.arguments).unwrap();
+        assert_eq!(args["command"], "uptime");
+
+        assert!(cli_text_tool_call("你可以手动运行：\n```sh\nuptime\n```", "zh",).is_none());
+    }
+
+    #[test]
+    fn strips_protocol_fence_from_visible_text() {
+        assert_eq!(
+            strip_pierx_run_fences("准备执行\n```pierx-run\n{\"command\":\"id\"}\n```\n"),
+            "准备执行",
+        );
     }
 }

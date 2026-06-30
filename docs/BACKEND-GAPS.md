@@ -193,6 +193,7 @@ multi-line only under bracketed paste else clipboard fallback), settings page
 | Context attach | Smart-mode block / SFTP editor file as explicit attachments | partial | Terminal selection + visible screen shipped; smart-mode block hover needs a block UI in the webview terminal; SFTP editor "attach current file" not wired |
 | NL→command | `#` prefix in terminal input (candidate) | hidden | Spec says decide on usage data |
 | Tools | `db_query` (dual-gated with panel write unlock), `git_*`, `docker_*` | hidden | §5.14.3 table requires re-registering each tool as it ships |
+| Local CLI | Native Claude Code / Codex PTY session inside AI panel | shipped | `terminal_create_ai_cli` launches the user's installed CLI in the local tab cwd, then reuses `terminal:event` / `terminal_write` / `terminal_snapshot` / `terminal_close`; SSH tabs are disabled for this entry |
 | L2 confirm | Typed object-name unlock for data-destroying subset | partial | v1 requires typing the command's first word for ALL L2 — stricter than spec minimum, revisit when `db_query` lands |
 | Token usage | Per-turn usage display | partial | Sums shown in panel bar; OpenAI-compatible streams without `stream_options` report no usage (provider-dependent) |
 | Local exec cancel | Stop button kills in-flight LOCAL command | done | SSH and local both cancel via `CancellationToken`; `local_exec::exec_cancellable` polls the token and kills the child process on stop |

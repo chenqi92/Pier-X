@@ -21,6 +21,7 @@
 
 import Popover from "./Popover";
 import Pill from "./Pill";
+import { useI18n } from "../i18n/useI18n";
 import type { ManSynopsis } from "../lib/terminalSmart";
 
 type Props = {
@@ -49,6 +50,8 @@ export default function ManPagePopover({
   errorMessage,
   onClose,
 }: Props) {
+  const { t } = useI18n();
+
   if (!open) return null;
 
   return (
@@ -72,7 +75,7 @@ export default function ManPagePopover({
 
       {loading ? (
         <div className="popover-section man-popover__placeholder">
-          Loading…
+          {t("Loading…")}
         </div>
       ) : errorMessage ? (
         <div className="popover-section man-popover__placeholder">
@@ -80,24 +83,24 @@ export default function ManPagePopover({
         </div>
       ) : !data ? (
         <div className="popover-section man-popover__placeholder">
-          No documentation found for {command}.
+          {t("No documentation found for {command}.", { command })}
         </div>
       ) : (
         <>
           {data.synopsis ? (
-            <ManSection title="SYNOPSIS">
+            <ManSection title={t("SYNOPSIS")}>
               <pre className="man-popover__pre">{data.synopsis}</pre>
             </ManSection>
           ) : null}
 
           {data.description ? (
-            <ManSection title="DESCRIPTION">
+            <ManSection title={t("DESCRIPTION")}>
               <p className="man-popover__paragraph">{data.description}</p>
             </ManSection>
           ) : null}
 
           {data.options.length > 0 ? (
-            <ManSection title={`OPTIONS · ${data.options.length}`}>
+            <ManSection title={t("OPTIONS · {n}", { n: data.options.length })}>
               <div className="man-popover__options">
                 {data.options.map((opt, i) => (
                   <div

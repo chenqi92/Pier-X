@@ -5,7 +5,8 @@
 // the backend — this file just draws what the backend reports and
 // forwards the user's decision.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   CircleStop,
   Copy,
@@ -19,7 +20,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { TabState } from "../lib/types";
+import type { TabState, TerminalLine, TerminalSessionInfo, TerminalSnapshot } from "../lib/types";
 import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import * as ai from "../lib/ai";
 import type { AiRiskLevel, AiToolDecision } from "../lib/ai";
@@ -35,6 +36,7 @@ import { useSettingsStore } from "../stores/useSettingsStore";
 import { aiVendorById } from "../lib/aiVendors";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import { useUiActionsStore } from "../stores/useUiActionsStore";
+import { TERMINAL_THEMES, useThemeStore } from "../stores/useThemeStore";
 import { useI18n } from "../i18n/useI18n";
 import IconButton from "../components/IconButton";
 import Select from "../components/Select";
@@ -64,6 +66,15 @@ function riskClass(level: AiRiskLevel): string {
       return "is-l3";
   }
 }
+
+const AI_NATIVE_CLI_COLS = 100;
+const AI_NATIVE_CLI_ROWS = 24;
+
+type TerminalEventPayload = {
+  sessionId: string;
+  kind: "data" | "exit";
+  snapshot?: TerminalSnapshot | null;
+};
 
 // ── Assistant-text fence parsing ────────────────────────────────────
 // Minimal markdown: only ``` fences are structured (they get copy /
@@ -99,6 +110,32 @@ function splitFences(text: string): AssistSeg[] {
   }
   flush();
   return segs;
+}
+
+function isPierxProtocolFence(seg: AssistSeg): boolean {
+  return (
+    seg.kind === "code" &&
+    ["pierx-run", "pierx"].includes(seg.lang.trim().toLowerCase())
+  );
+}
+
+function hasVisibleAssistantContent(segs: AssistSeg[]): boolean {
+  return segs.some((seg) =>
+    seg.kind === "text" ? seg.text.trim().length > 0 : seg.code.trim().length > 0,
+  );
+}
+
+function AiWait({ label }: { label: string }) {
+  return (
+    <div className="ai-wait" aria-live="polite">
+      <span className="ai-wait__dots" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+      <span>{label}</span>
+    </div>
+  );
 }
 
 // ── User-bubble attachment parsing ──────────────────────────────────
@@ -142,9 +179,45 @@ export default function AiPanel({ tab, isActive }: Props) {
 
   const [input, setInput] = useState("");
   const [note, setNote] = useState("");
+  const [nativeSession, setNativeSession] = useState<TerminalSessionInfo | null>(null);
+  const [nativeSnapshot, setNativeSnapshot] = useState<TerminalSnapshot | null>(null);
+  const [nativeDraft, setNativeDraft] = useState("");
+  const [nativeStarting, setNativeStarting] = useState(false);
+  const [nativeError, setNativeError] = useState("");
   const noteTimer = useRef<number | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const nativeSessionRef = useRef<TerminalSessionInfo | null>(null);
+  const nativeScreenRef = useRef<HTMLDivElement | null>(null);
+  nativeSessionRef.current = nativeSession;
+
+  const terminalThemeIndex = useThemeStore((s) => s.terminalThemeIndex);
+  const resolvedDark = useThemeStore((s) => s.resolvedDark);
+  const termTheme =
+    TERMINAL_THEMES[terminalThemeIndex] ?? TERMINAL_THEMES[resolvedDark ? 0 : 1];
+  const cliVendor = aiVendorById(settings.aiVendorId);
+  const providerSettings = useMemo<ai.AiProviderSettings>(
+    () => ({
+      kind: settings.aiProviderKind,
+      baseUrl: settings.aiBaseUrl,
+      model: settings.aiModel,
+      maxTokens: settings.aiMaxTokens > 0 ? settings.aiMaxTokens : null,
+      secretId: settings.aiVendorId,
+      cliFlavor: cliVendor.cliFlavor ?? null,
+      cliBin: settings.aiCliBin || null,
+      cliMode: settings.aiCliMode,
+    }),
+    [
+      cliVendor.cliFlavor,
+      settings.aiBaseUrl,
+      settings.aiCliBin,
+      settings.aiCliMode,
+      settings.aiMaxTokens,
+      settings.aiModel,
+      settings.aiProviderKind,
+      settings.aiVendorId,
+    ],
+  );
 
   const flashNote = (text: string) => {
     setNote(text);
@@ -223,16 +296,40 @@ export default function AiPanel({ tab, isActive }: Props) {
     settings.aiModel.trim().length > 0 || settings.aiProviderKind === "cli";
   const messages = conv?.messages ?? [];
   const running = conv?.running ?? false;
+  const waitingForFirstResponse =
+    running && messages[messages.length - 1]?.type === "user";
 
   // The execution target mirrors the rest of the right sidebar:
   // effective SSH addressing when present + ready, local otherwise.
   const target = tab ? effectiveSshTarget(tab) : null;
   const remoteReady = isSshTargetReady(target);
   const targetLabel = remoteReady && target ? `${target.user}@${target.host}` : t("local");
+  const nativeCliLabel = providerSettings.cliFlavor === "codex" ? "Codex" : "Claude Code";
+  const nativeCliEnabled = settings.aiProviderKind === "cli";
+  const nativeCliStartDisabled = nativeStarting || !nativeCliEnabled || remoteReady;
+  const nativeCliStartTitle = remoteReady
+    ? t("Native CLI sessions run on this local machine only; SSH tabs are disabled.")
+    : nativeCliEnabled
+      ? t("Start native CLI terminal")
+      : t("Choose Claude Code or Codex in Settings → AI first");
 
   useEffect(() => {
     ensureAiListener();
   }, []);
+
+  useEffect(() => {
+    setNativeSession(null);
+    setNativeSnapshot(null);
+    setNativeDraft("");
+    setNativeError("");
+    return () => {
+      const session = nativeSessionRef.current;
+      if (session) {
+        cmd.terminalClose(session.sessionId).catch(() => {});
+        nativeSessionRef.current = null;
+      }
+    };
+  }, [conversationId]);
 
   // Replay the persisted transcript once per conversation id.
   useEffect(() => {
@@ -250,6 +347,97 @@ export default function AiPanel({ tab, isActive }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, conv?.loaded]);
+
+  useEffect(() => {
+    if (!nativeSession) return;
+    let disposed = false;
+    let inflight = false;
+    let dirty = false;
+    let rafHandle: number | null = null;
+    let pendingPush: TerminalSnapshot | null = null;
+    let unlisten: UnlistenFn | undefined;
+
+    const safeUnlisten = (fn: UnlistenFn | undefined) => {
+      if (!fn) return;
+      try {
+        fn();
+      } catch {
+        // Late Tauri listener cleanup; already gone.
+      }
+    };
+
+    const applySnapshot = (next: TerminalSnapshot) => {
+      if (disposed) return;
+      setNativeSnapshot(next);
+    };
+
+    const refresh = () => {
+      if (disposed) return;
+      if (inflight) {
+        dirty = true;
+        return;
+      }
+      dirty = false;
+      inflight = true;
+      cmd
+        .terminalSnapshot(nativeSession.sessionId, 0)
+        .then(applySnapshot)
+        .catch((e) => {
+          if (!disposed) setNativeError(String(e));
+        })
+        .finally(() => {
+          inflight = false;
+          if (dirty && !disposed) scheduleRefresh();
+        });
+    };
+
+    const scheduleRefresh = () => {
+      if (disposed) return;
+      if (rafHandle !== null) return;
+      rafHandle = window.requestAnimationFrame(() => {
+        rafHandle = null;
+        const pushed = pendingPush;
+        pendingPush = null;
+        if (pushed) applySnapshot(pushed);
+        else refresh();
+      });
+    };
+
+    refresh();
+    void listen<TerminalEventPayload>("terminal:event", (event) => {
+      if (disposed) return;
+      if (event.payload.sessionId !== nativeSession.sessionId) return;
+      if (event.payload.snapshot) pendingPush = event.payload.snapshot;
+      scheduleRefresh();
+    })
+      .then((u) => {
+        if (disposed) safeUnlisten(u);
+        else unlisten = u;
+      })
+      .catch(() => {});
+
+    return () => {
+      disposed = true;
+      if (rafHandle !== null) window.cancelAnimationFrame(rafHandle);
+      safeUnlisten(unlisten);
+    };
+  }, [nativeSession]);
+
+  useEffect(() => {
+    if (settings.aiProviderKind === "cli") return;
+    const session = nativeSessionRef.current;
+    if (!session) return;
+    setNativeSession(null);
+    setNativeSnapshot(null);
+    setNativeDraft("");
+    setNativeError("");
+    cmd.terminalClose(session.sessionId).catch(() => {});
+  }, [settings.aiProviderKind]);
+
+  useEffect(() => {
+    const el = nativeScreenRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [nativeSnapshot]);
 
   // Pin to bottom while streaming / on new messages.
   useEffect(() => {
@@ -270,6 +458,59 @@ export default function AiPanel({ tab, isActive }: Props) {
     };
   }, [settings.aiAutoContext, settings.locale, tab?.backend, tab?.lastCwd, target?.host, target?.user, detectedTools]);
 
+  const startNativeCli = async () => {
+    if (!nativeCliEnabled || nativeStarting) return;
+    if (remoteReady) {
+      flashNote(t("Native CLI sessions are local-only. Switch to a local tab to start one."));
+      return;
+    }
+    const initialPrompt = input.trim();
+    setNativeStarting(true);
+    setNativeError("");
+    try {
+      const next = await cmd.terminalCreateAiCli({
+        cols: AI_NATIVE_CLI_COLS,
+        rows: AI_NATIVE_CLI_ROWS,
+        provider: providerSettings,
+        initialPrompt: initialPrompt || null,
+        cwd: tab?.lastCwd ?? null,
+      });
+      setNativeSession(next);
+      if (initialPrompt) setInput("");
+      flashNote(t("Native CLI started. Its own approval model applies."));
+    } catch (e) {
+      setNativeError(String(e));
+    } finally {
+      setNativeStarting(false);
+    }
+  };
+
+  const closeNativeCli = () => {
+    const session = nativeSessionRef.current;
+    setNativeSession(null);
+    setNativeSnapshot(null);
+    setNativeDraft("");
+    setNativeError("");
+    if (session) {
+      cmd.terminalClose(session.sessionId).catch(() => {});
+    }
+  };
+
+  const interruptNativeCli = () => {
+    const session = nativeSessionRef.current;
+    if (!session) return;
+    cmd.terminalWrite(session.sessionId, "\u0003").catch((e) => setNativeError(String(e)));
+  };
+
+  const sendNativeInput = () => {
+    const session = nativeSessionRef.current;
+    if (!session) return;
+    const payload =
+      nativeDraft.length > 0 ? nativeDraft.replace(/\r?\n/g, "\r") + "\r" : "\r";
+    setNativeDraft("");
+    cmd.terminalWrite(session.sessionId, payload).catch((e) => setNativeError(String(e)));
+  };
+
   const send = () => {
     const text = input.trim();
     if ((!text && pendingAtts.length === 0) || running || !configured) return;
@@ -285,16 +526,7 @@ export default function AiPanel({ tab, isActive }: Props) {
     beginTurn(conversationId, bubble);
     const req: ai.AiChatRequest = {
       conversationId,
-      provider: {
-        kind: settings.aiProviderKind,
-        baseUrl: settings.aiBaseUrl,
-        model: settings.aiModel,
-        maxTokens: settings.aiMaxTokens > 0 ? settings.aiMaxTokens : null,
-        secretId: settings.aiVendorId,
-        cliFlavor: aiVendorById(settings.aiVendorId).cliFlavor ?? null,
-        cliBin: settings.aiCliBin || null,
-        cliMode: settings.aiCliMode,
-      },
+      provider: providerSettings,
       userText: text,
       context,
       attachments,
@@ -360,6 +592,17 @@ export default function AiPanel({ tab, isActive }: Props) {
         <span className="ai-panel__target" title={t("Commands run on this host only")}>
           {targetLabel}
         </span>
+        {nativeCliEnabled && (
+          <IconButton
+            variant="mini"
+            title={nativeSession ? t("Native CLI is running") : nativeCliStartTitle}
+            onClick={startNativeCli}
+            disabled={nativeCliStartDisabled || nativeSession !== null}
+            active={nativeSession !== null}
+          >
+            <SquareTerminal size={14} />
+          </IconButton>
+        )}
         {settings.aiProfiles.length > 0 && (
           <Select
             compact
@@ -393,6 +636,24 @@ export default function AiPanel({ tab, isActive }: Props) {
         </IconButton>
       </div>
 
+      {(nativeSession || nativeStarting || nativeError) && (
+        <NativeCliTerminal
+          label={nativeCliLabel}
+          cwd={tab?.lastCwd ?? null}
+          snapshot={nativeSnapshot}
+          draft={nativeDraft}
+          error={nativeError}
+          starting={nativeStarting}
+          theme={termTheme}
+          screenRef={nativeScreenRef}
+          t={t}
+          onDraftChange={setNativeDraft}
+          onSend={sendNativeInput}
+          onInterrupt={interruptNativeCli}
+          onClose={closeNativeCli}
+        />
+      )}
+
       <div className="ai-panel__list ux-selectable" ref={listRef}>
         {messages.length === 0 && (
           <div className="ai-empty">
@@ -412,6 +673,7 @@ export default function AiPanel({ tab, isActive }: Props) {
             onExport={exportMarkdown}
           />
         ))}
+        {waitingForFirstResponse && <AiWait label={t("Thinking…")} />}
       </div>
 
       {note && <div className="ai-flash">{note}</div>}
@@ -500,6 +762,152 @@ function defaultMarkdownName(text: string): string {
   return (slug || "ai-reply") + ".md";
 }
 
+type AiTerminalTheme = (typeof TERMINAL_THEMES)[number];
+
+function NativeCliTerminal({
+  label,
+  cwd,
+  snapshot,
+  draft,
+  error,
+  starting,
+  theme,
+  screenRef,
+  t,
+  onDraftChange,
+  onSend,
+  onInterrupt,
+  onClose,
+}: {
+  label: string;
+  cwd: string | null;
+  snapshot: TerminalSnapshot | null;
+  draft: string;
+  error: string;
+  starting: boolean;
+  theme: AiTerminalTheme;
+  screenRef: RefObject<HTMLDivElement | null>;
+  t: (s: string) => string;
+  onDraftChange: (value: string) => void;
+  onSend: () => void;
+  onInterrupt: () => void;
+  onClose: () => void;
+}) {
+  const alive = snapshot?.alive ?? !error;
+  return (
+    <section className="ai-native" aria-label={t("Native CLI terminal")}>
+      <div className="ai-native__head">
+        <div className="ai-native__title">
+          <SquareTerminal size={13} />
+          <span>{label}</span>
+        </div>
+        <span className="ai-native__cwd" title={cwd ?? t("local")}>
+          {cwd ?? t("local")}
+        </span>
+        <span className={"ai-native__state" + (alive ? "" : " is-exited")}>
+          {starting ? t("starting…") : alive ? t("CLI approvals") : t("exited")}
+        </span>
+        <IconButton variant="mini" title={t("Send Ctrl+C")} onClick={onInterrupt} disabled={!snapshot}>
+          <CircleStop size={13} />
+        </IconButton>
+        <IconButton variant="mini" title={t("Close native CLI")} onClick={onClose}>
+          <X size={13} />
+        </IconButton>
+      </div>
+      <div
+        className="ai-native__screen ux-selectable"
+        ref={screenRef}
+        style={{ background: theme.bg, color: theme.fg }}
+      >
+        {snapshot ? (
+          snapshot.lines.map((line, i) => (
+            <NativeTerminalLine key={`${line.hash}-${i}`} line={line} theme={theme} />
+          ))
+        ) : (
+          <div className="ai-native__placeholder">
+            {starting ? t("Starting native CLI…") : t("Waiting for terminal output…")}
+          </div>
+        )}
+      </div>
+      {error && <div className="ai-native__error">{error}</div>}
+      <div className="ai-native__input-row">
+        <textarea
+          className="ai-native__input"
+          rows={1}
+          placeholder={t("Type for the CLI — Enter sends, Shift+Enter adds a line")}
+          value={draft}
+          onChange={(e) => onDraftChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+        />
+        <button type="button" className="btn is-primary is-compact" onClick={onSend}>
+          <SendHorizontal size={13} />
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function NativeTerminalLine({ line, theme }: { line: TerminalLine; theme: AiTerminalTheme }) {
+  if (line.segments.length === 0) {
+    return <div className="ai-native__line">&nbsp;</div>;
+  }
+  return (
+    <div className="ai-native__line">
+      {line.segments.map((seg, i) => {
+        const fg = resolveTerminalColor(seg.fg, theme.ansi);
+        const bg = resolveTerminalColor(seg.bg, theme.ansi);
+        return (
+          <span
+            key={i}
+            className={seg.cursor ? "ai-native__segment is-cursor" : "ai-native__segment"}
+            style={{
+              color: seg.cursor ? theme.bg : fg,
+              backgroundColor: seg.cursor ? theme.fg : bg,
+              fontWeight: seg.bold ? 600 : undefined,
+              textDecoration: seg.underline ? "underline" : undefined,
+            }}
+          >
+            {seg.text || " "}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function resolveTerminalColor(tag: string, ansi: string[]): string | undefined {
+  if (!tag) return undefined;
+  if (tag.startsWith("ansi:")) {
+    const n = Number.parseInt(tag.slice(5), 10);
+    if (!Number.isFinite(n)) return undefined;
+    if (n >= 0 && n < 16 && ansi[n]) return ansi[n];
+    if (n >= 16 && n <= 231) {
+      const value = n - 16;
+      const steps = [0, 95, 135, 175, 215, 255];
+      const r = steps[Math.floor(value / 36) % 6];
+      const g = steps[Math.floor(value / 6) % 6];
+      const b = steps[value % 6];
+      return toHexColor(r, g, b);
+    }
+    if (n >= 232 && n <= 255) {
+      const shade = 8 + (n - 232) * 10;
+      return toHexColor(shade, shade, shade);
+    }
+    return undefined;
+  }
+  return tag;
+}
+
+function toHexColor(r: number, g: number, b: number): string {
+  const hex = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, "0");
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
+}
+
 function Message({
   m,
   t,
@@ -536,11 +944,13 @@ function Message({
     );
   }
   if (m.type === "assistant") {
-    if (!m.text && !m.streaming) return null;
-    const segs = splitFences(m.text);
+    const segs = splitFences(m.text).filter((seg) => !isPierxProtocolFence(seg));
+    const hasVisibleContent = hasVisibleAssistantContent(segs);
+    if (!hasVisibleContent && m.streaming) return <AiWait label={t("Preparing action…")} />;
+    if (!hasVisibleContent && !m.streaming) return null;
     return (
       <div className="ai-msg is-assistant">
-        {!m.streaming && m.text && (
+        {!m.streaming && hasVisibleContent && (
           <div className="ai-msg__actions ux-chrome">
             <button
               type="button"

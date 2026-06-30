@@ -110,7 +110,7 @@ type SettingsState = {
   aiCliMode: string;
   /** Model id. Empty = AI assistant unconfigured (panel shows guide). */
   aiModel: string;
-  /** Per-turn output cap. 0 = backend default (4096). */
+  /** Per-turn output cap. 0 = backend default (currently 16384). */
   aiMaxTokens: number;
   /** Send tab metadata (backend/host/cwd/services) with each turn. */
   aiAutoContext: boolean;

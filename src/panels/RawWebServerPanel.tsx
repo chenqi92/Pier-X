@@ -1369,6 +1369,7 @@ function StatusBar({
           ok={validateResult.ok}
           exit={validateResult.exitCode}
           output={validateResult.output}
+          t={t}
         />
       )}
       {reloadResult && (
@@ -1377,6 +1378,7 @@ function StatusBar({
           ok={reloadResult.ok}
           exit={reloadResult.exitCode}
           output={reloadResult.output}
+          t={t}
         />
       )}
       {saveResult && <SaveLine result={saveResult} t={t} />}
@@ -1387,6 +1389,7 @@ function StatusBar({
           ok={lintResult.ok}
           exit={lintResult.exitCode}
           output={lintResult.output || t("(no warnings)")}
+          t={t}
         />
       )}
     </div>
@@ -1432,6 +1435,7 @@ function BatchSaveLine({
           ? `${summary}\n${result.validate.output}`
           : summary
       }
+      t={t}
     />
   );
 }
@@ -1441,17 +1445,19 @@ function ResultLine({
   ok,
   exit,
   output,
+  t,
 }: {
   label: string;
   ok: boolean;
   exit: number;
   output: string;
+  t: (s: string) => string;
 }) {
   return (
     <div className={`ws-raw__status-line ${ok ? "is-ok" : "is-bad"} mono`}>
       {ok ? <CheckCircle2 size={11} /> : <AlertTriangle size={11} />}
       <span>
-        {label} · exit {exit}
+        {label} · {t("exit")} {exit}
       </span>
       {output && <pre className="ws-raw__status-output">{output}</pre>}
     </div>

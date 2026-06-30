@@ -176,23 +176,23 @@ function PlanRow({
             {node.actualRows !== undefined && (
               <Chip
                 kind="accent"
-                title="Actual rows"
+                title={t("Actual rows")}
                 label={`rows ${fmtNum(node.actualRows)}`}
               />
             )}
             {node.actualRows === undefined && node.rows !== undefined && (
-              <Chip title="Estimated rows" label={`rows ${fmtNum(node.rows)}`} />
+              <Chip title={t("Estimated rows")} label={`rows ${fmtNum(node.rows)}`} />
             )}
             {node.actualTime !== undefined && (
               <Chip
                 kind="accent"
-                title="Actual time, ms"
+                title={t("Actual time, ms")}
                 label={`${fmtNum(node.actualTime.total)} ms`}
               />
             )}
             {node.cost !== undefined && (
               <Chip
-                title="Estimated cost"
+                title={t("Estimated cost")}
                 label={
                   node.cost.startup !== undefined
                     ? `cost ${fmtNum(node.cost.startup)}…${fmtNum(node.cost.total)}`
@@ -201,7 +201,7 @@ function PlanRow({
               />
             )}
             {node.buffers && (
-              <Chip title="Buffers" label={node.buffers} />
+              <Chip title={t("Buffers")} label={node.buffers} />
             )}
             {rowsDelta !== undefined && rowsDelta !== 0 && (
               <Chip

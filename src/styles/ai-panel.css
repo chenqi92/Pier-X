@@ -69,6 +69,112 @@
   border-color: var(--accent-dim);
 }
 
+/* ── Native Claude Code / Codex terminal ── */
+.ai-native {
+  flex: none;
+  min-height: 0;
+  margin: var(--sp-3) var(--sp-3) 0;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.ai-native__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  min-width: 0;
+}
+.ai-native__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--ink);
+  font-size: var(--ui-fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ai-native__cwd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: var(--size-micro);
+  color: var(--dim);
+}
+.ai-native__state {
+  flex: none;
+  font-size: var(--size-micro);
+  color: var(--accent);
+}
+.ai-native__state.is-exited {
+  color: var(--muted);
+}
+.ai-native__screen {
+  min-height: calc(var(--row-h) * 8);
+  max-height: calc(var(--row-h) * 12);
+  overflow: auto;
+  padding: var(--sp-2);
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  line-height: var(--row-h);
+  white-space: pre;
+}
+.ai-native__placeholder {
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+}
+.ai-native__line {
+  min-height: var(--row-h);
+  white-space: pre;
+}
+.ai-native__segment {
+  white-space: pre;
+}
+.ai-native__segment.is-cursor {
+  color: var(--panel);
+}
+.ai-native__error {
+  padding: var(--sp-1) var(--sp-2);
+  border-top: 1px solid var(--line);
+  color: var(--neg);
+  font-size: var(--size-micro);
+  word-break: break-word;
+}
+.ai-native__input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.ai-native__input {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  max-height: calc(var(--row-h) * 4);
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-1) var(--sp-2);
+}
+.ai-native__input:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
+
 /* ── Message list ── */
 .ai-panel__list {
   flex: 1;
@@ -108,6 +214,52 @@
   background: var(--surface);
   border: 1px solid var(--line);
   color: var(--ink);
+}
+
+.ai-wait {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: var(--ui-fs-sm);
+}
+
+.ai-wait__dots {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.ai-wait__dots span {
+  width: var(--sp-1);
+  height: var(--sp-1);
+  border-radius: var(--radius-circle);
+  background: var(--accent);
+  animation: ai-wait-pulse calc(var(--dur-slower) * 2) var(--ease-standard) infinite;
+}
+
+.ai-wait__dots span:nth-child(2) {
+  animation-delay: var(--dur-fast);
+}
+
+.ai-wait__dots span:nth-child(3) {
+  animation-delay: calc(var(--dur-fast) * 2);
+}
+
+@keyframes ai-wait-pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+  }
+  40% {
+    opacity: 1;
+  }
 }
 
 /* Per-reply actions (copy whole message / export as .md). Revealed on

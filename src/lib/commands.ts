@@ -1538,6 +1538,41 @@ export const sshSetHostEffectiveUser = (
   params: SshParams & { effectiveUser?: string | null },
 ) => invoke<void>("ssh_set_host_effective_user", params);
 
+/** Identity of the live jump (parent) SSH session a nested target must
+ *  tunnel through. `host`/`port`/`user` locate the parent's cached
+ *  session; `savedConnectionIndex` is only used to open the parent from
+ *  a saved connection on the cold-miss fallback. */
+export type SshVia = {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  savedConnectionIndex?: number | null;
+};
+
+/** Register (or clear, with `via: null`) the jump parent the right side
+ *  must tunnel through to reach a NESTED target. Called when the terminal
+ *  enters a nested `ssh user@inner` from a tab already connected to a
+ *  jump host. The backend then opens every right-side probe for the
+ *  inner host over a `direct-tcpip` channel on the live parent session,
+ *  instead of dialing the — usually internal, unroutable — inner address
+ *  directly. The four scalar fields identify the NESTED target (keyed the
+ *  same as the session cache). */
+export const sshSetHostVia = (
+  params: {
+    host: string;
+    port: number;
+    user: string;
+    authMode: string;
+    via: SshVia | null;
+    /** Match-aware unregister: drop the mapping only if the stored
+     *  parent still equals `via`. Used by the registration effect's
+     *  cleanup so a sibling tab's different parent isn't torn down.
+     *  Defaults to false (register / overwrite). */
+    remove?: boolean;
+  },
+) => invoke<void>("ssh_set_host_via", { ...params, remove: params.remove ?? false });
+
 /** Probe whether elevation works on a host before relying on it: opens
  *  the session, reads the login user, checks NOPASSWD sudo, and exercises
  *  the actual become-user with the given secret. Returns one row per

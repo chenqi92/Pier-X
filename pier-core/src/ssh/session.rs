@@ -169,19 +169,7 @@ impl SshSession {
             ));
         }
 
-        let russh_config = Arc::new(client::Config {
-            inactivity_timeout: Some(Duration::from_secs(300)),
-            keepalive_interval: Some(Duration::from_secs(30)),
-            // russh defaults this to 3, so three unanswered keepalives
-            // (~90s) would drop an otherwise-fine session. For a terminal
-            // app that's too twitchy on a flaky link — a brief Wi-Fi blip
-            // or laptop suspend shorter than the window should survive.
-            // 6 × 30s ≈ 3 min of tolerance before we give up; a genuinely
-            // dead connection is still caught quickly at the op layer
-            // (see run_with_session_retry's is_closed eviction).
-            keepalive_max: 6,
-            ..Default::default()
-        });
+        let russh_config = Self::default_russh_config();
 
         // A shared slot the host-key handler writes into when
         // it rejects. We read it back after the handshake
@@ -236,6 +224,37 @@ impl SshSession {
             }
         };
 
+        Self::finish_connect(config, connect_result, verify_error_slot).await
+    }
+
+    /// The russh client config every Pier-X connect path uses. Kept
+    /// in one place so the keepalive / inactivity tuning below stays
+    /// identical across the direct, egress, and over-stream paths.
+    fn default_russh_config() -> Arc<client::Config> {
+        Arc::new(client::Config {
+            inactivity_timeout: Some(Duration::from_secs(300)),
+            keepalive_interval: Some(Duration::from_secs(30)),
+            // russh defaults this to 3, so three unanswered keepalives
+            // (~90s) would drop an otherwise-fine session. For a terminal
+            // app that's too twitchy on a flaky link — a brief Wi-Fi blip
+            // or laptop suspend shorter than the window should survive.
+            // 6 × 30s ≈ 3 min of tolerance before we give up; a genuinely
+            // dead connection is still caught quickly at the op layer
+            // (see run_with_session_retry's is_closed eviction).
+            keepalive_max: 6,
+            ..Default::default()
+        })
+    }
+
+    /// Shared tail of every connect path. Translates a host-key
+    /// rejection captured in `verify_error_slot` into a typed error,
+    /// wraps the russh handle in an [`SshSession`], then runs
+    /// authentication honouring `config.connect_timeout_secs`.
+    async fn finish_connect(
+        config: &SshConfig,
+        connect_result: std::result::Result<client::Handle<ClientHandler>, SshError>,
+        verify_error_slot: std::sync::Arc<std::sync::Mutex<Option<super::known_hosts::VerifyError>>>,
+    ) -> Result<Self> {
         let handle = match connect_result {
             Ok(h) => h,
             Err(e) => {
@@ -274,6 +293,65 @@ impl SshSession {
             session.authenticate(config).await?;
         }
         Ok(session)
+    }
+
+    /// Run the SSH handshake + authentication over an already-dialed
+    /// byte stream — typically a `direct-tcpip` channel opened on a
+    /// live parent/jump session via [`Self::dial_direct_tcpip`].
+    ///
+    /// This is how the right-side tools reach a host that is only
+    /// routable through a jump box: instead of dialing the internal
+    /// address directly (which fails — the address isn't reachable
+    /// from this machine), the caller opens a channel on the parent's
+    /// transport and hands the resulting stream here. Auth runs
+    /// client-side over the channel exactly as on a direct connect,
+    /// so agent / key / password methods behave identically.
+    pub async fn connect_over_stream(
+        config: &SshConfig,
+        verifier: HostKeyVerifier,
+        stream: crate::egress::EgressStream,
+    ) -> Result<Self> {
+        if !config.is_valid() {
+            return Err(SshError::InvalidConfig(
+                "host, user, port and auth must all be set".to_string(),
+            ));
+        }
+
+        let russh_config = Self::default_russh_config();
+        let verify_error_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let handler = ClientHandler {
+            host: config.host.clone(),
+            port: config.port,
+            verifier,
+            last_verify_error: std::sync::Arc::clone(&verify_error_slot),
+        };
+
+        let dial_fut = async {
+            client::connect_stream(russh_config, stream, handler)
+                .await
+                .map_err(SshError::from)
+        };
+        let connect_result = if config.connect_timeout_secs > 0 {
+            let timeout = Duration::from_secs(config.connect_timeout_secs);
+            match tokio::time::timeout(timeout, dial_fut).await {
+                Ok(inner) => inner,
+                Err(_) => return Err(SshError::Timeout(timeout)),
+            }
+        } else {
+            dial_fut.await
+        };
+
+        Self::finish_connect(config, connect_result, verify_error_slot).await
+    }
+
+    /// Blocking sibling of [`Self::connect_over_stream`]. Same
+    /// runtime restrictions as [`Self::connect_blocking`].
+    pub fn connect_over_stream_blocking(
+        config: &SshConfig,
+        verifier: HostKeyVerifier,
+        stream: crate::egress::EgressStream,
+    ) -> Result<Self> {
+        runtime::shared().block_on(Self::connect_over_stream(config, verifier, stream))
     }
 
     /// Blocking sibling of [`Self::connect_with_egress`]. Same
@@ -944,6 +1022,37 @@ impl SshSession {
             inner: channel.into_stream(),
             _session: self.clone(),
         }))
+    }
+
+    /// Sync wrapper for [`Self::dial_direct_tcpip`]. Used by the Tauri
+    /// layer's nested-jump path, which runs on a blocking thread and
+    /// needs a `direct-tcpip` channel on the cached parent session
+    /// before handing the stream to [`Self::connect_over_stream_blocking`].
+    ///
+    /// `timeout_secs = 0` waits indefinitely; a non-zero value caps the
+    /// channel-open wait. The cap matters because the jump host won't
+    /// answer the channel-open request until its OWN connect to the
+    /// inner target resolves — and a firewall-dropped inner host never
+    /// resolves, which would otherwise pin this blocking thread (and the
+    /// per-target handshake gate) forever.
+    pub fn dial_direct_tcpip_blocking(
+        &self,
+        target_host: &str,
+        target_port: u16,
+        timeout_secs: u64,
+    ) -> Result<crate::egress::EgressStream> {
+        runtime::shared().block_on(async {
+            let dial = self.dial_direct_tcpip(target_host, target_port);
+            if timeout_secs > 0 {
+                let timeout = Duration::from_secs(timeout_secs);
+                match tokio::time::timeout(timeout, dial).await {
+                    Ok(inner) => inner,
+                    Err(_) => Err(SshError::Timeout(timeout)),
+                }
+            } else {
+                dial.await
+            }
+        })
     }
 
     /// Open an SFTP subsystem channel on this session.

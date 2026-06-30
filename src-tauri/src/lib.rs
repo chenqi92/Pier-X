@@ -204,6 +204,25 @@ struct AppState {
     /// elevation method (root → `sudo`, other user → `sudo -u`). In-memory
     /// only; never authentication material.
     host_effective_user: Mutex<HashMap<String, String>>,
+    /// Per-host *jump parent* the right side must tunnel through, keyed
+    /// the same as `host_elevation` (`auth_mode:user@host:port` of the
+    /// NESTED target). Set by the frontend via [`ssh_set_host_via`]
+    /// whenever the terminal enters a nested `ssh user@inner` from a tab
+    /// already connected to a jump host. [`get_or_open_ssh_session_inner`]
+    /// consults it on a cache miss and opens the nested session over a
+    /// `direct-tcpip` channel on the live parent session — so a host that
+    /// is only routable from the jump box becomes reachable to every
+    /// right-side tool without dialing the unroutable internal address
+    /// directly. Cleared when the nested hop ends. In-memory only.
+    ///
+    /// Keyed by address, not by tab: if two tabs nest into the *same*
+    /// inner `user@host:port` through *different* jump hosts at once, the
+    /// last registration wins (same single-session-per-address limitation
+    /// the positive cache already has). The match-aware clear in
+    /// [`ssh_set_host_via`] keeps one tab's cleanup from tearing down a
+    /// sibling's different registration; the genuinely-concurrent
+    /// same-address case stays a known limitation.
+    host_via: Mutex<HashMap<String, ParentSshRef>>,
     /// Capability tokens for the `pierfs` asset protocol. Each maps an
     /// unguessable token to the single (SFTP session, remote path) it
     /// authorizes, plus an expiry. The protocol handler serves bytes only
@@ -259,6 +278,7 @@ impl Default for AppState {
             vpn_processes: Mutex::new(HashMap::new()),
             host_elevation: Mutex::new(HashMap::new()),
             host_effective_user: Mutex::new(HashMap::new()),
+            host_via: Mutex::new(HashMap::new()),
             pierfs_grants: Mutex::new(HashMap::new()),
             next_remote_desktop_id: AtomicU64::new(1),
             next_remote_desktop_proxy_id: AtomicU64::new(1),
@@ -1732,7 +1752,34 @@ fn auth_method_from_params(
     }
 }
 
-fn build_ssh_session_from_params(
+/// Identity of the live jump (parent) SSH session a nested target must
+/// tunnel through. Sent by the frontend with [`ssh_set_host_via`] and
+/// stored in [`AppState::host_via`]. The `host`/`port`/`user` locate the
+/// parent's cached session (via [`peek_cached_ssh_session_any_auth`],
+/// which is auth-mode agnostic); `auth_mode` + `saved_connection_index`
+/// are only consulted on the cold-miss fallback that opens the parent
+/// from a saved connection when no live session is cached yet.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParentSshRef {
+    host: String,
+    port: u16,
+    user: String,
+    #[serde(default)]
+    auth_mode: String,
+    #[serde(default)]
+    saved_connection_index: Option<usize>,
+}
+
+/// Build an [`SshConfig`] for a panel target, preferring the stored
+/// connection record (and its routing truth — egress / key path) when
+/// `saved_index` is set, else an ad-hoc config from the param bag. This
+/// is the config-only half of [`build_ssh_session_saved_or_params`];
+/// the via-parent path reuses it so the nested target's credentials are
+/// resolved identically, then connects over the jump channel instead of
+/// dialing directly.
+fn build_ssh_config_saved_or_params(
+    saved_index: Option<usize>,
     host: &str,
     port: u16,
     user: &str,
@@ -1740,7 +1787,29 @@ fn build_ssh_session_from_params(
     password: &str,
     key_path: &str,
     key_passphrase: Option<&str>,
-) -> Result<SshSession, String> {
+) -> Result<SshConfig, String> {
+    let have_explicit_param_credential = match auth_mode {
+        "password" => !password.is_empty(),
+        "key" => !key_path.is_empty(),
+        "auto" => {
+            !password.is_empty()
+                || !key_path.is_empty()
+                || key_passphrase.is_some_and(|p| !p.is_empty())
+        }
+        "agent" => false,
+        _ => false,
+    };
+
+    if let Some(index) = saved_index {
+        if let Ok(mut config) = open_saved_ssh_config(index) {
+            if have_explicit_param_credential {
+                config.auth =
+                    auth_method_from_params(auth_mode, password, key_path, key_passphrase);
+            }
+            return Ok(config);
+        }
+    }
+
     let resolved_host = host.trim();
     let resolved_user = user.trim();
     if resolved_host.is_empty() || resolved_user.is_empty() {
@@ -1753,7 +1822,106 @@ fn build_ssh_session_from_params(
     );
     config.port = normalize_ssh_port(port);
     config.auth = auth_method_from_params(auth_mode, password, key_path, key_passphrase);
-    ssh_connect_with_egress(&config)
+    Ok(config)
+}
+
+/// Open a nested target by tunnelling through its live jump (parent)
+/// session: reuse the parent's transport (a `direct-tcpip` channel)
+/// instead of dialing the nested — possibly unroutable — address
+/// directly. The parent is found in the live session cache regardless of
+/// auth mode; if it isn't cached yet we open it from its saved
+/// connection when one is known, otherwise we fail with a clear message
+/// (rather than the misleading "Disconnected" a direct dial produces).
+#[allow(clippy::too_many_arguments)]
+fn build_ssh_session_via_parent(
+    state: &tauri::State<'_, AppState>,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    password: &str,
+    key_path: &str,
+    key_passphrase: Option<&str>,
+    saved_index: Option<usize>,
+    via: &ParentSshRef,
+) -> Result<SshSession, String> {
+    let parent = resolve_parent_session(state, via)?;
+    // Build the nested target's config first so the dial can honour its
+    // connect timeout — a firewall-dropped inner host must not hang the
+    // channel-open wait forever (the jump host never answers it).
+    let config = build_ssh_config_saved_or_params(
+        saved_index,
+        host,
+        port,
+        user,
+        auth_mode,
+        password,
+        key_path,
+        key_passphrase,
+    )?;
+    let dial_timeout = if config.connect_timeout_secs > 0 {
+        config.connect_timeout_secs
+    } else {
+        DEFAULT_VIA_DIAL_TIMEOUT_SECS
+    };
+    let stream = parent
+        .dial_direct_tcpip_blocking(host, port, dial_timeout)
+        .map_err(|e| {
+            format!(
+                "jump to {host}:{port} through {}@{}:{} failed: {e}",
+                via.user, via.host, via.port
+            )
+        })?;
+    SshSession::connect_over_stream_blocking(&config, host_key_verifier(), stream)
+        .map_err(|error| error.to_string())
+}
+
+/// Channel-open timeout (seconds) for a nested jump dial when the nested
+/// config carries no explicit `connect_timeout_secs`. Bounds the wait so
+/// a silently-dropped inner host fails the probe instead of pinning the
+/// blocking thread + handshake gate indefinitely.
+const DEFAULT_VIA_DIAL_TIMEOUT_SECS: u64 = 20;
+
+/// Resolve the live jump (parent) session a nested target tunnels
+/// through. Prefers the parent's cached session (the jump host's own
+/// terminal/panel handshake); falls back to opening it from a saved
+/// connection — via the shared [`get_or_open_ssh_session`] path so the
+/// open is single-flighted and consistently keyed rather than racing a
+/// duplicate bastion login. A cached-but-dead parent (transport dropped
+/// while no op ran against it) is evicted and re-opened rather than
+/// handed back to fail every dial. Returns a precise error when no live
+/// session exists and the parent isn't a saved connection.
+fn resolve_parent_session(
+    state: &tauri::State<'_, AppState>,
+    via: &ParentSshRef,
+) -> Result<Arc<SshSession>, String> {
+    if let Some(parent) = peek_cached_ssh_session_any_auth(state, &via.host, via.port, &via.user) {
+        if !parent.is_closed() {
+            return Ok(parent);
+        }
+        // Dead transport: drop it under every auth label it might be
+        // cached as (peek is auth-mode agnostic) so the re-open below
+        // doesn't keep finding the corpse.
+        for auth in ["agent", "key", "password", "auto"] {
+            evict_ssh_session(state, &via.host, via.port, &via.user, auth);
+        }
+    }
+    if via.saved_connection_index.is_some() {
+        return get_or_open_ssh_session(
+            state,
+            &via.host,
+            via.port,
+            &via.user,
+            &via.auth_mode,
+            "",
+            "",
+            via.saved_connection_index,
+        );
+    }
+    Err(format!(
+        "jump host {}@{}:{} has no open session — open a terminal or panel on it first",
+        via.user, via.host, via.port
+    ))
 }
 
 /// Build an SSH session for a panel command, preferring the stored
@@ -1781,28 +1949,10 @@ fn build_ssh_session_saved_or_params(
     // (captured terminal password, retyped password, explicit key),
     // override only the auth method on that saved config instead of
     // falling back to an ad-hoc config that would silently drop egress.
-    let have_explicit_param_credential = match auth_mode {
-        "password" => !password.is_empty(),
-        "key" => !key_path.is_empty(),
-        "auto" => {
-            !password.is_empty()
-                || !key_path.is_empty()
-                || key_passphrase.is_some_and(|p| !p.is_empty())
-        }
-        "agent" => false,
-        _ => false,
-    };
-
-    if let Some(index) = saved_index {
-        if let Ok(mut config) = open_saved_ssh_config(index) {
-            if have_explicit_param_credential {
-                config.auth =
-                    auth_method_from_params(auth_mode, password, key_path, key_passphrase);
-            }
-            return ssh_connect_with_egress(&config);
-        }
-    }
-    build_ssh_session_from_params(
+    // The config resolution itself lives in `build_ssh_config_saved_or_params`
+    // (shared with the via-parent path).
+    let config = build_ssh_config_saved_or_params(
+        saved_index,
         host,
         port,
         user,
@@ -1810,7 +1960,8 @@ fn build_ssh_session_saved_or_params(
         password,
         key_path,
         key_passphrase,
-    )
+    )?;
+    ssh_connect_with_egress(&config)
 }
 
 /// Stable key for the SSH session cache. Only the addressing bits,
@@ -2292,6 +2443,71 @@ fn ssh_set_host_effective_user(
     Ok(())
 }
 
+/// Register (or clear) the jump **parent** the right side must tunnel
+/// through to reach a nested target, keyed the same as
+/// [`ssh_set_host_elevation`] (the NESTED target's
+/// `auth_mode:user@host:port`). The frontend calls this when the
+/// terminal enters a nested `ssh user@inner` from a tab already
+/// connected to a jump host (`via = Some(parent)`) and clears it when
+/// the nested hop ends (`via = None`).
+///
+/// On every effective change we evict any cached session for the nested
+/// target so the next probe re-resolves: a freshly-set parent routes the
+/// next connect through the jump (instead of a failed direct dial), and a
+/// cleared parent drops a now-orphaned tunnel so a later direct connect
+/// to the same address doesn't ride a dead channel.
+///
+/// `remove = true` is the match-aware unregister the frontend effect's
+/// cleanup uses: it drops the entry only when the stored parent still
+/// equals the one this caller registered. That way a sibling tab that
+/// re-registered a *different* jump parent for the same inner address
+/// isn't torn down when the first tab's hop ends. `via = None` is an
+/// unconditional clear (defensive — not used by the normal lifecycle).
+#[tauri::command]
+fn ssh_set_host_via(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    via: Option<ParentSshRef>,
+    remove: bool,
+) -> Result<(), String> {
+    let key = sftp_cache_key(&host, port, &user, &auth_mode);
+    let changed = {
+        let mut m = state
+            .host_via
+            .lock()
+            .map_err(|_| "host_via poisoned".to_string())?;
+        match (&via, remove) {
+            (Some(v), false) => {
+                m.insert(key.clone(), v.clone());
+                true
+            }
+            (Some(v), true) => {
+                // Match-aware clear: only drop OUR registration.
+                if m.get(&key) == Some(v) {
+                    m.remove(&key);
+                    true
+                } else {
+                    false
+                }
+            }
+            (None, _) => m.remove(&key).is_some(),
+        }
+    };
+    if changed {
+        // Drop any cached session for this nested target so the next
+        // panel probe re-resolves through (or, on clear, without) the
+        // tunnel. The negative-cache entry doesn't need clearing: the
+        // credential fingerprint folds in the jump parent (see
+        // `get_or_open_ssh_session_inner`), so a prior direct-dial
+        // failure never short-circuits a now-tunnelled retry.
+        evict_ssh_session(&state, &host, port, &user, &auth_mode);
+    }
+    Ok(())
+}
+
 fn get_or_open_ssh_session_inner(
     state: &tauri::State<'_, AppState>,
     host: &str,
@@ -2342,12 +2558,39 @@ fn get_or_open_ssh_session_inner(
     let passphrase = effective_passphrase;
 
     let key = sftp_cache_key(host, port, user, auth_mode);
+    // When the frontend registered a jump parent for this target (the
+    // user is inside a nested `ssh user@inner` from a tab connected to a
+    // jump host), open the session over a `direct-tcpip` channel on the
+    // live parent instead of dialing the — possibly unroutable — nested
+    // address directly. Looked up once here, keyed by the same plain
+    // target key the elevation maps use.
+    let via = state
+        .host_via
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&key).cloned());
     // Fingerprint of the credentials we're about to attempt. Compared
     // against the negative-cache entry so a stale "auth rejected"
     // failure stops gating the moment any input changes — most
     // commonly the watcher just captured an interactive password and
-    // the previous `auto + empty` rejection no longer applies.
-    let cred_fp = ssh_credential_fingerprint(auth_mode, password, key_path, saved_index);
+    // the previous `auto + empty` rejection no longer applies. The jump
+    // parent is folded in so a prior DIRECT-dial failure (no via) never
+    // short-circuits a now-tunnelled retry, and vice-versa.
+    let cred_fp = {
+        let base = ssh_credential_fingerprint(auth_mode, password, key_path, saved_index);
+        match &via {
+            Some(v) => {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                base.hash(&mut h);
+                v.host.hash(&mut h);
+                v.port.hash(&mut h);
+                v.user.hash(&mut h);
+                h.finish()
+            }
+            None => base,
+        }
+    };
 
     // Fast path: cache hit.
     {
@@ -2416,18 +2659,40 @@ fn get_or_open_ssh_session_inner(
     pier_core::logging::write_event(
         "INFO",
         "ssh.cache",
-        &format!("opening fresh SSH session for {}", key),
+        &format!(
+            "opening fresh SSH session for {}{}",
+            key,
+            match &via {
+                Some(v) => format!(" via {}@{}:{}", v.user, v.host, v.port),
+                None => String::new(),
+            }
+        ),
     );
-    let session = match build_ssh_session_saved_or_params(
-        saved_index,
-        host,
-        port,
-        user,
-        auth_mode,
-        password,
-        key_path,
-        passphrase.as_deref(),
-    ) {
+    let build_result = match via.as_ref() {
+        Some(v) => build_ssh_session_via_parent(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            passphrase.as_deref(),
+            saved_index,
+            v,
+        ),
+        None => build_ssh_session_saved_or_params(
+            saved_index,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            passphrase.as_deref(),
+        ),
+    };
+    let session = match build_result {
         Ok(s) => s,
         Err(e) => {
             // Populate the negative cache so sibling waiters don't
@@ -2442,8 +2707,15 @@ fn get_or_open_ssh_session_inner(
             // supplied credentials yet", not "the credentials are
             // wrong". Stamping it would just delay the legitimate
             // retry the moment the watcher captures the password.
-            let attempt_was_credential_starved =
-                auth_mode == "password" && password.is_empty() && saved_index.is_none();
+            //
+            // Also skip for every jump (via) attempt: the common failure
+            // is "the parent jump session isn't up yet" — transient and
+            // not credential-fingerprinted — so stamping it would keep
+            // gating retries for the full negative-cache TTL even after
+            // the user opens the jump host and the tunnel becomes
+            // possible.
+            let attempt_was_credential_starved = via.is_some()
+                || (auth_mode == "password" && password.is_empty() && saved_index.is_none());
             if !attempt_was_credential_starved {
                 if let Ok(mut slot) = guard.last_fail.lock() {
                     *slot = Some((Instant::now(), e.clone(), cred_fp));
@@ -20046,6 +20318,7 @@ pub fn run() {
             ssh_elevation_preflight,
             ssh_set_host_elevation,
             ssh_set_host_effective_user,
+            ssh_set_host_via,
             mysql_browse,
             mysql_execute,
             mysql_browse_socket,

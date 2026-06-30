@@ -635,21 +635,53 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     if (fingerprint === prewarmFingerprintRef.current) return;
     prewarmFingerprintRef.current = fingerprint;
 
-    cmd
-      .sshSessionPrewarm({
-        host: target.host,
-        port: target.port,
-        user: target.user,
-        authMode: target.authMode,
-        password: target.password,
-        keyPath: target.keyPath,
-        savedConnectionIndex: target.savedConnectionIndex,
-      })
-      .catch(() => {
-        // Backend already swallows errors; this catch guards against
-        // invoke-layer failures (dev reload, missing command) — not
-        // worth surfacing to the user for an optimization path.
-      });
+    const doPrewarm = () =>
+      cmd
+        .sshSessionPrewarm({
+          host: target.host,
+          port: target.port,
+          user: target.user,
+          authMode: target.authMode,
+          password: target.password,
+          keyPath: target.keyPath,
+          savedConnectionIndex: target.savedConnectionIndex,
+        })
+        .catch(() => {
+          // Backend already swallows errors; this catch guards against
+          // invoke-layer failures (dev reload, missing command) — not
+          // worth surfacing to the user for an optimization path.
+        });
+
+    // For a nested hop, register the jump parent FIRST and only then
+    // prewarm — otherwise the prewarm would dial the inner address
+    // directly (it's the effective target) and cache a session that
+    // bypasses the jump. The dedicated effect below owns the mapping's
+    // lifecycle (incl. cleanup); this redundant set just orders the
+    // backend so the prewarm itself tunnels.
+    const nested = tab.nestedSshTarget;
+    if (nested) {
+      const parentHost = tab.sshHost.trim();
+      const parentUser = tab.sshUser.trim();
+      if (!parentHost || !parentUser) return;
+      cmd
+        .sshSetHostVia({
+          host: target.host,
+          port: target.port,
+          user: target.user,
+          authMode: target.authMode,
+          via: {
+            host: parentHost,
+            port: tab.sshPort,
+            user: parentUser,
+            authMode: tab.sshAuthMode,
+            savedConnectionIndex: tab.sshSavedConnectionIndex,
+          },
+        })
+        .then(doPrewarm)
+        .catch(doPrewarm);
+    } else {
+      void doPrewarm();
+    }
   }, [
     tab.backend,
     tab.nestedSshTarget?.host,
@@ -667,6 +699,55 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     tab.sshSavedConnectionIndex,
     (tab.sshPassword?.length ?? 0) > 0,
     isActive,
+  ]);
+
+  // ── Nested-SSH jump registration ────────────────────────────────
+  // When this tab is inside a nested `ssh user@inner` (the overlay is
+  // set), tell the backend to tunnel every right-side probe for the
+  // inner host through this tab's PRIMARY (jump) session, instead of
+  // dialing the — usually internal, unroutable — inner address
+  // directly. The parent is this tab's primary ssh* identity, which the
+  // watcher / saved connection populated for the outer hop. Cleared on
+  // change / unmount so a later direct connect to the same address
+  // doesn't ride an orphaned tunnel. Single-hop only: a deeper chain
+  // overwrites the one overlay, so `via` always names the outermost
+  // (primary) session — fine for the common bastion → inner case.
+  useEffect(() => {
+    const nested = tab.nestedSshTarget;
+    if (!nested) return;
+    const parentHost = tab.sshHost.trim();
+    const parentUser = tab.sshUser.trim();
+    if (!parentHost || !parentUser) return;
+    const target = {
+      host: nested.host,
+      port: nested.port,
+      user: nested.user,
+      authMode: nested.authMode,
+    };
+    const via = {
+      host: parentHost,
+      port: tab.sshPort,
+      user: parentUser,
+      authMode: tab.sshAuthMode,
+      savedConnectionIndex: tab.sshSavedConnectionIndex,
+    };
+    cmd.sshSetHostVia({ ...target, via }).catch(() => {});
+    return () => {
+      // Match-aware clear: pass the same `via` so a sibling tab that
+      // re-registered a different jump parent for this inner host isn't
+      // torn down by our cleanup.
+      cmd.sshSetHostVia({ ...target, via, remove: true }).catch(() => {});
+    };
+  }, [
+    tab.nestedSshTarget?.host,
+    tab.nestedSshTarget?.port,
+    tab.nestedSshTarget?.user,
+    tab.nestedSshTarget?.authMode,
+    tab.sshHost,
+    tab.sshPort,
+    tab.sshUser,
+    tab.sshAuthMode,
+    tab.sshSavedConnectionIndex,
   ]);
 
   // ── Measure terminal grid dimensions ────────────────────────

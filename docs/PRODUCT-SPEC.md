@@ -772,7 +772,7 @@ AI 通过 tool-use 协议调用 Pier-X 已有能力——**不新开能力面，
 
 | 级 | 含义 | 行为 | 例 |
 |---|---|---|---|
-| **L0 只读** | 无副作用 | 自动执行；会话里渲染可展开的工具卡片（命令 + 输出全程可见） | `df -h`、`docker ps`、`nvidia-smi`、`sudo -l`、`SELECT`、`git status` |
+| **L0 只读** | 无副作用 | 自动执行；会话里渲染可展开的工具卡片（命令 + 输出全程可见） | `df -h`、`docker ps`、`nvidia-smi`、`sudo -l`、`SELECT`、`git status`、`nginx -T`、`kubectl get`、`dmidecode` |
 | **L1 一般写** | 可恢复的写 | **逐项审批卡片**：完整命令/SQL、目标主机、风险说明；按钮 = [允许一次] [本会话允许] [总是允许（入白名单）] [拒绝] | 写文件、`git commit`、`systemctl restart`、带 WHERE 的 UPDATE |
 | **L2 高危** | 难恢复 / 大范围 | 红色强确认对话框（默认焦点 = 取消）；默认还要**输入命令首词**解锁（同 §5.12 卸载数据目录的设计），可在设置 → AI → 执行里关掉这层输入闸（见下）；**不可加白名单** | `docker rm` / `prune`、`git push --force`、DROP / TRUNCATE / 无 WHERE 的 DELETE、`FLUSHALL`、reboot、递归 chmod/chown、停 sshd |
 | **L3 红线** | 毁灭性 / 抹痕迹 | **执行通道关闭**：不渲染任何执行按钮；白名单、设置、「总是允许」都覆盖不了。AI 在文本里可以解释这些命令，但 Pier-X 不会替它跑 | 见下方红线清单 |
@@ -802,7 +802,11 @@ AI 通过 tool-use 协议调用 Pier-X 已有能力——**不新开能力面，
 - 识别不了的命令一律按 **L2** 处理，绝不默认放行；
 - 复合命令（`&&` / `;` / `|` / `$()` / 反引号）拆段取**最高**风险级；含 `eval` 或不可静态展开的变量时整体升 L2；
 - `sudo` 前缀不改变分级，但审批卡片须标注「将以 root 执行」；
-- SQL 按语句类型分级，多语句脚本逐条分级取最高。
+- SQL 按语句类型分级，多语句脚本逐条分级取最高；
+- **只读诊断命令表**：除上述只读白名单外，分级器额外识别一批默认只读的诊断命令——服务配置测试器（`nginx -t/-T`、`apachectl configtest`、`httpd -t`、`sshd -t/-T`、`haproxy -c`、`varnishd -C`、`named-checkconf/checkzone`、`unbound-checkconf`、`postconf`、`caddy validate/adapt`、`dovecot -n`）、系统/硬件检查（`dmidecode`/`lshw`/`lsblk`/`lsns`/`ipcs`/`smartctl -a`/`hdparm -I`/`dmesg`/`objdump`/`readelf` 等）、只读网络诊断（`ethtool`/`ss`/`arp -a`/`conntrack -L`/`tcpdump` 抓包 等）、只读容器/K8s 子命令（`kubectl get/describe/logs`、`helm list`、`crictl ps`、`nerdctl ps` 等）、只读云 CLI 调用（`aws ... describe-*/list-*`、`gcloud ... list/describe`、`az ... show/list` 等）、以及包查询（`dpkg -l`、`rpm -qa`、`snap list` 等）。这些命令的**默认/只读形态判 L0 自动执行，其写/毁灭形态按本表正常升级**（如 `nginx -s stop` / `kubectl delete` / `dpkg -P`）；该表是 fail-closed 契约的**收紧而非放宽**：表外命令仍按上一条兜底到 L2。判定要点：
+  - daemon 二进制按 **getopt 感知的闭合白名单**判级——只有真正独立出现的 test/version 标志才降 L0，被取值选项吞掉测试标志的形态（`sshd -f -t`、`httpd -f -t`、`varnishd -n -C`、`named -D -v`）以及裸调用（启动守护进程）一律 ≥ L2；
+  - 凭据/密钥外泄型「读」操作不降级：`kubectl get secret -o yaml`、`gcloud auth print-access-token`、`aws secretsmanager get-secret-value`、`named-checkconf -p`（明文 key）、`caddy storage export`、`exim -be`（表达式可执行命令/读文件）等保持 ≥ L1/L2；
+  - 以上不改变本节安全姿态：L2 仍不可加白名单、L3 红线不变、表外命令仍 fail-closed 到 L2。
 
 **白名单与会话许可**：
 

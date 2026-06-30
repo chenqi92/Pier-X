@@ -43,12 +43,12 @@ import { WEB_SERVER_EXTERNAL_EDIT_EVENT } from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 
-// Raw text editor for apache + caddy. Mirrors the nginx panel's save
-// pipeline (backup → write → validate → restore-on-fail → reload) but
-// without the AST parser / feature catalog. The user gets a file tree
-// on the left and a textarea on the right; that's enough to make
-// changes safe (validate before reload) without committing to a full
-// per-product AST.
+// Editor for apache + caddy. Mirrors the nginx panel's save pipeline
+// (backup → write → validate → restore-on-fail → reload), with a
+// per-product config tree, feature catalog, and IfModule (apache) /
+// matcher (caddy) editors layered on top of raw text editing — the
+// file tree on the left, the structured views and a textarea on the
+// right.
 
 type Props = {
   kind: WebServerKind;

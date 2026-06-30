@@ -1706,8 +1706,8 @@ export const zhExtra: Record<string, string> = {
   "Browse and edit nginx config on a saved server, validate with `nginx -t`, then reload.":
     "在远端浏览和编辑 nginx 配置，先 `nginx -t` 校验后再 reload。",
   "Web Server": "Web 服务器",
-  "Manage the web server on a saved host — currently nginx (Apache and Caddy support is planned).":
-    "管理远端主机上的 Web 服务器 —— 当前支持 nginx（Apache、Caddy 计划中）。",
+  "Manage nginx, Apache, or Caddy on a saved host — browse and edit config, validate, and reload.":
+    "管理远端主机上的 nginx、Apache 或 Caddy —— 浏览和编辑配置、校验并 reload。",
   "Open an SSH tab to manage the web server.": "打开 SSH 终端后再管理 Web 服务器。",
   "This tab has no SSH context — web server management is remote-only.":
     "当前终端未连接 SSH，Web 服务器管理仅在远端可用。",

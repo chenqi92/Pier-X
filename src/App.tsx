@@ -26,7 +26,13 @@ import { RIGHT_TOOL_META } from "./lib/rightToolMeta";
  *  is the most-used 9 tools — markdown / git / firewall / software
  *  intentionally excluded so the map stays at exactly 9 slots and
  *  the user can `1..9` without thinking. The standalone Git
- *  shortcut (Cmd+Shift+G) covers the missing piece. */
+ *  shortcut (Cmd+Shift+G) covers the missing piece.
+ *
+ *  `mysql` / `postgres` / `sqlite` are the legacy DB-umbrella kinds,
+ *  not separate strip tools: the strip has a single `database` entry,
+ *  and `normalizeRightTool` (lib/types) folds each into
+ *  `{ rightTool: "database", dbKind }`, so these slots quick-switch the
+ *  database panel to that product. */
 const RIGHT_TOOL_KEY_MAP: RightTool[] = [
   "monitor",
   "sftp",

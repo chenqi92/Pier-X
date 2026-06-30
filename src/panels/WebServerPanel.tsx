@@ -22,10 +22,9 @@ import { sudoKeyFor, useSudoStore } from "../stores/useSudoStore";
 import "../styles/web-server-panel.css";
 
 // One unified entry for nginx / apache / caddy. nginx routes to the
-// rich NginxPanel; apache and caddy land on a placeholder that exposes
-// version, loaded-modules summary, and the validate / reload buttons —
-// enough to be useful while structured editing for those products is
-// still on the roadmap.
+// rich NginxPanel; apache and caddy route to RawWebServerPanel, which
+// exposes a config tree, feature catalog, IfModule / matcher editors,
+// and the validate / reload buttons.
 
 type Props = { tab: TabState | null };
 

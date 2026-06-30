@@ -56,6 +56,9 @@ $RECYCLE.BIN/
 .claude/cache/
 .claude/.session/
 
+# Aeroric — local per-user tool config + attachments, not shared state
+.aeroric/
+
 # pier-design-system: drop the cloned reference repo
 # (its content has been extracted to extracted/ and synthesized into SKILL.md)
 .claude/skills/pier-design-system/reference/

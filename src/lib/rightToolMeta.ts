@@ -253,7 +253,7 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
     tintVar: "var(--svc-webserver)",
     splashTitle: "Web Server",
     splashSubtitle:
-      "Manage the web server on a saved host — currently nginx (Apache and Caddy support is planned).",
+      "Manage nginx, Apache, or Caddy on a saved host — browse and edit config, validate, and reload.",
   },
   software: {
     label: "Software",

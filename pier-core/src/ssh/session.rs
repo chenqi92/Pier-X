@@ -253,7 +253,9 @@ impl SshSession {
     async fn finish_connect(
         config: &SshConfig,
         connect_result: std::result::Result<client::Handle<ClientHandler>, SshError>,
-        verify_error_slot: std::sync::Arc<std::sync::Mutex<Option<super::known_hosts::VerifyError>>>,
+        verify_error_slot: std::sync::Arc<
+            std::sync::Mutex<Option<super::known_hosts::VerifyError>>,
+        >,
     ) -> Result<Self> {
         let handle = match connect_result {
             Ok(h) => h,

@@ -117,6 +117,44 @@ fn shell_slug(shell: &str) -> String {
     }
 }
 
+// Test-only roots so the suite stays hermetic: each test points these
+// at its own temp dir instead of the real user data dir / home, which
+// keeps `cargo test` from writing into `%APPDATA%` / `~/.pier-x` (and
+// from failing in a sandboxed CI where those aren't writable). Thread-
+// local because each `#[test]` runs on its own thread, so parallel
+// tests never see each other's roots. Compiled out of release builds.
+#[cfg(test)]
+thread_local! {
+    static TEST_DATA_ROOT: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+    static TEST_HOME_ROOT: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The data directory history files live under — the real per-user data
+/// dir in production, a test override when one is set.
+fn data_root() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Some(p) = TEST_DATA_ROOT.with(|c| c.borrow().clone()) {
+            return Some(p);
+        }
+    }
+    crate::paths::data_dir()
+}
+
+/// The home directory the legacy-`~/.pier-x` migration reads from —
+/// overridable in tests so the migration never touches the real home.
+fn legacy_home() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Some(p) = TEST_HOME_ROOT.with(|c| c.borrow().clone()) {
+            return Some(p);
+        }
+    }
+    directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf())
+}
+
 /// Resolve the on-disk path for `shell`'s history file. Creates the
 /// containing directory if needed. Returns `Err(NoDataDir)` on
 /// platforms where `directories` can't determine a sensible
@@ -126,7 +164,7 @@ pub fn path_for(shell: &str) -> Result<PathBuf, HistoryError> {
     // §4.2.1). A home-level dotdir would be unreachable under the Mac
     // App Store sandbox, and Settings → Clear is the supported way to
     // delete history anyway.
-    let dir = crate::paths::data_dir().ok_or(HistoryError::NoDataDir)?;
+    let dir = data_root().ok_or(HistoryError::NoDataDir)?;
     fs::create_dir_all(&dir)?;
     let path = dir.join(history_file_name(shell));
     migrate_legacy_file(&path, shell);
@@ -147,10 +185,10 @@ fn migrate_legacy_file(target: &Path, shell: &str) {
     if target.exists() {
         return;
     }
-    let Some(base) = directories::BaseDirs::new() else {
+    let Some(home) = legacy_home() else {
         return;
     };
-    let legacy_dir = base.home_dir().join(".pier-x");
+    let legacy_dir = home.join(".pier-x");
     let legacy = legacy_dir.join(history_file_name(shell));
     if !legacy.exists() {
         return;
@@ -269,6 +307,43 @@ mod tests {
         }
     }
 
+    /// Points the data-dir and legacy-home roots at a fresh temp dir for
+    /// the duration of one test, then tears it down. Keeps the suite from
+    /// reading or writing the real user data dir / `~/.pier-x`.
+    struct TestEnv {
+        root: PathBuf,
+    }
+
+    impl TestEnv {
+        fn new(tag: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let root = std::env::temp_dir().join(format!(
+                "pier-x-hist-test-{}-{}-{}",
+                tag,
+                std::process::id(),
+                nanos
+            ));
+            let data = root.join("data");
+            let home = root.join("home");
+            fs::create_dir_all(&data).unwrap();
+            fs::create_dir_all(&home).unwrap();
+            super::TEST_DATA_ROOT.with(|c| *c.borrow_mut() = Some(data));
+            super::TEST_HOME_ROOT.with(|c| *c.borrow_mut() = Some(home));
+            TestEnv { root }
+        }
+    }
+
+    impl Drop for TestEnv {
+        fn drop(&mut self) {
+            super::TEST_DATA_ROOT.with(|c| *c.borrow_mut() = None);
+            super::TEST_HOME_ROOT.with(|c| *c.borrow_mut() = None);
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
     #[test]
     fn sensitivity_filter_catches_common_credential_words() {
         assert!(is_sensitive("export GITHUB_TOKEN=abc"));
@@ -295,6 +370,7 @@ mod tests {
 
     #[test]
     fn append_then_load_round_trips() {
+        let _env = TestEnv::new("rt");
         let slug = unique_slug("rt");
         cleanup(&slug);
         append(&slug, "ls -la").unwrap();
@@ -312,6 +388,7 @@ mod tests {
 
     #[test]
     fn load_dedups_against_most_recent_occurrence() {
+        let _env = TestEnv::new("dedup");
         let slug = unique_slug("dedup");
         cleanup(&slug);
         // Three appends, second one a duplicate of the first. File-
@@ -329,6 +406,7 @@ mod tests {
 
     #[test]
     fn clear_removes_the_file() {
+        let _env = TestEnv::new("clear");
         let slug = unique_slug("clear");
         cleanup(&slug);
         append(&slug, "ls").unwrap();
@@ -341,10 +419,10 @@ mod tests {
 
     #[test]
     fn legacy_home_dotdir_file_is_migrated() {
+        let _env = TestEnv::new("migrate");
         let slug = unique_slug("migrate");
         cleanup(&slug);
-        let base = directories::BaseDirs::new().unwrap();
-        let legacy_dir = base.home_dir().join(".pier-x");
+        let legacy_dir = super::legacy_home().unwrap().join(".pier-x");
         fs::create_dir_all(&legacy_dir).unwrap();
         let legacy = legacy_dir.join(history_file_name(&slug));
         fs::write(&legacy, "{\"ts\":1,\"cmd\":\"ls\"}\n").unwrap();
@@ -356,6 +434,7 @@ mod tests {
 
     #[test]
     fn load_skips_corrupt_lines() {
+        let _env = TestEnv::new("corrupt");
         let slug = unique_slug("corrupt");
         cleanup(&slug);
         // Manually drop a malformed line in front, then a valid

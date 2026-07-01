@@ -19,7 +19,7 @@ import {
   keyToInput,
   remoteDesktopClose,
   remoteDesktopConnect,
-  remoteDesktopInput,
+  remoteDesktopInputBatch,
   remoteDesktopVncProxyStart,
   remoteDesktopVncProxyStop,
   type RdPacket,
@@ -57,10 +57,12 @@ const VNC_RENDER_MODE_KEY = "pierx:vnc-render-mode";
 const VNC_REMOTE_RESIZE_KEY = "pierx:vnc-remote-resize";
 
 function readVncRenderMode(): VncRenderMode {
+  // Default to the balanced "quality" preset: it compresses updates (kinder to
+  // WAN links) while staying responsive. A stored explicit "latency" wins.
   try {
-    return localStorage.getItem(VNC_RENDER_MODE_KEY) === "quality" ? "quality" : "latency";
+    return localStorage.getItem(VNC_RENDER_MODE_KEY) === "latency" ? "latency" : "quality";
   } catch {
-    return "latency";
+    return "quality";
   }
 }
 
@@ -77,12 +79,19 @@ function applyVncPerformance(rfb: RFB, mode: VncRenderMode, resizeRemote: boolea
   rfb.resizeSession = resizeRemote;
   rfb.clipViewport = false;
   rfb.focusOnClick = true;
+  // Always render at least a dot cursor. noVNC defaults showDotCursor=false and
+  // starts each session with a fully-transparent cursor shape, so a server that
+  // sends an empty / hidden pointer would otherwise leave no visible cursor.
+  rfb.showDotCursor = true;
   if (mode === "latency") {
-    rfb.compressionLevel = 0;
-    rfb.qualityLevel = 4;
+    // "Low latency" trades bandwidth for server CPU. compressionLevel 0 (STORE)
+    // ships rects uncompressed — pathologically slow over WAN — so keep a light
+    // zlib level that stays cheap without flooding the link.
+    rfb.compressionLevel = 3;
+    rfb.qualityLevel = 5;
   } else {
-    rfb.compressionLevel = 2;
-    rfb.qualityLevel = 8;
+    rfb.compressionLevel = 6;
+    rfb.qualityLevel = 9;
   }
 }
 
@@ -262,11 +271,17 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
               ctxRef.current?.putImageData(img, x, y);
             });
           } else {
-            // Copy the JPEG bytes now; decode + paint on the queue so a slow
-            // decode can't overwrite a newer tile.
+            // Start the JPEG decode immediately so it runs in parallel with
+            // other tiles' decodes, and enqueue only the draw. Keeping the
+            // decode off the ordered paint chain stops a slow decode from
+            // blocking newer RGBA tiles queued behind it, while the chain still
+            // applies the draws in arrival order. `.catch` keeps a
+            // superseded-gen decode from surfacing as an unhandled rejection.
             const blob = new Blob([packet.data.slice()], { type: "image/jpeg" });
+            const bitmap = createImageBitmap(blob).catch(() => null);
             enqueuePaint(gen, async () => {
-              const bmp = await createImageBitmap(blob);
+              const bmp = await bitmap;
+              if (!bmp) return;
               ctxRef.current?.drawImage(bmp, x, y);
               bmp.close();
             });
@@ -420,10 +435,40 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
   }, [isActive]);
 
   // ── Input forwarding ──
-  const send = useCallback((event: RemoteInput) => {
+  // Every input (move / button / wheel / key / clipboard) is coalesced into one
+  // ordered batch per animation frame, so high-rate pointer and scroll input
+  // pays a single main-thread IPC hop per frame instead of one per event (the
+  // backend command is synchronous). A single ordered batch also avoids the
+  // reordering that concurrent async commands would cause. Consecutive pointer
+  // moves collapse to the latest position; every other event is preserved.
+  const inputQueueRef = useRef<RemoteInput[]>([]);
+  const inputScheduledRef = useRef(false);
+
+  const flushInputs = useCallback(() => {
+    inputScheduledRef.current = false;
+    const queue = inputQueueRef.current;
+    if (queue.length === 0) return;
+    inputQueueRef.current = [];
     const id = sessionIdRef.current;
-    if (id) void remoteDesktopInput(id, event).catch(() => {});
+    if (id) void remoteDesktopInputBatch(id, queue).catch(() => {});
   }, []);
+
+  const send = useCallback(
+    (event: RemoteInput) => {
+      const queue = inputQueueRef.current;
+      const last = queue[queue.length - 1];
+      if (event.kind === "pointerMove" && last && last.kind === "pointerMove") {
+        queue[queue.length - 1] = event;
+      } else {
+        queue.push(event);
+      }
+      if (!inputScheduledRef.current) {
+        inputScheduledRef.current = true;
+        window.requestAnimationFrame(flushInputs);
+      }
+    },
+    [flushInputs],
+  );
 
   // Focus the surface when this tab becomes active so keys flow immediately,
   // and push the local clipboard to the remote so a paste there sees it.
@@ -466,24 +511,14 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
     [toRemote, isOverCanvas, positionCursorOverlay],
   );
 
-  // Coalesce pointer-move spam to one send per animation frame.
-  const moveRef = useRef<{ x: number; y: number } | null>(null);
-  const moveScheduled = useRef(false);
-  const flushMove = useCallback(() => {
-    moveScheduled.current = false;
-    const m = moveRef.current;
-    if (m) send({ kind: "pointerMove", x: m.x, y: m.y });
-  }, [send]);
-
   const onMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      moveRef.current = updateCursorPoint(e.clientX, e.clientY);
-      if (!moveScheduled.current) {
-        moveScheduled.current = true;
-        window.requestAnimationFrame(flushMove);
-      }
+      // Update the local cursor overlay every move (cheap, keeps it smooth);
+      // the pointerMove send is coalesced to one per frame inside `send`.
+      const point = updateCursorPoint(e.clientX, e.clientY);
+      send({ kind: "pointerMove", x: point.x, y: point.y });
     },
-    [updateCursorPoint, flushMove],
+    [updateCursorPoint, send],
   );
 
   const onMouseButton = useCallback(
@@ -528,12 +563,15 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
     [send],
   );
 
-  // Release every held key — on blur, or when the tab goes inactive.
+  // Release every held key — on blur, or when the tab goes inactive. Flush the
+  // batch immediately so the key-ups can't sit in the per-frame queue past a
+  // teardown and leave a modifier stuck down on the remote.
   const releaseAllKeys = useCallback(() => {
     const held = pressedKeysRef.current;
     for (const input of held.values()) send({ ...input, pressed: false });
     held.clear();
-  }, [send]);
+    flushInputs();
+  }, [send, flushInputs]);
 
   useEffect(() => {
     if (!isActive) releaseAllKeys();
@@ -591,10 +629,7 @@ function CanvasRemoteDesktopPanel({ tab, isActive }: Props) {
         onContextMenu={(e) => e.preventDefault()}
       >
         <canvas
-          className={
-            "rd-canvas" +
-            (tab.rdProtocol === "rdp" || hasRemoteCursor ? " rd-canvas--hide-native-cursor" : "")
-          }
+          className={"rd-canvas" + (hasRemoteCursor ? " rd-canvas--hide-native-cursor" : "")}
           ref={canvasRef}
         />
         <canvas className="rd-cursor" ref={cursorCanvasRef} aria-hidden="true" />

@@ -168,6 +168,10 @@ export async function remoteDesktopConnect(
 export const remoteDesktopInput = (sessionId: string, event: RemoteInput) =>
   invoke<void>("remote_desktop_input", { sessionId, event });
 
+/** Forward a frame's worth of input events in one ordered IPC call. */
+export const remoteDesktopInputBatch = (sessionId: string, events: RemoteInput[]) =>
+  invoke<void>("remote_desktop_input_batch", { sessionId, events });
+
 export const remoteDesktopResize = (sessionId: string, width: number, height: number) =>
   invoke<void>("remote_desktop_resize", { sessionId, width, height });
 

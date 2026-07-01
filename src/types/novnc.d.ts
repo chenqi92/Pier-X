@@ -34,6 +34,7 @@ declare module "@novnc/novnc" {
     resizeSession: boolean;
     qualityLevel: number;
     compressionLevel: number;
+    showDotCursor: boolean;
     background: string;
 
     addEventListener<K extends keyof RFBEventMap>(

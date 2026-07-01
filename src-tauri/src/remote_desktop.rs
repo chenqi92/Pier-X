@@ -227,6 +227,31 @@ pub fn remote_desktop_input(
     Ok(())
 }
 
+/// Forward a batch of input events to a live session, in arrival order. The
+/// viewer coalesces a frame's worth of pointer / keyboard events into one call
+/// so high-rate input does not pay a per-event main-thread hop (these commands
+/// are synchronous). A single ordered batch also avoids the reordering a naive
+/// concurrent-async command stream would cause.
+#[tauri::command]
+pub fn remote_desktop_input_batch(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    events: Vec<RdInput>,
+) -> Result<(), String> {
+    let sessions = state
+        .remote_desktops
+        .lock()
+        .map_err(|_| "remote desktop registry poisoned".to_string())?;
+    if let Some(session) = sessions.get(&session_id) {
+        for event in events {
+            if let Some(event) = event.into_event() {
+                session.send_input(event);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Request a new desktop size (best-effort; protocol-dependent).
 #[tauri::command]
 pub fn remote_desktop_resize(
@@ -385,7 +410,15 @@ fn put_u16(buf: &mut Vec<u8>, v: u16) {
 }
 
 fn encode_packet(event: &FrameEvent) -> Vec<u8> {
-    let mut buf = Vec::new();
+    // Pre-size for the big payloads (tile / cursor RGBA, clipboard text) so the
+    // final extend does not grow a zero-capacity buffer through several reallocs.
+    let hint = match event {
+        FrameEvent::Tile(FrameTile { data, .. }) => data.len() + 9,
+        FrameEvent::Cursor { data, .. } => data.len() + 9,
+        FrameEvent::Clipboard(text) => text.len() + 1,
+        _ => 16,
+    };
+    let mut buf = Vec::with_capacity(hint);
     match event {
         FrameEvent::Connected { width, height } => {
             buf.push(1);

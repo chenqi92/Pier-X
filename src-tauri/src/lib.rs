@@ -59,8 +59,8 @@ use git_panel::*;
 
 mod remote_desktop;
 use remote_desktop::{
-    remote_desktop_close, remote_desktop_connect, remote_desktop_input, remote_desktop_resize,
-    remote_desktop_vnc_proxy_start, remote_desktop_vnc_proxy_stop,
+    remote_desktop_close, remote_desktop_connect, remote_desktop_input, remote_desktop_input_batch,
+    remote_desktop_resize, remote_desktop_vnc_proxy_start, remote_desktop_vnc_proxy_stop,
 };
 
 mod ssh_mux;
@@ -20415,6 +20415,7 @@ pub fn run() {
             pierfs_grant,
             remote_desktop_connect,
             remote_desktop_input,
+            remote_desktop_input_batch,
             remote_desktop_resize,
             remote_desktop_close,
             remote_desktop_vnc_proxy_start,

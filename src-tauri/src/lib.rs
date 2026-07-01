@@ -2564,7 +2564,7 @@ fn get_or_open_ssh_session_inner(
     // live parent instead of dialing the — possibly unroutable — nested
     // address directly. Looked up once here, keyed by the same plain
     // target key the elevation maps use.
-    let via = state
+    let mut via = state
         .host_via
         .lock()
         .ok()
@@ -2668,8 +2668,8 @@ fn get_or_open_ssh_session_inner(
             }
         ),
     );
-    let build_result = match via.as_ref() {
-        Some(v) => build_ssh_session_via_parent(
+    let build_result = if let Some(v) = via.clone() {
+        build_ssh_session_via_parent(
             state,
             host,
             port,
@@ -2679,9 +2679,11 @@ fn get_or_open_ssh_session_inner(
             key_path,
             passphrase.as_deref(),
             saved_index,
-            v,
-        ),
-        None => build_ssh_session_saved_or_params(
+            &v,
+        )
+    } else {
+        // Direct (non-tunnelled) dial of the target address.
+        match build_ssh_session_saved_or_params(
             saved_index,
             host,
             port,
@@ -2690,7 +2692,45 @@ fn get_or_open_ssh_session_inner(
             password,
             key_path,
             passphrase.as_deref(),
-        ),
+        ) {
+            Ok(s) => Ok(s),
+            Err(direct_err) => {
+                // Race guard: the frontend registers `host_via` with a
+                // fire-and-forget IPC that can land AFTER an already-open
+                // auto-probe panel (e.g. ServerMonitor) has dispatched its
+                // first probe on the freshly-nested target. If a jump
+                // parent appeared while we were dialing the (often
+                // unroutable) nested address directly, retry once over the
+                // tunnel instead of surfacing a transient "Disconnected".
+                let late_via = state
+                    .host_via
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.get(&key).cloned());
+                match late_via {
+                    Some(v) => {
+                        let tunnelled = build_ssh_session_via_parent(
+                            state,
+                            host,
+                            port,
+                            user,
+                            auth_mode,
+                            password,
+                            key_path,
+                            passphrase.as_deref(),
+                            saved_index,
+                            &v,
+                        );
+                        // Reflect the late resolution so the negative-cache
+                        // gate below treats this as a jump attempt (never
+                        // stamped) rather than a failed direct dial.
+                        via = Some(v);
+                        tunnelled
+                    }
+                    None => Err(direct_err),
+                }
+            }
+        }
     };
     let session = match build_result {
         Ok(s) => s,

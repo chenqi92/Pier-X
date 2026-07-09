@@ -2335,6 +2335,29 @@ fn apply_host_elevation(
     session.set_elevation_armed_blocking(armed);
 }
 
+/// Apply a per-call effective-user hint without touching the session's
+/// sudo secret slot. SFTP browse passes this to close the UI/backend race
+/// where the terminal label already shows `root@host`, but the global
+/// host-effective-user map has not been written yet.
+fn apply_explicit_effective_user(
+    session: &SshSession,
+    effective_user: Option<&str>,
+    login_user: &str,
+) -> Result<(), String> {
+    let Some(eu) = effective_user
+        .map(str::trim)
+        .filter(|eu| !eu.is_empty() && *eu != login_user)
+    else {
+        return Ok(());
+    };
+    if !pier_core::sudo::is_valid_username(eu) {
+        return Err(format!("Invalid effective user name: {eu:?}"));
+    }
+    session.set_elevation_blocking(pier_core::sudo::Elevation::become_user_via_sudo(eu));
+    session.set_elevation_armed_blocking(true);
+    Ok(())
+}
+
 /// Register (or clear) the elevation secret for a host so every
 /// right-side path that runs through this host's session follows the
 /// terminal's elevation. The frontend mirrors its in-memory sudo store
@@ -9433,6 +9456,7 @@ async fn sftp_browse(
     path: Option<String>,
     saved_connection_index: Option<usize>,
     sudo_password: Option<String>,
+    effective_user: Option<String>,
 ) -> Result<SftpBrowseState, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: tauri::State<'_, AppState> = app.state();
@@ -9447,6 +9471,7 @@ async fn sftp_browse(
             path,
             saved_connection_index,
             sudo_password,
+            effective_user,
         )
     })
     .await
@@ -9464,6 +9489,7 @@ fn sftp_browse_impl(
     path: Option<String>,
     saved_connection_index: Option<usize>,
     sudo_password: Option<String>,
+    effective_user: Option<String>,
 ) -> Result<SftpBrowseState, String> {
     let explicit_path = path.filter(|p| !p.trim().is_empty());
 
@@ -9483,6 +9509,7 @@ fn sftp_browse_impl(
             saved_connection_index,
             sudo_password.clone(),
         )?;
+        apply_explicit_effective_user(&session, effective_user.as_deref(), &user)?;
 
         let sftp = match get_or_open_sftp_client(&state, &session, &host, port, &user, &auth_mode) {
             Ok(s) => s,
@@ -9525,8 +9552,8 @@ fn sftp_browse_impl(
                 .unwrap_or_else(|_| target_path.clone())
         };
 
-        let raw_entries = match sftp.list_dir_blocking(&canonical) {
-            Ok(v) => v,
+        let (raw_entries, used_elevated_listing) = match sftp.list_dir_blocking(&canonical) {
+            Ok(v) => (v, false),
             Err(e) => {
                 let raw = e.to_string();
                 // Permission denied is not a stale-session symptom: the
@@ -9537,7 +9564,7 @@ fn sftp_browse_impl(
                 // `sudo find` over an exec channel rather than surfacing
                 // a bare EACCES.
                 if pier_core::sudo::is_permission_denied(&raw) && session.can_elevate_blocking() {
-                    sudo_list_dir(&session, &canonical)?
+                    (sudo_list_dir(&session, &canonical)?, true)
                 } else if attempt == 0 {
                     // list_dir failing on a cached SFTP client most often
                     // means the subsystem went stale (server-side idle
@@ -9552,6 +9579,26 @@ fn sftp_browse_impl(
                 }
             }
         };
+        let raw_entries =
+            if !used_elevated_listing && raw_entries.is_empty() && session.can_elevate_blocking() {
+                // Some SFTP servers/reporting modes expose a protected
+                // directory as an empty iterator instead of EACCES. If the
+                // terminal is already elevated, verify the empty result via
+                // the same elevated listing path before rendering a blank
+                // browser.
+                match sudo_list_dir(&session, &canonical) {
+                    Ok(v) => v,
+                    Err(raw) if pier_core::sudo::is_permission_denied(&raw) => return Err(raw),
+                    Err(raw) => {
+                        warn_elevation(&format!(
+                            "sftp empty-list elevated verification skipped for {canonical}: {raw}"
+                        ));
+                        raw_entries
+                    }
+                }
+            } else {
+                raw_entries
+            };
 
         let entries = raw_entries
             .into_iter()
@@ -16099,6 +16146,31 @@ fn sudo_list_dir(
         ));
         return Err(format!("sudo find exited {code}: {first}"));
     }
+    Ok(parse_sudo_find_listing(dir, &out, |path| {
+        let probe = format!("test -d {} && echo d", shell_single_quote(path));
+        session
+            .exec_with_sudo_blocking(&probe)
+            .map(|(_, o)| o.trim() == "d")
+            .unwrap_or(false)
+    }))
+}
+
+fn sort_sftp_entries(entries: &mut [pier_core::ssh::sftp::RemoteFileEntry]) {
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+}
+
+fn parse_sudo_find_listing<F>(
+    dir: &str,
+    out: &str,
+    mut link_is_dir: F,
+) -> Vec<pier_core::ssh::sftp::RemoteFileEntry>
+where
+    F: FnMut(&str) -> bool,
+{
     let base = dir.trim_end_matches('/');
     let mut entries = Vec::new();
     for line in out.lines() {
@@ -16120,21 +16192,14 @@ fn sudo_list_dir(
             _ => continue,
         };
         let is_link = ty == "l";
+        let path = format!("{base}/{name}");
         // `find %y` reports the link itself as `l`; resolve link targets
         // so a symlink-to-directory is still navigable in the browser.
         let is_dir = if is_link {
-            let probe = format!(
-                "test -d {} && echo d",
-                shell_single_quote(&format!("{base}/{name}"))
-            );
-            session
-                .exec_with_sudo_blocking(&probe)
-                .map(|(_, o)| o.trim() == "d")
-                .unwrap_or(false)
+            link_is_dir(&path)
         } else {
             ty == "d"
         };
-        let path = format!("{base}/{name}");
         entries.push(pier_core::ssh::sftp::RemoteFileEntry {
             name,
             path,
@@ -16147,7 +16212,33 @@ fn sudo_list_dir(
             group: Some(group),
         });
     }
-    Ok(entries)
+    sort_sftp_entries(&mut entries);
+    entries
+}
+
+#[cfg(test)]
+mod sftp_fallback_tests {
+    use super::parse_sudo_find_listing;
+
+    #[test]
+    fn parse_sudo_find_listing_sorts_and_preserves_tab_names() {
+        let out = "\
+f\t12\t640\t1700000001.0000000000\troot\troot\tzeta\tlog\n\
+d\t0\t755\t1700000002.0000000000\troot\troot\talpha\n\
+l\t0\t777\t1700000003.0000000000\troot\troot\tlinkdir\n";
+        let entries = parse_sudo_find_listing("/home/ly", out, |path| path.ends_with("/linkdir"));
+
+        assert_eq!(
+            entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "linkdir", "zeta\tlog"]
+        );
+        assert!(entries[0].is_dir);
+        assert!(entries[1].is_dir);
+        assert!(entries[1].is_link);
+        assert_eq!(entries[2].path, "/home/ly/zeta\tlog");
+        assert_eq!(entries[2].permissions, Some(0o640));
+        assert_eq!(entries[2].modified, Some(1_700_000_001));
+    }
 }
 
 /// Run an SFTP mutation, falling back to an equivalent `sudo` shell

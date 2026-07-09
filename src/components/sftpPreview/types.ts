@@ -10,6 +10,7 @@ export type PreviewSshArgs = {
   keyPath: string;
   savedConnectionIndex?: number | null;
   sudoPassword?: string | null;
+  effectiveUser?: string | null;
 };
 
 /** Common props every viewer subcomponent receives. */

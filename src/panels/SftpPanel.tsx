@@ -385,10 +385,16 @@ function SftpPanelBody({ tab }: Props) {
   const sshTarget = effectiveSshTarget(tab);
   const hasSsh = sshTarget !== null;
   const canUseSsh = isSshTargetReady(sshTarget);
+  const displayUser = sshTarget ? effectiveShellUser(tab, sshTarget) : "";
+  const effectiveUser =
+    sshTarget && displayUser && displayUser !== sshTarget.user ? displayUser : null;
   // Spread-friendly version of the SSH addressing for command calls.
   // Falls back to inert defaults when there's no target — every
   // call site is gated behind `canUseSsh` / `sshTarget` first, so the
-  // empty values never reach the backend.
+  // empty values never reach the backend. `effectiveUser` is the
+  // terminal's current shell identity (root after `sudo -i`); threading
+  // it per call closes the race where the label updates before the
+  // backend host-elevation map does.
   const sftpSudoPassword = useSudoStore((s) =>
     sshTarget
       ? s.passwords[sudoKeyFor({
@@ -411,6 +417,7 @@ function SftpPanelBody({ tab }: Props) {
     keyPath: sshTarget?.keyPath ?? "",
     savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
     sudoPassword: sftpSudoPassword,
+    effectiveUser,
   };
   const sshRequired = t("SSH connection required.");
 
@@ -1404,7 +1411,6 @@ function SftpPanelBody({ tab }: Props) {
   }
 
   const totalItems = state?.entries.length ?? 0;
-  const displayUser = sshTarget ? effectiveShellUser(tab, sshTarget) : "";
   const hostName = sshTarget
     ? `${displayUser}@${sshTarget.host}`
     : t("Not connected");

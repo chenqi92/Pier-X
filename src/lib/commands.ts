@@ -1613,6 +1613,10 @@ export const sftpBrowse = (params: {
    *  backend re-lists via `sudo find`, so the panel can browse
    *  root-only directories after the terminal has `su`'d to root. */
   sudoPassword?: string | null;
+  /** Terminal's current shell user (`root` after `sudo -i`). This keeps
+   *  SFTP's privileged fallback aligned with the label even if the
+   *  backend host-elevation map is still catching up. */
+  effectiveUser?: string | null;
 }) => invoke<SftpBrowseState>("sftp_browse", params);
 
 // ── Markdown ────────────────────────────────────────────────────
@@ -3710,6 +3714,7 @@ type SftpConnArgs = {
   host: string; port: number; user: string; authMode: string; password: string; keyPath: string;
   savedConnectionIndex?: number | null;
   sudoPassword?: string | null;
+  effectiveUser?: string | null;
 };
 
 /** One base64-encoded byte window from {@link sftpReadRange}. */

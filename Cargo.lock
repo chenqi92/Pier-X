@@ -5171,7 +5171,7 @@ dependencies = [
 
 [[package]]
 name = "pier-core"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -5242,7 +5242,7 @@ dependencies = [
 
 [[package]]
 name = "pierx"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "futures-util",
  "pier-core",

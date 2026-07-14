@@ -151,7 +151,7 @@ mod unix {
                     &mut master_fd,
                     std::ptr::null_mut(), // slave name — we don't need it
                     std::ptr::null_mut(), // termios — inherit defaults
-                    &win_size,
+                    std::ptr::addr_of_mut!(win_size), // *mut on macOS/BSD, *const on Linux
                 )
             };
 

@@ -1195,8 +1195,7 @@ fn strip_sed_address(stmt: &str) -> &str {
             None => break,
         }
     }
-    s.trim_start()
-        .trim_start_matches(['!', ' ', '\t'])
+    s.trim_start().trim_start_matches(['!', ' ', '\t'])
 }
 
 /// Gather every inline sed program: the positional script, `-e SCRIPT` /

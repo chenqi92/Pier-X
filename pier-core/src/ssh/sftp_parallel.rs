@@ -590,7 +590,7 @@ where
         }
 
         let mut joinset: JoinSet<Result<u64>> = JoinSet::new();
-        for (client, (start, end)) in clients.into_iter().zip(ranges.into_iter()) {
+        for (client, (start, end)) in clients.into_iter().zip(ranges) {
             let local_path = local_owned.clone();
             let part_path_for_w = part_path.clone();
             let progress = progress.clone();
@@ -788,7 +788,7 @@ where
         }
 
         let mut joinset: JoinSet<Result<u64>> = JoinSet::new();
-        for (client, (start, end)) in clients.into_iter().zip(ranges.into_iter()) {
+        for (client, (start, end)) in clients.into_iter().zip(ranges) {
             let part_path_for_w = part_path.clone();
             let remote_path = remote_owned.clone();
             let progress = progress.clone();

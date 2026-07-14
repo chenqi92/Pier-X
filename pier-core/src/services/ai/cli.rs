@@ -825,7 +825,7 @@ fn claude_local_models(home: &str) -> Vec<String> {
     let mut files = Vec::new();
     collect_recent_jsonl_files(&home.join(".claude/projects"), 5, &mut files);
     collect_recent_jsonl_files(&home.join(".claude/sessions"), 4, &mut files);
-    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files.sort_by_key(|b| std::cmp::Reverse(b.0));
     for (_, path) in files.into_iter().take(160) {
         if let Some(text) = read_tail(&path, 1_048_576) {
             for model in extract_quoted_model_fields(&text) {

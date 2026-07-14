@@ -219,7 +219,7 @@ pub fn collect_snapshot(include_disks: bool) -> ServerSnapshot {
     state.networks.refresh(true);
     let mut total_rx: u64 = 0;
     let mut total_tx: u64 = 0;
-    for (_, data) in state.networks.iter() {
+    for data in state.networks.values() {
         total_rx = total_rx.saturating_add(data.total_received());
         total_tx = total_tx.saturating_add(data.total_transmitted());
     }

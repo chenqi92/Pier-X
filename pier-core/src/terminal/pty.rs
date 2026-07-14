@@ -151,7 +151,7 @@ mod unix {
                     &mut master_fd,
                     std::ptr::null_mut(), // slave name — we don't need it
                     std::ptr::null_mut(), // termios — inherit defaults
-                    &mut win_size,
+                    &win_size,
                 )
             };
 
@@ -950,7 +950,7 @@ mod windows_impl {
             vars.push(("PSREADLINE_VTINPUT".to_string(), "0".to_string()));
         }
 
-        vars.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
+        vars.sort_by_key(|a| a.0.to_ascii_lowercase());
 
         let mut block = Vec::new();
         for (key, value) in vars {

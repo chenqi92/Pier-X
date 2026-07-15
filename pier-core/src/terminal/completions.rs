@@ -919,13 +919,23 @@ mod tests {
             .expect("attach subcommand should be surfaced at command-position");
         assert_eq!(attach.kind, CompletionKind::Subcommand);
         assert_eq!(attach.value, "docker attach");
-        // We should still see the regular binary completion for the
-        // command name itself.
-        assert!(
-            rows.iter().any(|r| r.value == "docker"
-                && matches!(r.kind, CompletionKind::Binary | CompletionKind::Builtin)),
-            "`docker` itself should still be in the list"
-        );
+        // Surfacing subcommands must NOT replace the normal command
+        // completion: `docker` itself should still be listed. That row
+        // comes from `complete_command` (a $PATH / builtin scan), so it
+        // only exists on a machine where `docker` is actually installed —
+        // CI Linux runners have it and exercise this leg. On a box without
+        // docker there is no binary row to preserve, so gate the assertion
+        // on its presence rather than assuming the dev machine has docker.
+        let docker_on_path = complete_command("docker")
+            .iter()
+            .any(|r| r.value == "docker");
+        if docker_on_path {
+            assert!(
+                rows.iter().any(|r| r.value == "docker"
+                    && matches!(r.kind, CompletionKind::Binary | CompletionKind::Builtin)),
+                "`docker` itself should still be in the list"
+            );
+        }
     }
 
     #[test]

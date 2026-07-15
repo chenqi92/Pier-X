@@ -47,6 +47,40 @@ use super::error::{Result, SshError};
 use super::runtime;
 use super::session::SshSession;
 
+/// Supplies the live SSH session a tunnel forwards over, resolved **fresh
+/// for each accepted connection** so the tunnel transparently follows a
+/// session reconnect (idle/keepalive death, laptop sleep, network change,
+/// sshd restart). Without this the accept loop would keep a single
+/// `Arc<Handle>` captured at open time; once that transport died every new
+/// `channel_open_direct_tcpip` failed forever and nothing rebuilt it — the
+/// "database tunnel silently stops working after the box was idle" bug.
+///
+/// Implemented by the Tauri layer against its session cache; kept as a
+/// trait so `pier-core` stays UI-agnostic and never learns about the app
+/// state. The returned `Arc<SshSession>` keeps the russh `Handle` internal
+/// to this module (callers only hand back the pier-core session type).
+pub trait SessionProvider: Send + Sync + 'static {
+    /// The current live session, reconnecting the shared connection if the
+    /// cached one has died. **Blocking** — the accept loop calls it on the
+    /// blocking pool. `Err` means the session couldn't be (re)established;
+    /// the pending connection is dropped and the client sees a refused
+    /// forward, exactly as before the self-heal existed.
+    fn current(&self) -> std::result::Result<Arc<SshSession>, String>;
+}
+
+/// A [`SessionProvider`] pinned to one session — the legacy behavior for
+/// [`SshSession::open_local_forward`], where no reconnection policy is
+/// wired. It never heals (always returns the same session); callers that
+/// want self-healing use [`SshSession::open_local_forward_dynamic`] with a
+/// cache-backed provider.
+struct FixedSession(SshSession);
+
+impl SessionProvider for FixedSession {
+    fn current(&self) -> std::result::Result<Arc<SshSession>, String> {
+        Ok(Arc::new(self.0.clone()))
+    }
+}
+
 /// A live local port forward. Cloning is not supported
 /// — the handle owns its accept loop and its bound listener.
 /// Drop it to stop accepting new connections and release
@@ -68,7 +102,17 @@ impl Tunnel {
         self.local_port
     }
 
-    /// True if the accept loop is still running.
+    /// Whether the tunnel can still forward traffic — i.e. its accept loop
+    /// is still running.
+    ///
+    /// This is deliberately *not* "the underlying SSH transport is alive
+    /// right now": a tunnel opened via [`SshSession::open_local_forward_dynamic`]
+    /// re-resolves a live session on every accepted connection, so a running
+    /// accept loop genuinely means "this tunnel still forwards" even across a
+    /// transport reconnect (idle death, sleep, network change). Reporting a
+    /// momentary transport gap as "dead" would make the frontend drop and
+    /// re-open a tunnel that was about to self-heal. A dropped/aborted accept
+    /// loop is the only real "gone" state.
     pub fn is_alive(&self) -> bool {
         match self.task.as_ref() {
             Some(h) => !h.is_finished(),
@@ -120,19 +164,39 @@ impl SshSession {
         remote_host: &str,
         remote_port: u16,
     ) -> Result<Tunnel> {
+        // Legacy entry point: pin the forward to THIS session (no reconnect
+        // policy). Self-healing callers use `open_local_forward_dynamic`
+        // with a cache-backed provider.
+        let provider: Arc<dyn SessionProvider> = Arc::new(FixedSession(self.clone()));
+        self.open_local_forward_dynamic(local_port, remote_host, remote_port, provider)
+            .await
+    }
+
+    /// Like [`Self::open_local_forward`], but resolves the session to
+    /// forward over from `provider` on **every** accepted connection, so the
+    /// tunnel transparently follows a shared-session reconnect (idle death,
+    /// sleep, network change, sshd restart). The forward binds and runs
+    /// entirely off `provider`; `self` is taken only to mirror the
+    /// method-call ergonomics of the existing call sites.
+    pub async fn open_local_forward_dynamic(
+        &self,
+        local_port: u16,
+        remote_host: &str,
+        remote_port: u16,
+        provider: Arc<dyn SessionProvider>,
+    ) -> Result<Tunnel> {
         let bind_addr = SocketAddr::from(([127, 0, 0, 1], local_port));
         let listener = TcpListener::bind(bind_addr).await.map_err(SshError::Io)?;
         let actual_port = listener.local_addr().map_err(SshError::Io)?.port();
 
         let stop = Arc::new(Notify::new());
-        let handle_clone = Arc::clone(&self.handle_arc());
-        let remote_host_owned = remote_host.to_string();
         let stop_clone = Arc::clone(&stop);
+        let remote_host_owned = remote_host.to_string();
 
         let task = runtime::shared().spawn(async move {
             accept_loop(
                 listener,
-                handle_clone,
+                provider,
                 remote_host_owned,
                 remote_port,
                 stop_clone,
@@ -156,6 +220,22 @@ impl SshSession {
     ) -> Result<Tunnel> {
         runtime::shared().block_on(self.open_local_forward(local_port, remote_host, remote_port))
     }
+
+    /// Sync wrapper for [`Self::open_local_forward_dynamic`].
+    pub fn open_local_forward_dynamic_blocking(
+        &self,
+        local_port: u16,
+        remote_host: &str,
+        remote_port: u16,
+        provider: Arc<dyn SessionProvider>,
+    ) -> Result<Tunnel> {
+        runtime::shared().block_on(self.open_local_forward_dynamic(
+            local_port,
+            remote_host,
+            remote_port,
+            provider,
+        ))
+    }
 }
 
 /// The accept loop: takes one connection at a time, spawns
@@ -163,7 +243,7 @@ impl SshSession {
 /// Exits cleanly when `stop` fires.
 async fn accept_loop(
     listener: TcpListener,
-    handle: Arc<russh::client::Handle<super::session::ClientHandler>>,
+    provider: Arc<dyn SessionProvider>,
     remote_host: String,
     remote_port: u16,
     stop: Arc<Notify>,
@@ -178,15 +258,15 @@ async fn accept_loop(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((tcp_stream, peer)) => {
-                        let handle = Arc::clone(&handle);
+                        let provider = Arc::clone(&provider);
                         let remote_host = remote_host.clone();
-                        // Open the direct-tcpip channel and
-                        // spawn the bidirectional bridge.
+                        // Resolve a live session, open the direct-tcpip
+                        // channel and spawn the bidirectional bridge.
                         tokio::spawn(async move {
                             if let Err(e) = bridge_connection(
                                 tcp_stream,
                                 peer,
-                                handle,
+                                provider,
                                 remote_host,
                                 remote_port,
                             )
@@ -217,14 +297,29 @@ async fn accept_loop(
 async fn bridge_connection(
     mut tcp_stream: tokio::net::TcpStream,
     peer: SocketAddr,
-    handle: Arc<russh::client::Handle<super::session::ClientHandler>>,
+    provider: Arc<dyn SessionProvider>,
     remote_host: String,
     remote_port: u16,
 ) -> Result<()> {
+    // Resolve the session to forward over FOR THIS CONNECTION. The provider
+    // returns the cached shared session, reconnecting it if the transport
+    // died since the tunnel opened — this is what makes a DB tunnel survive
+    // an idle/sleep/network-change death instead of forwarding forever over
+    // a corpse. `current()` is blocking (it may run a full SSH handshake),
+    // so it runs on the blocking pool, not this runtime worker.
+    let resolve = {
+        let provider = Arc::clone(&provider);
+        tokio::task::spawn_blocking(move || provider.current())
+            .await
+            .map_err(|e| SshError::InvalidConfig(format!("tunnel session join error: {e}")))?
+    };
+    let session = resolve.map_err(SshError::InvalidConfig)?;
+
     // "originator" metadata the SSH spec asks us to send with
     // the channel-open request. Not actually used by most
     // servers but we fill it in honestly.
-    let channel = handle
+    let channel = session
+        .handle_arc()
         .channel_open_direct_tcpip(
             remote_host,
             remote_port as u32,

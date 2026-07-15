@@ -89,6 +89,20 @@ pub struct SshSession {
     /// password (rather than failing the operation). Set by the Tauri
     /// layer from the terminal's observed effective user.
     elevation_armed: Arc<RwLock<bool>>,
+    /// Sticky hint: this session's captured secret is the *target user's own*
+    /// password (the operator ran `su root` / `su - user` in the terminal),
+    /// so `sudo -S` can never authorize with it. Set once
+    /// [`Self::su_fallback_if_auth_failed`] confirms `su` authorized, and
+    /// thereafter [`Self::exec_as_effective`] skips the doomed `sudo` attempt
+    /// and goes straight to `su`. This matters because every wasted `sudo`
+    /// exec opens (and holds) an extra channel; under a `su root` terminal
+    /// with a polling ServerMonitor + concurrent panels, the doubled channel
+    /// churn hits the server's `MaxSessions` cap and forces the shared
+    /// session to evict + reconnect — the "right side keeps disconnecting"
+    /// symptom. Deliberately never cleared: on this session the secret's
+    /// identity doesn't change, and when the terminal de-elevates the Tauri
+    /// layer disarms the session (so `exec_as_effective` isn't reached).
+    su_preferred: Arc<RwLock<bool>>,
 }
 
 // Manual Debug — the russh Handle itself isn't Debug, and even
@@ -277,6 +291,7 @@ impl SshSession {
             sudo_password: Arc::new(RwLock::new(None)),
             elevation: Arc::new(RwLock::new(crate::sudo::Elevation::Sudo)),
             elevation_armed: Arc::new(RwLock::new(false)),
+            su_preferred: Arc::new(RwLock::new(false)),
         };
 
         // Apply the same connect timeout to authentication. Without
@@ -1324,6 +1339,13 @@ impl SshSession {
         match elevation {
             Elevation::None => self.exec_command(command).await,
             Elevation::Sudo => {
+                // Once we've learned the secret is really the target user's
+                // own password (terminal `su root`), skip the `sudo -S` that
+                // can only fail auth + open a wasted channel; go straight to
+                // `su`. See `su_preferred`.
+                if *self.su_preferred.read().await {
+                    return self.exec_su_pty("root", secret.unwrap_or(""), command).await;
+                }
                 let (wrapped, stdin) = crate::sudo::wrap_command(command, secret.unwrap_or(""));
                 let res = self.exec_command_with_stdin(&wrapped, &stdin).await?;
                 // The secret may actually be a *root* password (operator
@@ -1334,6 +1356,11 @@ impl SshSession {
                     .await
             }
             Elevation::SudoUser { target_user } => {
+                if *self.su_preferred.read().await {
+                    return self
+                        .exec_su_pty(target_user, secret.unwrap_or(""), command)
+                        .await;
+                }
                 let (wrapped, stdin) =
                     crate::sudo::wrap_command_sudo_u(command, target_user, secret.unwrap_or(""));
                 let res = self.exec_command_with_stdin(&wrapped, &stdin).await?;
@@ -1385,6 +1412,13 @@ impl SshSession {
                 su_res.0,
                 su_res.1.len()
             );
+            // If `su` authorized (its output carries no auth-failure
+            // signature), remember it so subsequent ops on this session skip
+            // the doomed `sudo` attempt. Guard on the failure signature so a
+            // wrong password doesn't wrongly pin us to `su`.
+            if !crate::sudo::is_elevation_auth_failure(&su_res.1) {
+                *self.su_preferred.write().await = true;
+            }
             return Ok(su_res);
         }
         Ok(sudo_result)

@@ -1276,7 +1276,23 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
         setScrollbackOffset(next.scrollbackLen);
       }
       setSnapshotViewOffset(Math.min(scrollbackOffset, next.scrollbackLen));
-      const shellUser = inferPromptUser(next) || next.currentUser.trim();
+      // Derive the interactive shell's effective user WITHOUT flapping.
+      // `inferPromptUser` reads the live prompt line and is authoritative
+      // when it matches. When it can't (mid-command output it returns ""),
+      // HOLD the last confident reading — do NOT fall back to
+      // `next.currentUser`. The OSC 1337 user is only refreshed by the
+      // shell-integration hook, which a `su` / `sudo -i` child shell does
+      // not inherit (local or remote), so after an elevation it freezes at
+      // the pre-elevation login user. Falling back to it here toggled the
+      // effective user root↔login on every output frame, which re-armed /
+      // disarmed the right-side elevation each snapshot and made the panels
+      // flap. Ordering `last || currentUser` keeps the stale OSC value out
+      // of the way; `currentUser` only seeds the very first reading (before
+      // any prompt has been parsed). A real `exit` redraws a login prompt
+      // that `inferPromptUser` reads, so de-elevation still works.
+      const inferredUser = inferPromptUser(next);
+      const shellUser =
+        inferredUser || lastShellUserRef.current || next.currentUser.trim();
       if (shellUser && shellUser !== lastShellUserRef.current) {
         lastShellUserRef.current = shellUser;
         updateTab(tab.id, { currentShellUser: shellUser });

@@ -1616,7 +1616,7 @@ fn open_git_client(path: Option<String>) -> Result<GitClient, String> {
 fn default_shell() -> String {
     #[cfg(windows)]
     {
-        return String::from("powershell.exe");
+        String::from("powershell.exe")
     }
 
     #[cfg(not(windows))]
@@ -5579,9 +5579,8 @@ async fn ssh_tunnel_open(
     saved_connection_index: Option<usize>,
 ) -> Result<TunnelInfoView, String> {
     run_blocking(move || {
-        let state: tauri::State<'_, AppState> = app.state();
         ssh_tunnel_open_impl(
-            state,
+            app,
             host,
             port,
             user,
@@ -5597,8 +5596,57 @@ async fn ssh_tunnel_open(
     .await
 }
 
+/// Session source for a self-healing DB tunnel. Resolves the cached shared
+/// SSH session for a target and, if the transport has died (idle/keepalive
+/// timeout, laptop sleep, network change, sshd restart), evicts + reopens it
+/// — mirroring [`run_with_session_retry`]'s reconnect policy. Handed to
+/// pier-core's `open_local_forward_dynamic` so the tunnel's accept loop
+/// forwards over a *live* session on every connection instead of a corpse.
+/// Holds an [`tauri::AppHandle`] (not a `State`) so it can re-acquire
+/// `AppState` off the IPC path — same pattern as [`run_blocking`].
+struct CachedSessionProvider {
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved: Option<usize>,
+}
+
+impl pier_core::ssh::tunnel::SessionProvider for CachedSessionProvider {
+    fn current(&self) -> Result<Arc<SshSession>, String> {
+        let state: tauri::State<'_, AppState> = self.app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &self.host,
+            self.port,
+            &self.user,
+            &self.auth_mode,
+            &self.password,
+            &self.key_path,
+            self.saved,
+        )?;
+        if session.is_closed() {
+            evict_ssh_session(&state, &self.host, self.port, &self.user, &self.auth_mode);
+            return get_or_open_ssh_session(
+                &state,
+                &self.host,
+                self.port,
+                &self.user,
+                &self.auth_mode,
+                &self.password,
+                &self.key_path,
+                self.saved,
+            );
+        }
+        Ok(session)
+    }
+}
+
 fn ssh_tunnel_open_impl(
-    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
     host: String,
     port: u16,
     user: String,
@@ -5610,6 +5658,7 @@ fn ssh_tunnel_open_impl(
     local_port: Option<u16>,
     saved_connection_index: Option<usize>,
 ) -> Result<TunnelInfoView, String> {
+    let state: tauri::State<'_, AppState> = app.state();
     let resolved_remote_host = if remote_host.trim().is_empty() {
         String::from("127.0.0.1")
     } else {
@@ -5619,8 +5668,25 @@ fn ssh_tunnel_open_impl(
         return Err(String::from("Tunnel remote port must not be empty."));
     }
 
+    // The tunnel forwards over a session it resolves fresh on every accepted
+    // connection through this provider, so it transparently survives an
+    // idle/sleep/network-change reconnect instead of forwarding over a dead
+    // transport forever (the "DB tunnel silently stops working" bug).
+    let provider: Arc<dyn pier_core::ssh::tunnel::SessionProvider> =
+        Arc::new(CachedSessionProvider {
+            app: app.clone(),
+            host: host.clone(),
+            port,
+            user: user.clone(),
+            auth_mode: auth_mode.clone(),
+            password: password.clone(),
+            key_path: key_path.clone(),
+            saved: saved_connection_index,
+        });
+
     // Reuse the cached SSH session (seeded by the terminal) so a DB
-    // panel opening its first tunnel doesn't re-handshake.
+    // panel opening its first tunnel doesn't re-handshake, and fail fast on
+    // bad credentials before we hand back a tunnel.
     let tunnel = run_with_session_retry(
         &state,
         &host,
@@ -5632,10 +5698,11 @@ fn ssh_tunnel_open_impl(
         saved_connection_index,
         |session| {
             session
-                .open_local_forward_blocking(
+                .open_local_forward_dynamic_blocking(
                     local_port.unwrap_or(0),
                     &resolved_remote_host,
                     remote_port,
+                    Arc::clone(&provider),
                 )
                 .map_err(|error| error.to_string())
         },
@@ -13497,7 +13564,7 @@ fn software_history_list(
         })
         .filter(|e| e.ts >= cutoff)
         .collect();
-    all.sort_by(|a, b| b.ts.cmp(&a.ts));
+    all.sort_by_key(|b| std::cmp::Reverse(b.ts));
     all.truncate(cap);
     all
 }

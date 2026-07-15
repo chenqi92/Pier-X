@@ -248,6 +248,14 @@ async fn accept_loop(
     remote_port: u16,
     stop: Arc<Notify>,
 ) {
+    // Bail out of a *permanently* broken listener instead of spinning
+    // forever. A transient `accept()` error (e.g. EMFILE while the process is
+    // briefly out of file descriptors) recovers once fds free up, so we back
+    // off and retry; but if it keeps failing we stop the loop so the tunnel
+    // reports dead (`is_alive` = false) and the frontend can reopen it,
+    // rather than logging 20×/s until process exit.
+    const MAX_CONSECUTIVE_ACCEPT_ERRORS: u32 = 100;
+    let mut consecutive_errors: u32 = 0;
     loop {
         tokio::select! {
             biased;
@@ -258,6 +266,7 @@ async fn accept_loop(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((tcp_stream, peer)) => {
+                        consecutive_errors = 0;
                         let provider = Arc::clone(&provider);
                         let remote_host = remote_host.clone();
                         // Resolve a live session, open the direct-tcpip
@@ -277,12 +286,19 @@ async fn accept_loop(
                         });
                     }
                     Err(e) => {
-                        log::warn!("tunnel listener accept error: {e}");
-                        // Keep the loop alive unless something
-                        // catastrophic happened. If the listener
-                        // FD went bad we'd hit a permanent error
-                        // here — in that case sleeping briefly
-                        // prevents a tight spin.
+                        consecutive_errors += 1;
+                        log::warn!(
+                            "tunnel listener accept error ({consecutive_errors}): {e}"
+                        );
+                        if consecutive_errors >= MAX_CONSECUTIVE_ACCEPT_ERRORS {
+                            log::error!(
+                                "tunnel listener accept failed {consecutive_errors}× in a row; \
+                                 stopping accept loop (tunnel will report dead)"
+                            );
+                            return;
+                        }
+                        // Transient error (e.g. EMFILE) — back off briefly to
+                        // avoid a tight spin, then retry.
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     }
                 }

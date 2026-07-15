@@ -67,6 +67,10 @@ export async function syncTunnelState(
   try {
     const info = await cmd.sshTunnelInfo(tunnelId);
     if (!info.alive) {
+      // Dead tunnel (its accept loop exited): close the backend
+      // ManagedTunnel before dropping our reference, otherwise its listener
+      // + map entry leak until process exit — nobody else holds the id.
+      await cmd.sshTunnelClose(tunnelId).catch(() => {});
       updateTab(tab.id, tunnelPatch(slot, null));
       return null;
     }
@@ -75,7 +79,10 @@ export async function syncTunnelState(
     }
     return info;
   } catch {
-    updateTab(tab.id, tunnelPatch(slot, null));
+    // A transient IPC error must NOT make us forget a possibly-live tunnel:
+    // clearing the slot here would orphan the backend ManagedTunnel (it keeps
+    // running, but the frontend no longer has its id to close it). Keep the
+    // slot and let the next sync / operation re-check or reopen.
     return null;
   }
 }

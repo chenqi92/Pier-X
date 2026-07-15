@@ -318,16 +318,33 @@ async fn bridge_connection(
     // "originator" metadata the SSH spec asks us to send with
     // the channel-open request. Not actually used by most
     // servers but we fill it in honestly.
-    let channel = session
-        .handle_arc()
-        .channel_open_direct_tcpip(
-            remote_host,
-            remote_port as u32,
-            peer.ip().to_string(),
-            peer.port() as u32,
-        )
-        .await
-        .map_err(SshError::Protocol)?;
+    //
+    // Bounded: if the SSH server accepts the channel-open request but the
+    // internal target (`remote_host:remote_port`) is firewalled / black-holed,
+    // `channel_open_direct_tcpip` would otherwise hang until the SERVER's own
+    // TCP connect timeout (~2 min on Linux), during which this bridge task and
+    // the local client both stall. Mirrors the `timeout_secs` guard on
+    // `dial_direct_tcpip_blocking`.
+    const DIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let handle = session.handle_arc();
+    let open = handle.channel_open_direct_tcpip(
+        remote_host.clone(),
+        remote_port as u32,
+        peer.ip().to_string(),
+        peer.port() as u32,
+    );
+    let channel = match tokio::time::timeout(DIAL_TIMEOUT, open).await {
+        Ok(res) => res.map_err(SshError::Protocol)?,
+        Err(_) => {
+            return Err(SshError::InvalidConfig(format!(
+                "tunnel: opening a forward to {}:{} timed out after {}s \
+                 (remote target unreachable or firewalled?)",
+                remote_host,
+                remote_port,
+                DIAL_TIMEOUT.as_secs()
+            )));
+        }
+    };
 
     // Convert the russh channel into an AsyncRead+AsyncWrite
     // adapter, then run tokio's copy_bidirectional to
@@ -347,6 +364,25 @@ async fn bridge_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Reproduces the tunnel self-heal nesting: a task on the shared runtime
+    // (accept_loop) offloads the blocking session resolution (provider.current
+    // → get_or_open_ssh_session → connect_blocking) to spawn_blocking, and that
+    // blocking closure calls `runtime::shared().block_on(...)`. If tokio treated
+    // the spawn_blocking thread as an async-execution context, this would panic
+    // with "Cannot start a runtime from within a runtime" — on the *reconnect*
+    // path only, i.e. in production. This test proves it does not.
+    #[test]
+    fn spawn_blocking_nested_block_on_shared_runtime_ok() {
+        let v = runtime::shared().block_on(async {
+            let jh = tokio::task::spawn_blocking(|| {
+                // Stand-in for connect_blocking's `runtime::shared().block_on`.
+                runtime::shared().block_on(async { 40 + 2 })
+            });
+            jh.await.unwrap()
+        });
+        assert_eq!(v, 42);
+    }
 
     #[test]
     fn tunnel_drop_marks_not_alive() {

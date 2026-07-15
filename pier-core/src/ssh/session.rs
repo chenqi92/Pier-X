@@ -89,19 +89,26 @@ pub struct SshSession {
     /// password (rather than failing the operation). Set by the Tauri
     /// layer from the terminal's observed effective user.
     elevation_armed: Arc<RwLock<bool>>,
-    /// Sticky hint: this session's captured secret is the *target user's own*
-    /// password (the operator ran `su root` / `su - user` in the terminal),
-    /// so `sudo -S` can never authorize with it. Set once
-    /// [`Self::su_fallback_if_auth_failed`] confirms `su` authorized, and
-    /// thereafter [`Self::exec_as_effective`] skips the doomed `sudo` attempt
-    /// and goes straight to `su`. This matters because every wasted `sudo`
-    /// exec opens (and holds) an extra channel; under a `su root` terminal
-    /// with a polling ServerMonitor + concurrent panels, the doubled channel
-    /// churn hits the server's `MaxSessions` cap and forces the shared
+    /// Sticky hint scoped to the **session-slot** elevation path
+    /// ([`Self::exec_with_sudo`]): the slot's captured secret is the target
+    /// user's own password (the operator ran `su root` / `su - user` in the
+    /// terminal), so `sudo -S` can never authorize with it. Set once
+    /// [`Self::su_fallback_if_auth_failed`] confirms `su` authorized on the
+    /// slot path, and thereafter the slot path skips the doomed `sudo`
+    /// attempt and goes straight to `su`. This matters because every wasted
+    /// `sudo` exec opens (and holds) an extra channel; under a `su root`
+    /// terminal with a polling ServerMonitor + concurrent panels, the doubled
+    /// channel churn hits the server's `MaxSessions` cap and forces the shared
     /// session to evict + reconnect — the "right side keeps disconnecting"
-    /// symptom. Deliberately never cleared: on this session the secret's
-    /// identity doesn't change, and when the terminal de-elevates the Tauri
-    /// layer disarms the session (so `exec_as_effective` isn't reached).
+    /// symptom.
+    ///
+    /// Only the slot path reads or writes this (per-call
+    /// [`Self::exec_as_effective`] passes `slot_managed = false`), so a
+    /// slot-learned `su` preference can never hijack a per-call DB CLI's own
+    /// `(target, secret)`. Cleared by [`Self::set_sudo_password`] whenever the
+    /// slot secret changes, so a later password-prompting `sudo` (login
+    /// user's own password) re-probes `sudo` instead of misusing the old
+    /// secret against `su`.
     su_preferred: Arc<RwLock<bool>>,
 }
 
@@ -1131,7 +1138,22 @@ impl SshSession {
     /// terminal / SFTP code paths keep running as the SSH user.
     pub async fn set_sudo_password(&self, password: Option<String>) {
         let mut slot = self.sudo_password.write().await;
+        // A *changed* secret invalidates the learned `su_preferred` method:
+        // the new password may be the login user's own (so `sudo -S` works)
+        // rather than the target user's (so `su` is needed). Re-probe
+        // sudo-then-su on the next op instead of sticking to a `su` learned
+        // under a previous secret. Without this, `su root` (root's password)
+        // followed by a password-prompting `sudo` (the login user's own
+        // password) on the same cached session would keep piping the login
+        // user's password to `su root` and fail every elevated op.
+        // Re-applying the SAME secret (apply_host_elevation runs on every
+        // get_or_open) is not a change, so the optimization survives.
+        let changed = *slot != password;
         *slot = password;
+        drop(slot);
+        if changed {
+            *self.su_preferred.write().await = false;
+        }
     }
 
     /// Sync wrapper for [`Self::set_sudo_password`].
@@ -1264,7 +1286,8 @@ impl SshSession {
                 // terminal's effective user). Audit logging lives in
                 // `exec_as_effective`.
                 let elevation = { self.elevation.read().await.clone() };
-                self.exec_as_effective(command, &elevation, Some(&pw)).await
+                self.exec_as_effective_impl(command, &elevation, Some(&pw), true)
+                    .await
             }
             _ => {
                 // No captured secret. If the host is *armed* (the operator
@@ -1328,6 +1351,32 @@ impl SshSession {
         elevation: &crate::sudo::Elevation,
         secret: Option<&str>,
     ) -> Result<(i32, String)> {
+        // Per-call callers (DB socket CLIs running as `postgres` / `mysql`,
+        // the effective-user preflight) must NOT be influenced by the
+        // session-wide `su_preferred` hint: it is learned from the *slot*
+        // elevation (a terminal `su root`) and says nothing about a
+        // different (target, secret) a per-call caller supplies. Passing
+        // `slot_managed = false` keeps this primitive stateless w.r.t.
+        // `su_preferred` — it always does a fresh sudo→su fallback for the
+        // exact elevation it was handed.
+        self.exec_as_effective_impl(command, elevation, secret, false)
+            .await
+    }
+
+    /// Shared body of [`Self::exec_as_effective`]. `slot_managed` is `true`
+    /// only for the session-slot path ([`Self::exec_with_sudo`]): there the
+    /// elevation + secret come from the session's slot (which tracks the
+    /// terminal's elevation and resets `su_preferred` on any secret change),
+    /// so consulting and updating `su_preferred` is sound. The per-call
+    /// public entry point passes `false` so a slot-learned `su` preference
+    /// can never hijack a per-call caller's own (target, secret).
+    async fn exec_as_effective_impl(
+        &self,
+        command: &str,
+        elevation: &crate::sudo::Elevation,
+        secret: Option<&str>,
+        slot_managed: bool,
+    ) -> Result<(i32, String)> {
         use crate::sudo::Elevation;
         if !matches!(elevation, Elevation::None) {
             // Audit: log the elevation method + first 80 chars of the
@@ -1339,11 +1388,11 @@ impl SshSession {
         match elevation {
             Elevation::None => self.exec_command(command).await,
             Elevation::Sudo => {
-                // Once we've learned the secret is really the target user's
-                // own password (terminal `su root`), skip the `sudo -S` that
-                // can only fail auth + open a wasted channel; go straight to
-                // `su`. See `su_preferred`.
-                if *self.su_preferred.read().await {
+                // Once the slot path has learned the slot secret is really the
+                // target user's own password (terminal `su root`), skip the
+                // `sudo -S` that can only fail auth + open a wasted channel.
+                // Gated on `slot_managed` so per-call callers never inherit it.
+                if slot_managed && *self.su_preferred.read().await {
                     return self.exec_su_pty("root", secret.unwrap_or(""), command).await;
                 }
                 let (wrapped, stdin) = crate::sudo::wrap_command(command, secret.unwrap_or(""));
@@ -1352,11 +1401,11 @@ impl SshSession {
                 // `su`'d in the terminal), which `sudo` rejects. Fall back
                 // to `su - root` over a PTY with the same secret so the
                 // panel still follows the terminal's elevation.
-                self.su_fallback_if_auth_failed(res, "root", command, secret)
+                self.su_fallback_if_auth_failed(res, "root", command, secret, slot_managed)
                     .await
             }
             Elevation::SudoUser { target_user } => {
-                if *self.su_preferred.read().await {
+                if slot_managed && *self.su_preferred.read().await {
                     return self
                         .exec_su_pty(target_user, secret.unwrap_or(""), command)
                         .await;
@@ -1364,7 +1413,7 @@ impl SshSession {
                 let (wrapped, stdin) =
                     crate::sudo::wrap_command_sudo_u(command, target_user, secret.unwrap_or(""));
                 let res = self.exec_command_with_stdin(&wrapped, &stdin).await?;
-                self.su_fallback_if_auth_failed(res, target_user, command, secret)
+                self.su_fallback_if_auth_failed(res, target_user, command, secret, slot_managed)
                     .await
             }
             Elevation::Su { target_user } => {
@@ -1386,6 +1435,7 @@ impl SshSession {
         target_user: &str,
         command: &str,
         secret: Option<&str>,
+        slot_managed: bool,
     ) -> Result<(i32, String)> {
         let (code, ref out) = sudo_result;
         let preview: String = out.chars().take(160).collect();
@@ -1393,16 +1443,20 @@ impl SshSession {
             "[audit] sudo attempt exit={code} out_len={} out_preview={preview:?}",
             out.len()
         );
-        // Fall back to `su` when sudo failed to *authorize* — either an
-        // explicit auth-failure string, or a non-zero exit with no output
-        // (some sudo configs reject silently). A non-zero exit *with*
-        // real output is the elevated command itself failing → don't
-        // re-run it via su (avoids double-executing a mutation).
+        // Fall back to `su` ONLY when sudo explicitly reported an
+        // authorization failure (wrong password / not a sudoer / needs a
+        // tty). `LC_ALL=C` in the sudo wrappers keeps those messages ASCII so
+        // `is_elevation_auth_failure` matches on any locale. We deliberately
+        // do NOT treat a bare "non-zero exit with empty output" as an auth
+        // failure: sudo authorized and the *command itself* exited non-zero
+        // silently (`test -f`, `grep -q`, `kill -0`, `systemctl is-active`,
+        // any `exit 1`). Re-running such a command under `su` would either
+        // double-execute a mutation or overwrite the command's real exit code
+        // with su's output.
         let looks_auth = crate::sudo::is_elevation_auth_failure(out);
-        let silent = code != 0 && out.trim().is_empty();
-        if code != 0 && (looks_auth || silent) {
+        if code != 0 && looks_auth {
             log::info!(
-                "[audit] sudo did not authorize (auth={looks_auth} silent={silent}), falling back to su - {target_user}"
+                "[audit] sudo did not authorize (auth={looks_auth}), falling back to su - {target_user}"
             );
             let su_res = self
                 .exec_su_pty(target_user, secret.unwrap_or(""), command)
@@ -1413,10 +1467,12 @@ impl SshSession {
                 su_res.1.len()
             );
             // If `su` authorized (its output carries no auth-failure
-            // signature), remember it so subsequent ops on this session skip
-            // the doomed `sudo` attempt. Guard on the failure signature so a
+            // signature), remember it so subsequent *slot-path* ops on this
+            // session skip the doomed `sudo` attempt. Only the slot path may
+            // learn this — a per-call caller's success says nothing about the
+            // slot's (target, secret). Guard on the failure signature so a
             // wrong password doesn't wrongly pin us to `su`.
-            if !crate::sudo::is_elevation_auth_failure(&su_res.1) {
+            if slot_managed && !crate::sudo::is_elevation_auth_failure(&su_res.1) {
                 *self.su_preferred.write().await = true;
             }
             return Ok(su_res);

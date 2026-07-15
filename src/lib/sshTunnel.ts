@@ -184,6 +184,17 @@ async function ensureTunnelSlotNow(params: EnsureTunnelParams) {
     localPort: null,
     savedConnectionIndex: target.savedConnectionIndex,
   });
+  // If the tab was closed while the open was in flight, `closeTabTunnels` ran
+  // before this tunnel existed — nobody will ever close it, so the backend
+  // ManagedTunnel + its local port would leak. Detect the vanished tab and
+  // close the just-opened tunnel instead of writing to a dead tab record.
+  const tabStillOpen = useTabStore
+    .getState()
+    .tabs.some((other) => other.id === tab.id);
+  if (!tabStillOpen) {
+    await cmd.sshTunnelClose(info.tunnelId).catch(() => {});
+    return info;
+  }
   updateTab(tab.id, tunnelPatch(slot, info));
   return info;
 }

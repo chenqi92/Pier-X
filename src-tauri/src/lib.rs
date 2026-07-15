@@ -2556,7 +2556,22 @@ fn get_or_open_ssh_session_inner(
     // into the cache, and AutoChain now finds it here.
     let cred_target = TargetKey::new(host, port, user);
     let (effective_password, effective_key_path, effective_passphrase) = {
-        let cached = state.ssh_cred_cache.get(&cred_target);
+        // The process cred cache backfills a password/key the frontend didn't
+        // pass — but ONLY for DIRECT (param) connections. A saved connection
+        // is authoritative on its own: its keychain entry (or on-disk
+        // `DirectPassword` fallback when the keyring is unavailable) already
+        // carries auth. Backfilling here would let a cred-cache password
+        // captured *before* a password rotation override the rotated saved
+        // value (`build_ssh_config_saved_or_params` treats any non-empty
+        // password as an explicit override), causing `AuthRejected` until the
+        // 30-min TTL expires. Nested (`ssh user@inner`) targets are direct
+        // (saved_index = None), so they still get the captured-password
+        // backfill they rely on.
+        let cached = if saved_index.is_none() {
+            state.ssh_cred_cache.get(&cred_target)
+        } else {
+            None
+        };
         let pw = if password.is_empty() {
             cached
                 .as_ref()
@@ -2865,6 +2880,50 @@ fn evict_ssh_session(
     }
 }
 
+/// Like [`evict_ssh_session`] but only removes the cached session when it is
+/// still *the same instance* the caller was handed (`Arc::ptr_eq`). Closes a
+/// reconnect race: two ops can both observe a dead session `S1`; op A evicts
+/// `S1` and singleflight-rebuilds `S2` into the cache; without the identity
+/// check, op B (still holding `S1`) would then blindly evict A's fresh `S2`
+/// and rebuild a redundant `S3`, churning the shared cache that SFTP / Docker
+/// / Monitor also use. Amplified by the tunnel self-heal, which resolves a
+/// session on *every* accepted connection (a busy DB pool = many/sec).
+fn evict_ssh_session_if_ptr(
+    state: &tauri::State<'_, AppState>,
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_mode: &str,
+    seen: &Arc<SshSession>,
+) {
+    let key = sftp_cache_key(host, port, user, auth_mode);
+    let mut evicted = false;
+    if let Ok(mut cache) = state.sftp_sessions.lock() {
+        if let Some(cur) = cache.get(&key) {
+            if Arc::ptr_eq(cur, seen) {
+                cache.remove(&key);
+                evicted = true;
+            }
+        }
+    }
+    // Cache already moved on to a different (fresh) session — leave it and its
+    // sibling SFTP caches untouched.
+    if !evicted {
+        return;
+    }
+    pier_core::logging::write_event(
+        "WARN",
+        "ssh.cache",
+        &format!("evicted cached session {} (identity-checked)", key),
+    );
+    if let Ok(mut cache) = state.sftp_clients.lock() {
+        cache.remove(&key);
+    }
+    if let Ok(mut cache) = state.sftp_home_cache.lock() {
+        cache.remove(&key);
+    }
+}
+
 /// Evict cached SSH/SFTP resources for hosts that no longer have any
 /// open tab. The frontend passes `user@host:port` for every SSH
 /// target still referenced by an open tab (primary + nested) after a
@@ -2973,18 +3032,24 @@ fn get_or_open_sftp_client(
 /// a missing path, a denied permission) so an ordinary command error never
 /// churns the connection sibling tabs share.
 fn error_warrants_reconnect(message: &str) -> bool {
+    // Only match errors from our OWN transport/channel layer that ALSO
+    // guarantee the operation never reached the server — so retrying after a
+    // reconnect can't double-execute a mutation. Deliberately does NOT match
+    // generic network phrases ("connection reset", "broken pipe", "unexpected
+    // eof", "disconnected", "connection closed", …): pier-core services fold
+    // the remote command's stdout/stderr into their error strings, so a
+    // healthy session running e.g. `docker pull` / `curl` that merely PRINTS
+    // "unexpected EOF" or "connection reset by peer" would otherwise be
+    // misread as a dead transport — tearing down the shared session and
+    // re-running the (possibly already-applied) command (docker run/restart,
+    // package install). Genuine transport death is caught by
+    // `session.is_closed()` at the call site, with at most a one-op lag that
+    // self-heals on the next call.
     let m = message.to_lowercase();
-    m.contains("ssh channel closed")
-        || m.contains("session is no longer alive")
-        || m.contains("broken pipe")
-        || m.contains("connection reset")
-        || m.contains("connection closed")
-        || m.contains("not connected")
-        || m.contains("disconnected")
-        || m.contains("unexpected eof")
-        || m.contains("ssh connect") // connect failed / connect timeout
-        || m.contains("keepalive")
-        || m.contains("failed to open channel") // MaxSessions / channel refusal
+    m.contains("failed to open channel") // MaxSessions / channel refusal — op never ran
+        || m.contains("ssh channel closed") // pier-core channel-dead marker
+        || m.contains("session is no longer alive") // pier-core session-dead marker
+        || m.contains("ssh connect") // connect failed / connect timeout — never connected
 }
 
 /// Run a blocking command body on tokio's blocking pool so the
@@ -3071,7 +3136,7 @@ where
                         user, host, port, e
                     ),
                 );
-                evict_ssh_session(state, host, port, user, auth_mode);
+                evict_ssh_session_if_ptr(state, host, port, user, auth_mode, &session);
                 attempt += 1;
                 continue;
             }
@@ -3132,7 +3197,7 @@ where
                         user, host, port, e
                     ),
                 );
-                evict_ssh_session(state, host, port, user, auth_mode);
+                evict_ssh_session_if_ptr(state, host, port, user, auth_mode, &session);
                 attempt += 1;
                 continue;
             }
@@ -5629,7 +5694,7 @@ impl pier_core::ssh::tunnel::SessionProvider for CachedSessionProvider {
             self.saved,
         )?;
         if session.is_closed() {
-            evict_ssh_session(&state, &self.host, self.port, &self.user, &self.auth_mode);
+            evict_ssh_session_if_ptr(&state, &self.host, self.port, &self.user, &self.auth_mode, &session);
             return get_or_open_ssh_session(
                 &state,
                 &self.host,

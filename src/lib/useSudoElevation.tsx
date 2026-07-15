@@ -4,6 +4,7 @@ import SudoPasswordDialog from "../components/SudoPasswordDialog";
 import { sshElevationPreflight } from "./commands";
 import { useI18n } from "../i18n/useI18n";
 import { sudoKeyFor, useSudoStore } from "../stores/useSudoStore";
+import { useSettingsStore } from "../stores/useSettingsStore";
 import { effectiveShellUser, effectiveSshTarget, type TabState } from "./types";
 
 /** Best-effort "this failed because the SSH login user lacks privilege"
@@ -87,7 +88,16 @@ export function useSudoElevation(tab: TabState | null | undefined): SudoElevatio
 
   const loginUser = sshTarget?.user ?? "";
   const shellUser = tab ? effectiveShellUser(tab, sshTarget) : "";
-  const effectiveUser = shellUser && shellUser !== loginUser ? shellUser : null;
+  // Gate the "become the terminal's effective user" derivation on the
+  // "Follow terminal elevation" setting. Without this, turning the setting
+  // OFF still leaves `effectiveUser = root` flowing into every panel's
+  // per-call `getElevationArgs`, so on a NOPASSWD host the right side keeps
+  // running as root even though the user opted out — the backend's
+  // host-effective-user map is already gated on this same flag
+  // (`syncEffectiveUserElevation`), so this realigns the per-call path.
+  const followTerminalSudo = useSettingsStore((s) => s.followTerminalSudo);
+  const effectiveUser =
+    followTerminalSudo && shellUser && shellUser !== loginUser ? shellUser : null;
 
   const [prompt, setPrompt] = useState<{ hostLabel: string; errorMessage?: string } | null>(null);
   const retryRef = useRef<(() => void) | null>(null);

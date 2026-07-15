@@ -144,8 +144,23 @@ function terminalLineText(snapshot: TerminalSnapshot, row: number): string {
 function inferPromptUser(snapshot: TerminalSnapshot): string {
   const line = terminalLineText(snapshot, snapshot.cursorY).trimEnd();
   if (!/[#$%>]\s*$/.test(line)) return "";
-  const matches = Array.from(line.matchAll(/(?:^|[\s([{<])([A-Za-z_][A-Za-z0-9_.-]*)@[A-Za-z0-9_.-]+(?=[\s)\]}>:/~-])/g));
-  const match = matches[matches.length - 1];
+  // Match a shell-prompt `user@host`, but NOT an email address in command
+  // output. The boundary classes deliberately EXCLUDE `<` (before the user)
+  // and `>` (after the host): those are what let a `tail -f maillog` line
+  // (`… from=<bob@example.com> to=<alice@corp.io>`) or a `git log` line
+  // (`Author: X <john@example.com>`) — both of which end in `>` and so pass
+  // the prompt-char gate above — get misread as a `user@host` prompt and arm
+  // the wrong effective user. A real prompt's `user@host` sits at line start
+  // or after `[` / `(` / whitespace (`[root@host ~]#`, `(venv) u@h:~$`), with
+  // the host followed by a path/prompt separator (`:`, space, `]`, `~`, `/`),
+  // never wrapped in `<…>`. Take the FIRST match: the prompt is the leading
+  // token, so anything the user typed after it (`ssh admin@x`) can't win.
+  const matches = Array.from(
+    line.matchAll(
+      /(?:^|[\s([{])([A-Za-z_][A-Za-z0-9_.-]*)@[A-Za-z0-9_.-]+(?=[\s)\]}:/~-])/g,
+    ),
+  );
+  const match = matches[0];
   return match?.[1] ?? "";
 }
 
@@ -1765,7 +1780,20 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
         commandBufferRef.current = commandBufferRef.current.slice(0, -1);
         continue;
       }
-      if (code === ETX || code === NAK) {
+      if (code === ETX) {
+        // Ctrl+C cancels the current line AND any armed follow-capture: if the
+        // user hit a `[sudo] password:` / ssh password prompt and bailed, the
+        // NEXT command they type must not be mirrored to the backend as an
+        // elevation / ssh password. (NAK / Ctrl+U below only clears the line —
+        // the prompt is still up and the user still intends to type it, so it
+        // must NOT disarm.)
+        commandBufferRef.current = "";
+        pendingSudoCaptureRef.current = null;
+        pendingPasswordCaptureRef.current = null;
+        sudoCmdSeenAtRef.current = 0;
+        continue;
+      }
+      if (code === NAK) {
         commandBufferRef.current = "";
         continue;
       }

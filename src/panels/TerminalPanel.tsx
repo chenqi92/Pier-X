@@ -562,6 +562,14 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   const sudoCmdSeenAtRef = useRef(0);
   const pendingSudoCaptureRef = useRef<{ deadline: number } | null>(null);
 
+  // OSC re-inject after an interactive elevation (`su` / `su -` / `sudo -i` /
+  // `sudo -s`). The elevated child shell does NOT inherit the prompt hook that
+  // emits OSC 7 (cwd) / OSC 1337 (user), so cwd/user reporting freezes at the
+  // pre-elevation values. Armed when such a command is submitted; on the NEXT
+  // submitted line (the password, or the first command on a NOPASSWD host) the
+  // child shell has started, so we re-send the shell-init one-liner.
+  const pendingOscReinjectRef = useRef<{ deadline: number } | null>(null);
+
   // Bracketed-paste tracking for the smart line mirror. `active` is
   // true between `\e[200~` and `\e[201~`; `tainted` marks the current
   // line as containing pasted bytes so it stays out of history (a
@@ -2347,6 +2355,29 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     const lead = line.trimStart();
     if (/^(sudo|su)(\s|$)/.test(lead) && !/^sudo\s+-n\b/.test(lead)) {
       sudoCmdSeenAtRef.current = Date.now();
+    }
+    // Interactive elevation opens a child shell that drops the OSC prompt hook
+    // (cwd/user reporting). Arm a re-inject on such a command; on the NEXT
+    // submitted line — the password, or the first command on a NOPASSWD host —
+    // the child shell has started (past any password prompt), so we re-send the
+    // shell-init. Gated on an SSH context so we never push bash init into a
+    // local PowerShell tab. See `terminal_reinject_shell_init`.
+    const isInteractiveElevation =
+      /^su(\s|$)/.test(lead) ||
+      /^sudo\s+(-[is]\b|--login\b|--shell\b|su\b|-u\s+\S+\s+-[is]\b|(ba|z|d)?sh\b)/.test(lead);
+    if (isInteractiveElevation) {
+      pendingOscReinjectRef.current = { deadline: Date.now() + 30_000 };
+    } else if (pendingOscReinjectRef.current) {
+      const pending = pendingOscReinjectRef.current;
+      pendingOscReinjectRef.current = null;
+      const sid = session?.sessionId;
+      if (sid && Date.now() <= pending.deadline && effectiveSshTarget(tab)) {
+        // Small delay so the elevated shell finishes starting before the init
+        // one-liner lands on its stdin.
+        window.setTimeout(() => {
+          cmd.terminalReinjectShellInit(sid).catch(() => {});
+        }, 400);
+      }
     }
     const parsed = parseSshCommand(line);
     if (!parsed) {

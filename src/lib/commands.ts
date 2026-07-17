@@ -919,6 +919,12 @@ export const terminalCreateSshSaved = (
 export const terminalWrite = (sessionId: string, data: string) =>
   invoke<number>("terminal_write", { sessionId, data });
 
+/** Re-send the OSC shell-init one-liner into a live SSH terminal shell after
+ *  an interactive elevation (`su` / `sudo -i`), so the elevated child shell
+ *  resumes emitting OSC 7 (cwd) / OSC 1337 (user) and the right side follows. */
+export const terminalReinjectShellInit = (sessionId: string) =>
+  invoke<number>("terminal_reinject_shell_init", { sessionId });
+
 export const terminalResize = (sessionId: string, cols: number, rows: number) =>
   invoke<void>("terminal_resize", { sessionId, cols, rows });
 

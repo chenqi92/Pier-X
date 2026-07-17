@@ -110,6 +110,16 @@ pub struct SshSession {
     /// user's own password) re-probes `sudo` instead of misusing the old
     /// secret against `su`.
     su_preferred: Arc<RwLock<bool>>,
+    /// Serializes multi-field elevation updates against multi-field reads.
+    /// `sudo_password`, `elevation` and `elevation_armed` each sit behind
+    /// their own lock, so a caller that writes all three (the Tauri layer's
+    /// `apply_host_elevation`) and one that reads all three (`exec_with_sudo`)
+    /// could otherwise interleave — an exec observing a new secret paired with
+    /// the old method. The `apply_elevation` / `set_*` helpers and
+    /// `exec_with_sudo` hold this guard around their composite access so the
+    /// triple is always seen consistently. Does not cover `su_preferred`
+    /// (single-field, atomic on its own lock).
+    elevation_guard: Arc<tokio::sync::Mutex<()>>,
 }
 
 // Manual Debug — the russh Handle itself isn't Debug, and even
@@ -299,6 +309,7 @@ impl SshSession {
             elevation: Arc::new(RwLock::new(crate::sudo::Elevation::Sudo)),
             elevation_armed: Arc::new(RwLock::new(false)),
             su_preferred: Arc::new(RwLock::new(false)),
+            elevation_guard: Arc::new(tokio::sync::Mutex::new(())),
         };
 
         // Apply the same connect timeout to authentication. Without
@@ -1190,6 +1201,58 @@ impl SshSession {
         runtime::shared().block_on(self.set_elevation_armed(armed));
     }
 
+    /// Atomically apply the `(secret, method, armed)` triple under
+    /// `elevation_guard`, so a concurrent [`Self::exec_with_sudo`] (which
+    /// reads all three under the same guard) never observes a half-updated
+    /// mix. The individual setters keep their own semantics (e.g.
+    /// `set_sudo_password` still resets `su_preferred` on a secret change).
+    pub async fn apply_elevation(
+        &self,
+        password: Option<String>,
+        method: crate::sudo::Elevation,
+        armed: bool,
+    ) {
+        let _guard = self.elevation_guard.lock().await;
+        self.set_sudo_password(password).await;
+        self.set_elevation(method).await;
+        self.set_elevation_armed(armed).await;
+    }
+
+    /// Sync wrapper for [`Self::apply_elevation`].
+    pub fn apply_elevation_blocking(
+        &self,
+        password: Option<String>,
+        method: crate::sudo::Elevation,
+        armed: bool,
+    ) {
+        runtime::shared().block_on(self.apply_elevation(password, method, armed));
+    }
+
+    /// Atomically set `(method, armed)` under `elevation_guard`, leaving the
+    /// secret untouched. For per-call effective-user hints (SFTP) that adjust
+    /// the method without a captured password.
+    pub fn set_method_armed_blocking(&self, method: crate::sudo::Elevation, armed: bool) {
+        runtime::shared().block_on(async {
+            let _guard = self.elevation_guard.lock().await;
+            self.set_elevation(method).await;
+            self.set_elevation_armed(armed).await;
+        });
+    }
+
+    /// Atomically set `(secret, method)` under `elevation_guard`, leaving the
+    /// armed flag untouched. For the per-call sudo-password path.
+    pub fn set_password_method_blocking(
+        &self,
+        password: Option<String>,
+        method: crate::sudo::Elevation,
+    ) {
+        runtime::shared().block_on(async {
+            let _guard = self.elevation_guard.lock().await;
+            self.set_sudo_password(password).await;
+            self.set_elevation(method).await;
+        });
+    }
+
     /// Whether this session is currently armed for passwordless elevation.
     pub fn is_elevation_armed_blocking(&self) -> bool {
         runtime::shared().block_on(async { *self.elevation_armed.read().await })
@@ -1276,7 +1339,16 @@ impl SshSession {
     /// on hit, the panel prompts the user, calls
     /// `set_sudo_password`, and re-runs through this method.
     pub async fn exec_with_sudo(&self, command: &str) -> Result<(i32, String)> {
-        let pw = { self.sudo_password.read().await.clone() };
+        // Snapshot the (secret, method, armed) triple in one guarded critical
+        // section so we can't act on a secret from one `apply_host_elevation`
+        // paired with a method/armed from another (see `elevation_guard`).
+        let (pw, elevation, armed) = {
+            let _guard = self.elevation_guard.lock().await;
+            let pw = self.sudo_password.read().await.clone();
+            let elevation = self.elevation.read().await.clone();
+            let armed = *self.elevation_armed.read().await;
+            (pw, elevation, armed)
+        };
         match pw {
             Some(pw) if !pw.is_empty() => {
                 // Dispatch through the per-call primitive using the
@@ -1285,7 +1357,6 @@ impl SshSession {
                 // layer can switch it to `sudo -u <user>` to follow the
                 // terminal's effective user). Audit logging lives in
                 // `exec_as_effective`.
-                let elevation = { self.elevation.read().await.clone() };
                 self.exec_as_effective_impl(command, &elevation, Some(&pw), true)
                     .await
             }
@@ -1297,11 +1368,9 @@ impl SshSession {
                 // password it fails fast (no prompt, no hang) and we
                 // degrade to an unprivileged run rather than failing the
                 // op. Not armed → plain exec as before.
-                let armed = { *self.elevation_armed.read().await };
                 if !armed {
                     return self.exec_command(command).await;
                 }
-                let elevation = { self.elevation.read().await.clone() };
                 match crate::sudo::wrap_command_nopasswd(command, &elevation) {
                     Some(wrapped) => {
                         let res = self.exec_command(&wrapped).await?;

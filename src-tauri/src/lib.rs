@@ -2090,7 +2090,6 @@ fn get_or_open_ssh_session_elevated(
         .as_deref()
         .map(|s| !s.is_empty())
         .unwrap_or(false);
-    session.set_sudo_password_blocking(sudo_password);
     let elevation = match effective_user {
         Some(eu) if !eu.is_empty() && eu != user => {
             pier_core::sudo::Elevation::become_user_via_sudo(eu)
@@ -2102,7 +2101,7 @@ fn get_or_open_ssh_session_elevated(
          elevation={elevation:?} secret={}",
         if secret_armed { "armed" } else { "none" }
     ));
-    session.set_elevation_blocking(elevation);
+    session.set_password_method_blocking(sudo_password, elevation);
     Ok(session)
 }
 
@@ -2322,17 +2321,15 @@ fn apply_host_elevation(
     let secret = secret.filter(|s| !s.is_empty());
     let elevated_user = effective_user.filter(|eu| !eu.is_empty() && *eu != login_user);
     let armed = secret.is_some() || elevated_user.is_some();
-    // Reflect the map's secret onto the slot every time — `None` clears a
-    // password the user just forgot.
-    session.set_sudo_password_blocking(secret);
-    if armed {
-        let elevation = match elevated_user {
-            Some(eu) => pier_core::sudo::Elevation::become_user_via_sudo(eu),
-            None => pier_core::sudo::Elevation::Sudo,
-        };
-        session.set_elevation_blocking(elevation);
-    }
-    session.set_elevation_armed_blocking(armed);
+    // Method is only consulted when armed (or a secret is present); when
+    // de-arming it is unused, so passing `Sudo` there is harmless. Apply all
+    // three atomically so a concurrent `exec_with_sudo` never pairs this
+    // secret with a stale method.
+    let elevation = match elevated_user {
+        Some(eu) => pier_core::sudo::Elevation::become_user_via_sudo(eu),
+        None => pier_core::sudo::Elevation::Sudo,
+    };
+    session.apply_elevation_blocking(secret, elevation, armed);
 }
 
 /// Apply a per-call effective-user hint without touching the session's
@@ -2353,8 +2350,10 @@ fn apply_explicit_effective_user(
     if !pier_core::sudo::is_valid_username(eu) {
         return Err(format!("Invalid effective user name: {eu:?}"));
     }
-    session.set_elevation_blocking(pier_core::sudo::Elevation::become_user_via_sudo(eu));
-    session.set_elevation_armed_blocking(true);
+    session.set_method_armed_blocking(
+        pier_core::sudo::Elevation::become_user_via_sudo(eu),
+        true,
+    );
     Ok(())
 }
 
@@ -2745,6 +2744,32 @@ fn get_or_open_ssh_session_inner(
                     .lock()
                     .ok()
                     .and_then(|m| m.get(&key).cloned());
+                // If it isn't registered YET but the direct dial failed to
+                // even CONNECT (an unroutable nested IP, not an auth
+                // rejection), the fire-and-forget `ssh_set_host_via` IPC may
+                // still be in flight — wait briefly and re-check once so the
+                // "first auto-probe races via registration" window closes
+                // deterministically instead of surfacing one Disconnected
+                // flash. Gated on a connect-style failure so a genuine auth
+                // rejection on a real direct target still fails fast.
+                let late_via = late_via.or_else(|| {
+                    let e = direct_err.to_lowercase();
+                    let connect_failure = e.contains("ssh connect")
+                        || e.contains("connection refused")
+                        || e.contains("timed out")
+                        || e.contains("timeout")
+                        || e.contains("no route")
+                        || e.contains("unreachable");
+                    if !connect_failure {
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    state
+                        .host_via
+                        .lock()
+                        .ok()
+                        .and_then(|m| m.get(&key).cloned())
+                });
                 match late_via {
                     Some(v) => {
                         let tunnelled = build_ssh_session_via_parent(
@@ -7337,6 +7362,33 @@ fn terminal_write(
     managed
         .terminal
         .write(data.as_bytes())
+        .map_err(|error| error.to_string())
+}
+
+/// Re-send the OSC shell-init one-liner into a live SSH terminal's shell.
+/// The frontend calls this after the operator runs an interactive elevation
+/// (`su` / `su -` / `sudo -i` / `sudo -s`) in the terminal: the elevated
+/// child shell does NOT inherit the prompt hook that emits OSC 7 (cwd) and
+/// OSC 1337 (current user), so without a re-inject the right side keeps
+/// following the pre-elevation directory and login user (and elevation
+/// detection stalls on prompts that don't carry `user@host`). Mirrors the
+/// auto-elevate path's re-injection. Sync like `terminal_write` so it keeps
+/// its place in the keystroke stream.
+#[tauri::command]
+fn terminal_reinject_shell_init(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<usize, String> {
+    let sessions = state
+        .terminals
+        .lock()
+        .map_err(|_| String::from("terminal state poisoned"))?;
+    let managed = sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("unknown terminal session: {}", session_id))?;
+    managed
+        .terminal
+        .write(&pier_core::terminal::remote_init_payload())
         .map_err(|error| error.to_string())
 }
 
@@ -20783,6 +20835,7 @@ pub fn run() {
             terminal_create_ssh,
             terminal_create_ssh_saved,
             terminal_write,
+            terminal_reinject_shell_init,
             terminal_resize,
             terminal_snapshot,
             terminal_set_scrollback_limit,

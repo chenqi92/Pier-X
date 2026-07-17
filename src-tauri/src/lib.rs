@@ -2658,10 +2658,15 @@ fn get_or_open_ssh_session_inner(
     // doing so would serialise unrelated targets through one mutex
     // and promote any slow handshake into a global IPC-thread stall.
     let guard = {
+        // Recover from poison instead of failing: if a handshake panicked
+        // while holding a lock, the guarded data (a coordination map / a
+        // `Mutex<()>` gate) is still structurally valid, so a poisoned lock
+        // must degrade to "keep working" rather than permanently blacklisting
+        // every reconnect for this target until all its tabs close.
         let mut map = state
             .session_init_guards
             .lock()
-            .map_err(|_| "session init map poisoned".to_string())?;
+            .unwrap_or_else(|e| e.into_inner());
         map.entry(key.clone())
             .or_insert_with(|| Arc::new(HandshakeGuard::new()))
             .clone()
@@ -2673,10 +2678,9 @@ fn get_or_open_ssh_session_inner(
         return Err(err);
     }
 
-    let _gate = guard
-        .gate
-        .lock()
-        .map_err(|_| "session init gate poisoned".to_string())?;
+    // Held across the whole handshake below; recover from poison (see above)
+    // so one panicking handshake can't wedge this target forever.
+    let _gate = guard.gate.lock().unwrap_or_else(|e| e.into_inner());
 
     // Post-gate re-check: maybe a winner just finished while we
     // were waiting.
@@ -2983,9 +2987,16 @@ fn ssh_sessions_retain(state: tauri::State<'_, AppState>, active: Vec<String>) {
     }
     let to_evict: Vec<String> = match state.sftp_sessions.lock() {
         Ok(cache) => cache
-            .keys()
-            .filter(|k| !keep.contains(&suffix_of(k)))
-            .cloned()
+            .iter()
+            // Keep a session whose tab closed but that a live op still holds
+            // (`strong_count > 1`) — mirrors the guard retain above. This
+            // closes the race where a session inserted AFTER the frontend's
+            // `active` snapshot (so its suffix isn't in `keep`) yet in active
+            // use would otherwise be evicted, forcing that op's next call to
+            // redundantly reconnect. It gets collected on the next retain once
+            // idle (strong_count back to 1).
+            .filter(|(k, v)| !keep.contains(&suffix_of(k)) && Arc::strong_count(v) == 1)
+            .map(|(k, _)| k.clone())
             .collect(),
         Err(_) => Vec::new(),
     };

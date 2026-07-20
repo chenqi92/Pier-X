@@ -15570,6 +15570,45 @@ mod base64_tests {
 }
 
 #[cfg(test)]
+mod reconnect_heuristic_tests {
+    use super::error_warrants_reconnect;
+
+    #[test]
+    fn matches_only_op_never_ran_transport_errors() {
+        // These are our own transport/channel errors that guarantee the op
+        // never reached the server, so a reconnect+retry can't double-execute.
+        assert!(error_warrants_reconnect("ssh protocol: Failed to open channel"));
+        assert!(error_warrants_reconnect("ssh connect timeout after 10s"));
+        assert!(error_warrants_reconnect("ssh connect failed: connection refused"));
+        assert!(error_warrants_reconnect("ssh channel closed"));
+        assert!(error_warrants_reconnect("ssh session is no longer alive"));
+    }
+
+    #[test]
+    fn does_not_match_generic_network_words_from_command_output() {
+        // Regression guard: pier-core services fold a remote command's
+        // stdout/stderr into their error strings. A healthy session running a
+        // command that merely PRINTS these words must NOT be read as a dead
+        // transport, or run_with_session_retry would evict the shared session
+        // and re-run the (possibly already-applied) command. Genuine transport
+        // death is caught by SshSession::is_closed() at the call site instead.
+        for msg in [
+            "docker pull failed: unexpected EOF",
+            "curl: (56) Recv failure: Connection reset by peer",
+            "rsync: connection unexpectedly closed",
+            "write error: Broken pipe",
+            "mysqld: Lost connection / server has gone away — disconnected",
+            "ClientAliveInterval keepalive tuning note in motd",
+        ] {
+            assert!(
+                !error_warrants_reconnect(msg),
+                "must not treat command output as dead transport: {msg:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod terminal_line_tests {
     use super::build_terminal_lines;
     use pier_core::terminal::{Cell, GridSnapshot};
